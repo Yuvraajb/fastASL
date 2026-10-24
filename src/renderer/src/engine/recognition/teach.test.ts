@@ -3,7 +3,8 @@ import type { FrameSample } from '../types'
 import { euclidean } from './dtw'
 import { FRAME_FEATURE_DIM, STATIC_FEATURE_DIM, staticFeatures } from './features'
 import { RecognitionSession } from './session'
-import { TEACH_REASONS, TeachSession, type TeachEvent, type TeachProgress } from './teach'
+import { Segmenter } from './segmenter'
+import { TEACH_REASONS, TeachSession, wordTemplate, type TeachEvent, type TeachProgress } from './teach'
 import {
   performHolds,
   performSign,
@@ -167,5 +168,36 @@ describe('TeachSession (letter)', () => {
     feed(session, timeline(holds('L', range(2))))
     const [last] = progressOf(feed(session, timeline(holds('S', [50])))).slice(-1)
     expect(last).toMatchObject({ done: 2, lastAccepted: false, reason: TEACH_REASONS.outlier })
+  })
+})
+
+describe('wordTemplate (guess, confirm, learn)', () => {
+  it('makes the template TeachSession.finish makes from the same one repetition: 32 frames, 3 decimals', () => {
+    const frames = performSign(WORDS.HELLO, { random: rng(11), aspect: ASPECT, t0: 0 })
+    const session = new TeachSession('HELLO', 'word', 1, { aspect: ASPECT })
+    feed(session, frames)
+    const [taught] = session.finish(42)
+
+    const segmenter = new Segmenter({}, ASPECT)
+    const movement = frames.flatMap((f) => segmenter.push(f)).find((s) => s.kind === 'dynamic')
+    if (movement?.kind !== 'dynamic') throw new Error('no movement')
+    const learned = wordTemplate('HELLO', movement.features, 42)
+
+    expect(learned).toEqual({ ...taught, id: 'HELLO-42-0' })
+    expect(learned.frames).toHaveLength(32)
+    expect(learned.frames[0]).toHaveLength(FRAME_FEATURE_DIM)
+    expect(learned.frames.flat().every((v) => Math.round(v * 1000) / 1000 === v)).toBe(true)
+  })
+
+  it('is recognized afterwards: one confirmed repetition is enough for the same movement', () => {
+    const one = performSign(WORDS.PLAY, { random: rng(5), aspect: ASPECT, t0: 0 })
+    const segmenter = new Segmenter({}, ASPECT)
+    const movement = one.flatMap((f) => segmenter.push(f)).find((s) => s.kind === 'dynamic')
+    if (movement?.kind !== 'dynamic') throw new Error('no movement')
+    const recognition = new RecognitionSession({ aspect: ASPECT })
+    recognition.setTemplates([wordTemplate('PLAY', movement.features)])
+    const again = performSign(WORDS.PLAY, { random: rng(6), aspect: ASPECT, t0: 0 })
+    const events = again.flatMap((f) => recognition.update(f))
+    expect(events).toContainEqual({ type: 'token', text: 'PLAY', kind: 'word' })
   })
 })

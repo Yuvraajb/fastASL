@@ -32,6 +32,20 @@ export const TEACH_REASONS = {
   outlier: "That one didn't match the others. Try again."
 } as const
 
+/** Stored frames: 3 decimals, far below tracking noise. */
+function roundFrames(frames: number[][]): number[][] {
+  return frames.map((f) => f.map((v) => Math.round(v * 1000) / 1000))
+}
+
+/**
+ * A word template from one movement's frame vectors (a dynamic segment's `features`), made the
+ * way finish() makes each kept repetition: resampled to 32 frames, rounded to 3 decimals. Guess,
+ * confirm, learn saves the one repetition the user confirmed this way.
+ */
+export function wordTemplate(label: string, features: readonly number[][], now = Date.now()): SignTemplate {
+  return { id: `${label}-${now}-0`, label, kind: 'word', frames: roundFrames(resample(features)), createdAt: now }
+}
+
 interface Candidate {
   rep: number[][]
   /** Started with the hands already in view and ended holding still: not a raise or lowering. */
@@ -136,7 +150,7 @@ export class TeachSession {
       id: `${this.label}-${now}-${i}`,
       label: this.label,
       kind: this.kind,
-      frames: this.candidates[index].rep.map((f) => f.map((v) => Math.round(v * 1000) / 1000)),
+      frames: roundFrames(this.candidates[index].rep),
       createdAt: now
     }))
   }

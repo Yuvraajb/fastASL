@@ -38,7 +38,14 @@ export const DEV_VIEWS: { id: string; label: string }[] = [
   { id: 'settingsCamera', label: 'Settings: camera source' },
   { id: 'settingsSensitivity', label: 'Settings: sensitivity' },
   { id: 'missingKey', label: 'Missing key notice' },
-  { id: 'palmHold', label: 'Collapsed + palm hold' }
+  { id: 'palmHold', label: 'Collapsed + palm hold' },
+  { id: 'signIdentifying', label: 'Guess: identifying sign' },
+  { id: 'signGuess', label: 'Guess: is this HELLO?' },
+  { id: 'signLearned', label: 'Guess: learned HELLO' },
+  { id: 'settingsTeachShow', label: 'Settings: show me a sign' },
+  { id: 'settingsTeachShowIdentifying', label: 'Settings: show me a sign (identifying)' },
+  { id: 'settingsTeachShowGuess', label: 'Settings: show me a sign (guess)' },
+  { id: 'settingsTeachShowRetry', label: 'Settings: show me a sign (not a sign)' }
 ]
 
 const GESTURES: { gesture: SimGesture; label: string; accelerator: string }[] = [

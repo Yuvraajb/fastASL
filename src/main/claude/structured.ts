@@ -1,10 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
-import type { BetaMessage, BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages'
+import type {
+  BetaImageBlockParam,
+  BetaMessage,
+  BetaMessageParam
+} from '@anthropic-ai/sdk/resources/beta/messages/messages'
 import type { z } from 'zod/v4'
 import type { Result } from '@shared/types'
 import {
   askStructured,
+  type JsonImage,
   type JsonRequest,
   type JsonTransport,
   type LlmSource,
@@ -32,7 +37,7 @@ export async function askJson<S extends z.ZodType>(
 
 /** Claude as an LLM_PROVIDER: the caps the Claude path has always used. */
 export function claudeLlm(create: CreateMessage): StructuredLlm {
-  return { maxTokens: { intent: 1024, spell: 512 }, ask: (req) => askJson(create, req) }
+  return { maxTokens: { intent: 1024, spell: 512, sign: 512 }, ask: (req) => askJson(create, req) }
 }
 
 /** The Claude client (or its missing-key error) as an LlmSource. */
@@ -51,7 +56,10 @@ function claudeTransport<S extends z.ZodType>(
   return {
     name: 'Claude',
     deadlineMs: DEADLINE_MS,
-    userTurn: (text) => ({ role: 'user', content: text }),
+    userTurn: (text, images) =>
+      images
+        ? { role: 'user', content: [...images.map(imageBlock), { type: 'text', text }] }
+        : { role: 'user', content: text },
     async send(messages, signal) {
       const message = await create(
         {
@@ -77,6 +85,12 @@ function claudeTransport<S extends z.ZodType>(
     failure
   }
 }
+
+/** A base64 image content block (identifySign's camera frames). */
+const imageBlock = (image: JsonImage): BetaImageBlockParam => ({
+  type: 'image',
+  source: { type: 'base64', media_type: image.mimeType, data: image.data }
+})
 
 const replyText = (message: BetaMessage): string =>
   message.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('')

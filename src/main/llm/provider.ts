@@ -1,8 +1,8 @@
 import type { LlmProviderName, Result } from '@shared/types'
 import { claudeSource } from '../claude/structured'
 import type { ClaudeProvider } from '../claude/client'
-import { geminiSource, type GeminiProvider } from './gemini'
-import { localSource, type LocalChat, type LocalConfig } from './local'
+import { geminiSignModel, geminiSource, type GeminiProvider } from './gemini'
+import { localSource, type LocalChat, type LocalConfig, type LocalShow } from './local'
 import { mockLlm } from './mock'
 import type { LlmSource } from './structured'
 
@@ -23,12 +23,23 @@ export interface LlmOverrides {
   claude?: ClaudeProvider
   gemini?: GeminiProvider
   geminiModel?: () => string
+  /** The Gemini model of identifySign (GEMINI_SIGN_MODEL). */
+  geminiSignModel?: () => string
   localChat?: (url: string) => LocalChat
   localConfig?: () => LocalConfig
+  localShow?: (url: string) => LocalShow
 }
 
-/** The model behind a provider. An unknown provider answers every call with its error: nothing falls back. */
-export function llmSource(provider: Result<LlmProviderName>, overrides: LlmOverrides = {}): LlmSource {
+/**
+ * The model behind a provider. An unknown provider answers every call with its error: nothing
+ * falls back. `vision` is the model that looks at camera frames (identifySign): on Gemini it is
+ * GEMINI_SIGN_MODEL; the other providers use their one model.
+ */
+export function llmSource(
+  provider: Result<LlmProviderName>,
+  overrides: LlmOverrides = {},
+  use: 'text' | 'vision' = 'text'
+): LlmSource {
   if (!provider.ok) {
     const { error } = provider
     return () => ({ ok: false, error })
@@ -37,9 +48,12 @@ export function llmSource(provider: Result<LlmProviderName>, overrides: LlmOverr
     case 'claude':
       return claudeSource(overrides.claude)
     case 'gemini':
-      return geminiSource(overrides.gemini, overrides.geminiModel)
+      // Sign guesses never fall back to the text model: Flash-Lite can't name signs (DECISIONS 141).
+      return use === 'vision'
+        ? geminiSource(overrides.gemini, overrides.geminiSignModel ?? geminiSignModel, 'GEMINI_SIGN_MODEL')
+        : geminiSource(overrides.gemini, overrides.geminiModel)
     case 'local':
-      return localSource(overrides.localChat, overrides.localConfig)
+      return localSource(overrides.localChat, overrides.localConfig, overrides.localShow)
     case 'mock':
       return () => ({ ok: true, value: mockLlm })
   }

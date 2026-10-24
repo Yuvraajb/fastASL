@@ -30,6 +30,11 @@ export interface AppState {
   modeFlashAt: number
   /** Number of hands currently visible (0-2). */
   handsVisible: number
+  /**
+   * A movement is being judged as a sign: the header says "Listening..." while the card stays as
+   * it is (switching cards for every movement resized the window each time).
+   */
+  signing: boolean
   /** Recorded signs (signs.json), loaded by the controller; recognition follows this list. */
   templates: SignTemplate[]
   /** Gesture shortcuts (gestures.json), loaded by the controller; the shape matcher follows this list. */
@@ -56,6 +61,7 @@ export const useApp = create<AppState>(() => ({
   devPanel: false,
   modeFlashAt: 0,
   handsVisible: 0,
+  signing: false,
   templates: [],
   gestures: []
 }))

@@ -192,7 +192,7 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
 - Use a throwaway data folder so test recordings don't mix with real ones, and keep it for the whole checklist: `export FASTASL_DATA_DIR=~/fastasl-test`, then `FASTASL_LOG=1 npm run dev`. The terminal shows `[sign] <event> in <view>`, `[teach] …`, `[gesture] …` and `[signs] N template(s) for M sign(s)` lines.
 - Sensitivity Medium unless a step says otherwise. Sit about 60 cm from the camera in even light. Unless a step says otherwise, rest your hands out of view between steps.
 - **Teaching routine** (one repetition): raise your hand into view, pause about 0.5 s, sign the word once, pause, lower your hand. For a letter: raise your hand already in the letter shape, hold it still about 1 s, lower it.
-- Teach list pages (4 per page, swipe right for the next one): YES NO HELLO MEETING · TOMORROW TIME NEXT WHAT · SEND EMAIL TEXT FRIEND · PLAY MUSIC CALENDAR GOOD · A B C D · E F G H · I K L M · N O P Q · R S T U · V W X Y.
+- Teach list pages (row 1 is always Show me a sign, then 3 signs, then Spell a new word; swipe right for the next page): YES NO HELLO · MEETING TOMORROW TIME · NEXT WHAT SEND · EMAIL TEXT FRIEND · PLAY MUSIC CALENDAR · GOOD A B · C D E · F G H · I K L · M N O · P Q R · S T U · V W X · Y. A sign on a page is picked with 2, 3 or 4 fingers.
 - Automated: `npx vitest run src/renderer/src/engine/recognition src/renderer/src/app src/main/store.test.ts`. **Expected:** 13 files, 288 tests passed: 119 for the engine (features, segmenter, DTW, kNN, recognizer, session, teach, packs and script, end to end, calibration), 120 for the controller, 39 for the camera → engines → controller wiring (22 of them drive synthetic signers through recognition and teaching), and 10 for the main-process store.
 
 ### Template script
@@ -204,11 +204,11 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
 
 ### Teaching
 
-5. **Teach list.** Swipe up (Settings), then hold 1 finger (Teach a sign). **Expected:** YES, NO, HELLO, MEETING, Spell a new word, with no counts, and page dots. Swipe right. **Expected:** the next four words. Swipe left back to the first page.
-6. **Teach HELLO.** Hold 3 fingers (HELLO), lower the hand, and do the teaching routine 5 times, keeping the hand up in view between repetitions. **Expected:** "Sign HELLO · 1 of 5". While you sign, the line under the segments reads "Listening..." with a green pulsing dot; after each repetition it goes back to "Recording automatically" and one more segment fills. Raising and lowering your hand add nothing and show no "Too short". Once, make a completely different movement instead. **Expected:** "That one didn't match the others. Try again." and no new segment. After the 5th: a toast "Learned HELLO · 5 recordings saved", then the teach list on its first page with "5 recorded" next to HELLO. The log shows `[signs] 5 template(s) for 1 sign(s)`.
-7. **Without pausing.** Teach PLAY (page 4, 1 finger) with raise, sign and lower in one smooth go, 5 times. **Expected:** it completes the same way.
-8. **Leaving a record page.** Open MEETING, sign it twice, then hold a fist. **Expected:** back on the teach list's first page, with no count next to MEETING (unfinished recordings are discarded). Open letter A (swipe right to page 5, then 1 finger). **Expected:** the hint reads "swipe ← back". Hold a fist for 2 s. **Expected:** the page stays. Swipe left. **Expected:** back to page 5 of the list. The X button also goes back.
-9. **Teach letters L, A, B, S** (L: page 7, 3 fingers; A and B: page 5, 1 and 2 fingers; S: page 9, 2 fingers). Keep the picking hand up for a moment after the page opens. **Expected:** the counter stays at "1 of 5": the picking hand is not a repetition. Then do the letter routine 5 times. **Expected:** each completes 5 of 5 and its row shows "5 recorded".
+5. **Teach list.** Swipe up (Settings), then hold 1 finger (Teach a sign). **Expected:** Show me a sign, YES, NO, HELLO, Spell a new word, with no counts, and 14 page dots. Swipe right. **Expected:** Show me a sign, the next three words, Spell a new word. Swipe left back to the first page.
+6. **Teach HELLO.** Hold 4 fingers (HELLO), lower the hand, and do the teaching routine 5 times, keeping the hand up in view between repetitions. **Expected:** "Sign HELLO · 1 of 5". While you sign, the line under the segments reads "Listening..." with a green pulsing dot; after each repetition it goes back to "Recording automatically" and one more segment fills. Raising and lowering your hand add nothing and show no "Too short". Once, make a completely different movement instead. **Expected:** "That one didn't match the others. Try again." and no new segment. After the 5th: a toast "Learned HELLO · 5 recordings saved", then the teach list on its first page with "5 recorded" next to HELLO. The log shows `[signs] 5 template(s) for 1 sign(s)`.
+7. **Without pausing.** Teach PLAY (page 5, 2 fingers) with raise, sign and lower in one smooth go, 5 times. **Expected:** it completes the same way.
+8. **Leaving a record page.** Open MEETING (page 2, 2 fingers), sign it twice, then hold a fist. **Expected:** back on the teach list's second page, with no count next to MEETING (unfinished recordings are discarded). Open letter A (swipe right to page 6, then 3 fingers). **Expected:** the hint reads "swipe ← back". Hold a fist for 2 s. **Expected:** the page stays. Swipe left. **Expected:** back to page 6 of the list. The X button also goes back.
+9. **Teach letters L, A, B, S** (L: page 9, 4 fingers; A and B: page 6, 3 and 4 fingers; S: page 12, 2 fingers). Keep the picking hand up for a moment after the page opens. **Expected:** the counter stays at "1 of 5": the picking hand is not a repetition. Then do the letter routine 5 times. **Expected:** each completes 5 of 5 and its row shows "5 recorded".
 10. **Spell a new word.** Hold 5 fingers on the first page (Spell a new word). **Expected:** the subtitle reads "Fingerspell or type, thumbs up when done" (with no letter taught it reads "No letters taught yet: type the word"). Hold L, then change to A. **Expected:** "LA". Swipe left. **Expected:** "L". Click the keyboard button. **Expected:** a text field with the caret in it, and the hint reads "Return records it · Esc stops typing". Type `krishna!`. **Expected:** "LKRISHNA", upper case, no "!". Select it all and type `krishna`, then press Esc. **Expected:** "KRISHNA" is kept, and keystrokes now go back to the app you were in before. Thumbs up. **Expected:** "Sign KRISHNA · 1 of 5". Fist. **Expected:** the teach list's first page. With an empty word, thumbs up shows "Spell or type the word first".
 11. **A held S on Spell a new word.** Open Spell a new word again and fingerspell B, A, S, keeping the S still for 2 s while you look at the card. **Expected:** "BAS" stays on the page: the S is not also a fist. Lower your hand and swipe left three times. **Expected:** "BA", "B", then an empty word with the hint "swipe ← back". Swipe left once more. **Expected:** the teach list's first page.
 
@@ -525,8 +525,8 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
 
 ### Every page by finger count
 
-3. **Teach a sign.** Press Ctrl+Opt+↑, then Ctrl+Opt+1. **Expected:** YES, NO, HELLO, MEETING and Spell a new word.
-   1. Press Ctrl+Opt+→, then Ctrl+Opt+1. **Expected:** "Sign TOMORROW · 1 of 5" and "Recording automatically". Press Ctrl+Opt+F. **Expected:** the list's second page.
+3. **Teach a sign.** Press Ctrl+Opt+↑, then Ctrl+Opt+1. **Expected:** Show me a sign, YES, NO, HELLO and Spell a new word.
+   1. Press Ctrl+Opt+→, then Ctrl+Opt+3. **Expected:** "Sign TOMORROW · 1 of 5" and "Recording automatically". Press Ctrl+Opt+F. **Expected:** the list's second page.
    2. Press Ctrl+Opt+← and Ctrl+Opt+5. **Expected:** Spell a new word. Press Ctrl+Opt+F twice. **Expected:** the list, then Settings.
 4. **New gesture.** Press Ctrl+Opt+2. **Expected:** "New gesture" / "Pick a task", with only "Sign a new task" in a fresh folder. Press Ctrl+Opt+1. **Expected:** Ready with the hint "Sign the task for your gesture". Press Ctrl+Opt+F, then Ctrl+Opt+P. **Expected:** the card collapses (a fist in Ready), then expands to a plain Ready without the hint.
 5. **My gestures.** Press Ctrl+Opt+↑, then Ctrl+Opt+3. **Expected:** "Peace sign" (built-in). Press Ctrl+Opt+1. **Expected:** its page, with Test it only. Press Ctrl+Opt+F twice. **Expected:** the list, then Settings.
@@ -659,10 +659,96 @@ A real 429 needs more requests per minute than the free tier allows (see https:/
 
 Run `FASTASL_LOG=1 npm run dev` with a real camera and an empty `FASTASL_DATA_DIR`, or no HELLO taught yet.
 
-1. **Teach HELLO in 5.** Swipe up, then 1 finger (Teach a sign), then 3 fingers (HELLO). Sign HELLO 5 times, keeping your hand up in view between repetitions and holding still about a second after each. **Expected:** the counter goes 1/5 … 5/5 with no "Too short" messages. The toast reads "Learned HELLO · 5 recordings saved". Each repetition logs `[teach-dbg] dynamic … distances=[…] match<=2`.
+1. **Teach HELLO in 5.** Swipe up, then 1 finger (Teach a sign), then 4 fingers (HELLO). Sign HELLO 5 times, keeping your hand up in view between repetitions and holding still about a second after each. **Expected:** the counter goes 1/5 … 5/5 with no "Too short" messages. The toast reads "Learned HELLO · 5 recordings saved". Each repetition logs `[teach-dbg] dynamic … distances=[…] match<=2`.
 2. **A mismatch is said.** Teach YES. After the first repetition, make a clearly different movement, then hold still. **Expected:** "That one didn't match the others. Try again." The count stays the same.
 3. **Raises don't become the sign.** With HELLO taught, lower your hand out of view and raise it again in Dictation a few times. **Expected:** no "hello" token. The log shows `[sign-dbg] rejected: nearest HELLO at <distance above its radius>`.
 4. **HELLO is recognized.** In Dictation, sign HELLO. **Expected:** the card shows `hello`. The log shows `[sign-dbg] accepted: nearest HELLO at <d> (accepts <= <radius>)`, with the radius between 1.5 and 2.4.
 5. **Other movements are ignored.** Swipe, scratch your head, reach for the mouse. **Expected:** no tokens. Each logs a distance well above HELLO's radius. Swipes still switch the mode.
 6. **Through to Gemini.** With `LLM_PROVIDER=gemini`, sign HELLO, then put both hands down. **Expected:** the Sentence card reads "Hello." with Insert text / More options.
+
+## Guess, confirm, learn
+
+Setup: `.env` with `LLM_PROVIDER=gemini` and your `GEMINI_API_KEY` (`GEMINI_SIGN_MODEL` unset, so guesses use `gemini-3.5-flash`). Quit the running app and start it again with `FASTASL_LOG=1 npm run dev`. The preload changed, so a hot reload is not enough. To keep your own signs apart, add `FASTASL_DATA_DIR=$(mktemp -d)`. Sit as you normally do, with your signing hand up and in view. "Sign once" below means: hold the hand still for about half a second, sign, then hold still again for about half a second, without lowering the hand.
+
+Intent stays on `GEMINI_MODEL` (Flash-Lite), and free-tier quotas are per model, so guesses don't eat into it. The free tier of `gemini-3.5-flash` itself allows only about 5 calls a minute. Leave a few seconds between guesses, and expect "Gemini is rate limited. Try again in … s" if you go faster.
+
+A guess starts about 1.25 s after the movement ends. In that time, a control gesture held with the movement's last shape would fire, and a taught letter would arrive. Either one wins and nothing is asked.
+
+### In normal use
+
+1. **A first guess.** In Ready (Command mode), sign HELLO once (not taught yet). **Expected:**
+   - "Listening...", then Ready. About 1.25 s later, the notice "Identifying sign...". Within about 2–8 s more, "Is this HELLO?" with up to 3 options and the hint "hold up 1–3 fingers · thumbs up = 1 · fist = no".
+   - The log shows `[sign] unknown movement, <ms> ms: asking the LLM in 1250 ms in recognizing`.
+   - It then shows `[gemini] identifySign {"frames":<6–8>,"motion":"<duration> s, one hand, …","mode":"command","known":[]} -> {"is_sign":true,"candidates":[…]} (<ms> ms)`.
+
+   If the right word isn't listed, make a fist and try again more clearly. Guesses can be wrong (DECISIONS 141).
+2. **Confirm.** Hold up 1 finger, or thumbs up, on the right option. **Expected:**
+   - The card shows "Recognizing..." with "hello", and the notice "Learned HELLO" for about 5 s.
+   - The log shows `[signs] 1 template(s) for 1 sign(s)`, and `signs.json` in the data folder has one HELLO template.
+3. **Local and instant next time.** Sign HELLO once more, the same way. **Expected:** "hello" is added at once, with no "Identifying sign..." and no `identifySign` line. The log shows `[sign-dbg] accepted: nearest HELLO at <d> (accepts <= 1.50)`. If it is rejected instead, a second guess and pick adds another example.
+4. **No.** Sign THANK YOU once. When "Is this …?" comes up, make a fist. **Expected:** back to the card as it was, with nothing learned (no `[signs]` line) and no notice.
+5. **While building a phrase.** Sign HELLO (now known), then PLEASE (not taught). **Expected:** the strip keeps "hello" while "Identifying sign..." shows, then "Is this PLEASE?". Hold up the finger count for PLEASE. **Expected:** the strip reads "hello please", and the notice says "Learned PLEASE". Lower both hands. **Expected:** the Sentence card, as before.
+6. **A word already taught gains an example.** Sign HELLO in a slightly different way (bigger, faster) until it is not recognized and gets guessed. Pick HELLO. **Expected:** the log shows one more template, for example `[signs] 3 template(s) for 2 sign(s)`. The data folder's `signs.json` has 2 HELLO templates.
+7. **Dictation.** Click into TextEdit, swipe to Dictation, and sign an unknown word once. Pick it. **Expected:** the word is typed at the cursor, with a space before it when it follows text the card typed, as for a recognized sign. The dictation card shows it.
+
+### Never guessed
+
+8. **Raises and lowerings.** Drop your hand out of view and raise it again, a few times. **Expected:** "Listening..." then Ready each time, never "Identifying sign...", and no `identifySign` line in the log.
+9. **Short movements and fidgets.** Twitch a finger, or nudge the hand a little. **Expected:** no guess. Scratching your head or reaching for the mouse may get a guess, and the model usually answers "not a sign", which shows nothing.
+10. **Control gestures.** Swipe left or right in Ready, then bring the hand back. **Expected:** the mode switches as before, with no guess for the swipe or for the hand coming back. Thumbs up still opens the quick menu, and a fist still collapses the card.
+    - **Into a gesture.** While building a phrase, move the hand from a flat hand into a fist and hold it. **Expected:** the phrase is cancelled as before, with no "Identifying sign...". The log may show `[sign] guess dropped: fist`.
+    - **Into a letter.** With a letter taught (for example L), make an unknown movement that ends in L and keep holding the L. **Expected:** the letter L is added as before, and nothing is asked (`[sign] guess dropped: L came first`).
+11. **Spell mode.** Swipe to Spell mode and sign HELLO the way it was before you taught it (or any unknown word). **Expected:** no guess; Spell mode reads letters only.
+12. **One at a time.** Sign two unknown words back to back, less than 3 s apart. **Expected:** only the first gets "Identifying sign..."; the log shows a single `identifySign` line.
+
+### Superseded and cancelled
+
+13. **A gesture while it runs.** Sign an unknown word, and while "Identifying sign..." shows, make a thumbs up. **Expected:** the quick menu opens, the notice goes, the log prints `[gemini] identifySign … -> {"error":"Cancelled"}`, and no list comes up later. Fist back to Ready.
+14. **A known sign while it runs.** Sign an unknown word, then HELLO straight after. **Expected:** "hello" is added. The guess is cancelled ("Cancelled" in the log) and no list comes up.
+15. **Lowering the hands doesn't cancel.** Sign an unknown word, hold still about half a second, then drop your hands. **Expected:** "Is this …?" still comes up. A fist goes back to Ready. While building a phrase, the same ends the phrase first: the Sentence card shows "Identifying sign...", then "Is this …?". A pick goes back to the Sentence card with the word added.
+
+### Failures fall back to today's behaviour
+
+16. **Wrong key.** Set `GEMINI_API_KEY=invalid` and restart. Sign an unknown word. **Expected:** Ready with the notice "Gemini rejected GEMINI_API_KEY. Check .env" for about 5 s. Sign another within a minute. **Expected:** Listening, then Ready, with no notice (once a minute at most).
+17. **No key.** Leave `GEMINI_API_KEY` empty and restart. Sign an unknown word. **Expected:** Listening, then Ready, exactly as before this feature: no notice and no `identifySign` line.
+18. **Wrong sign model.** Set `GEMINI_SIGN_MODEL=gemini-no-such-model` and restart. Sign an unknown word. **Expected:** the notice `Gemini has no model "gemini-no-such-model". Check GEMINI_SIGN_MODEL in .env`, and nothing falls back to Flash-Lite (one `identifySign` line, no list). Phrases still get their intent from `GEMINI_MODEL`. Clear `GEMINI_SIGN_MODEL` again (the default is `gemini-3.5-flash`).
+19. **Rate limit.** Start the always-429 stub from the Gemini section (step 8 there), and start the app with `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8429` and any key. Sign an unknown word. **Expected:** "Identifying sign..." becomes "Rate limited, retrying...", and after about 7 s the notice "Gemini is rate limited. Try again in a minute". Stop the stub and restart without `GOOGLE_GEMINI_BASE_URL`.
+
+### Settings › Teach a sign › Show me a sign
+
+20. **The list.** Swipe up, then 1 finger (Teach a sign). **Expected:** Show me a sign, YES, NO, HELLO, Spell a new word, with 14 page dots. Swipe right. **Expected:** Show me a sign, MEETING, TOMORROW, TIME, Spell a new word.
+21. **A guess.** Hold 1 finger (Show me a sign). **Expected:** a full camera view, "Show me a sign", "Sign one word once, then hold still" and "Waiting for a sign". Wait a second, then sign a word you haven't taught (for example MORE) once. **Expected:**
+    - "Listening...", then a spinner with "Identifying sign...".
+    - Then "Is this MORE?" with up to 3 guesses and "None of these: pick from list" as the last row, and the hint "hold 1–4 fingers · thumbs up = 1 · fist = back".
+22. **Learn it.** Thumbs up, or the finger count of the right guess. **Expected:** the toast "Learned MORE · 1 recording saved", then the Teach list. Go back to Ready and sign MORE. **Expected:** "more", recognized locally with no guess.
+23. **None of these.** Open Show me a sign, sign something, and pick "None of these: pick from list". **Expected:** the Teach list, where picking a word records it the usual way (5 repetitions).
+24. **Back and retries.**
+    - A fist on any step goes back to the Teach list. While "Identifying sign..." shows, the log then prints `-> {"error":"Cancelled"}`.
+    - Waving the hand about for a moment can give "That didn't look like a sign. Try again." with the page still listening.
+    - A movement over 3 s gives "Too long. Sign it once, then hold still."
+    - The hand coming down from the finger pick within the first second is ignored.
+25. **Without a key.** With `GEMINI_API_KEY` empty, open Show me a sign. **Expected:** "Add GEMINI_API_KEY to .env" in place of "Waiting for a sign", and nothing is sent when you sign.
+
+### Other providers and privacy
+
+26. **Mock.** Set `LLM_PROVIDER=mock` and restart. Sign an unknown word. **Expected:** "Is this HELLO?" with HELLO, THANK YOU, PLEASE, at once. The log shows `[mock] identifySign {"frames":0,…}`: with the mock provider, no frames are captured or sent. `FASTASL_MOCK=1` shows the same list from the renderer's mock services, with no main-process call and no log line.
+27. **Local.** With `LLM_PROVIDER=local` and `LOCAL_LLM_MODEL=llama3.2` (no vision), sign an unknown word. **Expected:** the notice "llama3.2 can't see images. Set LOCAL_LLM_MODEL to a vision model", at most once a minute. With a vision model (`ollama pull llava`, `LOCAL_LLM_MODEL=llava`), guesses work, and the frames go only to `LOCAL_LLM_URL`.
+28. **Claude.** With `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY`, repeat steps 1–2. **Expected:** the same flow, with the log tagged `[claude] identifySign`. This path is unit-tested only (no key here).
+
+### Screens and automated checks
+
+29. **Dev menu.** The tray's "ASL" menu › Dev: states lists "Guess: identifying sign", "Guess: is this HELLO?", "Guess: learned HELLO" and the four "Settings: show me a sign" states. Each shows its card.
+30. **Screenshots.** Run `node scripts/screens.mjs signGuess`, one scene id per run (for example `signIdentifying`, `signGuess`, `signLearned`, `settingsTeach`, `settingsTeachShow`, `settingsTeachShowIdentifying`, `settingsTeachShowGuess`, `settingsTeachShowRetry`). **Expected:** `docs/screens/44-…` to `50-…` and `25-settingsTeach.png` match the committed images.
+31. **Automated.** Run `npm run typecheck`, `npx vitest run` and `npx electron-vite build`. **Expected:** no type errors, 59 test files and 1050 tests pass, and the build succeeds.
+
+## Live-testing fixes (Listening, moving on, the other hand)
+
+Run `FASTASL_LOG=1 npm run dev` with a real camera and at least HELLO taught.
+
+1. **No flashing.** In Ready, move your hand around without signing. **Expected:** the card keeps its size. The header may show "● Listening..." for movements longer than about 0.4 s, and never blinks on and off faster than about 0.7 s.
+2. **Identifying in the header.** Sign a word you haven't taught, then hold still. **Expected:** the header reads "Identifying...", with no extra row under the card. Then "Is this …?" appears.
+3. **Moving on.** Sign HELLO, put both hands down: the Sentence card shows "Hello". Sign THANK YOU. **Expected:** the card starts a new phrase with "thank you", not "Hello thank you".
+4. **The other hand.** With your other hand resting in view, sign HELLO. **Expected:** it is recognized (`[sign-dbg] accepted: nearest HELLO`). Wave both hands sideways together. **Expected:** not HELLO.
+5. **One-handed learning.** Sign a new one-handed word with your other hand in view, then confirm the guess. **Expected:** "Learned …". Sign it again with the other hand down. **Expected:** recognized.
+6. **Continue.** On the Sentence card, make a quick, wide sweep to the right, or thumbs up. **Expected:** the card moves on to interpretation.
 

@@ -5,6 +5,7 @@ import type {
   CustomGesture,
   DevCommand,
   FrontmostApp,
+  IdentifySignRequest,
   InterpretRequest,
   IntentResult,
   KeyStatus,
@@ -12,6 +13,7 @@ import type {
   Result,
   Settings,
   ShortcutRunResult,
+  SignGuess,
   SpellRequest,
   TemplatePack,
   TemplateStore,
@@ -40,6 +42,7 @@ export const IPC = {
   // claude (or the LLM_PROVIDER in .env)
   interpret: 'claude:interpret',
   spellSuggest: 'claude:spellSuggest',
+  identifySign: 'llm:identifySign',
   llmStatus: 'llm:status',
   llmCancel: 'llm:cancel',
   // agent
@@ -96,9 +99,11 @@ export interface FastAslApi {
   /** `callId` asks main for status events (onLlmStatus) while the call runs. */
   interpret(req: InterpretRequest, callId?: string): Promise<Result<IntentResult>>
   spellSuggest(req: SpellRequest, callId?: string): Promise<Result<string[]>>
-  /** Status lines of running interpret / spellSuggest calls, e.g. "Rate limited, retrying...". */
+  /** Guess, confirm, learn: names a movement the local recognizer didn't know, from camera frames. */
+  identifySign(req: IdentifySignRequest, callId?: string): Promise<Result<SignGuess>>
+  /** Status lines of running LLM calls, e.g. "Rate limited, retrying...". */
   onLlmStatus(cb: (event: LlmStatusEvent) => void): () => void
-  /** Aborts the interpret / spellSuggest call started with this `callId` (the card dropped it). */
+  /** Aborts the LLM call started with this `callId` (the card dropped it). */
   cancelLlm(callId: string): void
 
   agentRun(req: AgentRunRequest): Promise<Result<{ runId: string }>>

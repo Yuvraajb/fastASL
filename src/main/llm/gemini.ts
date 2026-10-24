@@ -7,13 +7,22 @@ import {
   type Content,
   type GenerateContentParameters,
   type GenerateContentResponse,
+  type Part,
   type Schema,
   type ThinkingConfig
 } from '@google/genai'
 import { z } from 'zod/v4'
 import type { Result } from '@shared/types'
 import { getKey, missingKeyMessage } from '../env'
-import { askStructured, sleep, type JsonRequest, type JsonTransport, type LlmSource, type StructuredLlm } from './structured'
+import {
+  askStructured,
+  sleep,
+  type JsonImage,
+  type JsonRequest,
+  type JsonTransport,
+  type LlmSource,
+  type StructuredLlm
+} from './structured'
 
 /**
  * Stable, on the free tier, and one of the two models the Gemini docs name for new projects
@@ -72,25 +81,49 @@ export function geminiModel(): string {
   return process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL
 }
 
+/**
+ * The model that guesses unknown signs from camera frames. Not Flash-Lite: on 11 dictionary
+ * clips it named none of the signs (top-3 0/10), where gemini-3.5-flash named 5 of the 7 it
+ * answered (DECISIONS 141).
+ */
+export const DEFAULT_GEMINI_SIGN_MODEL = 'gemini-3.5-flash'
+
+/** GEMINI_SIGN_MODEL from .env, or the default. */
+export function geminiSignModel(): string {
+  return process.env.GEMINI_SIGN_MODEL?.trim() || DEFAULT_GEMINI_SIGN_MODEL
+}
+
 /** Gemini (or its missing-key error) as an LlmSource. */
-export function geminiSource(gemini: GeminiProvider = getGemini, model: () => string = geminiModel): LlmSource {
+/** The .env setting that picks a Gemini model, named in errors about that model. */
+export type GeminiModelSetting = 'GEMINI_MODEL' | 'GEMINI_SIGN_MODEL'
+
+/**
+ * Gemini (or its missing-key error) as an LlmSource. `setting` is where `model` comes from, so a
+ * missing model or quota says which line of .env to change. Nothing falls back to another model.
+ */
+export function geminiSource(
+  gemini: GeminiProvider = getGemini,
+  model: () => string = geminiModel,
+  setting: GeminiModelSetting = 'GEMINI_MODEL'
+): LlmSource {
   return () => {
     const client = gemini()
-    return client.ok ? { ok: true, value: geminiLlm(client.value, model()) } : client
+    return client.ok ? { ok: true, value: geminiLlm(client.value, model(), setting) } : client
   }
 }
 
-export function geminiLlm(generate: GenerateContent, model: string): StructuredLlm {
+export function geminiLlm(generate: GenerateContent, model: string, setting: GeminiModelSetting = 'GEMINI_MODEL'): StructuredLlm {
   return {
-    maxTokens: { intent: GEMINI_MAX_TOKENS, spell: GEMINI_MAX_TOKENS },
-    ask: (req) => askStructured(geminiTransport(generate, model, req), req)
+    maxTokens: { intent: GEMINI_MAX_TOKENS, spell: GEMINI_MAX_TOKENS, sign: GEMINI_MAX_TOKENS },
+    ask: (req) => askStructured(geminiTransport(generate, model, req, setting), req)
   }
 }
 
 function geminiTransport<S extends z.ZodType>(
   generate: GenerateContent,
   model: string,
-  req: JsonRequest<S>
+  req: JsonRequest<S>,
+  setting: GeminiModelSetting
 ): JsonTransport<Content, GenerateContentResponse> {
   const responseSchema = geminiSchema(req.schema)
   // Built right before askStructured starts its deadline, so this is the same deadline.
@@ -113,7 +146,7 @@ function geminiTransport<S extends z.ZodType>(
   return {
     name: 'Gemini',
     deadlineMs: GEMINI_DEADLINE_MS,
-    userTurn: (text) => ({ role: 'user', parts: [{ text }] }),
+    userTurn: (text, images) => ({ role: 'user', parts: [...(images ?? []).map(inlineImage), { text }] }),
     async send(contents, signal) {
       const res = await withRateLimitRetry(
         (attempt) => generate(params(contents, attempt)),
@@ -140,9 +173,12 @@ function geminiTransport<S extends z.ZodType>(
       const content = res.candidates?.[0]?.content
       return content && replyText(content).trim() ? content : null
     },
-    failure: (err) => geminiFailure(err, model)
+    failure: (err) => geminiFailure(err, model, setting)
   }
 }
+
+/** An inline image part (identifySign's camera frames). */
+const inlineImage = (image: JsonImage): Part => ({ inlineData: { mimeType: image.mimeType, data: image.data } })
 
 /** Finish reasons that mean the answer was blocked: shown as declined, never retried. */
 const BLOCKED = new Set<string>([
@@ -276,12 +312,12 @@ function waitText(ms: number): string {
 }
 
 /** The card's message for a 429 that wasn't (or no longer is) retried. */
-function rateLimitFailure(err: ApiError, model: string): Result<never> {
+function rateLimitFailure(err: ApiError, model: string, setting: GeminiModelSetting): Result<never> {
   const quota = quotaFailure(err)
   if (quota.daily) {
     return { ok: false, error: "Gemini's daily quota is used up. Try tomorrow or set LLM_PROVIDER=claude" }
   }
-  if (quota.none) return { ok: false, error: `Gemini has no quota for ${model} on this key. Change GEMINI_MODEL in .env` }
+  if (quota.none) return { ok: false, error: `Gemini has no quota for ${model} on this key. Change ${setting} in .env` }
   const delay = retryDelayMs(err)
   return { ok: false, error: `Gemini is rate limited. Try again in ${delay === null ? 'a minute' : waitText(delay)}` }
 }
@@ -297,16 +333,16 @@ function apiErrorBody(err: ApiError): { message?: unknown; details?: unknown } |
   }
 }
 
-function geminiFailure(err: unknown, model: string): Result<never> {
+function geminiFailure(err: unknown, model: string, setting: GeminiModelSetting): Result<never> {
   // A request past GEMINI_ATTEMPT_MS (the whole-exchange deadline is handled before this).
   if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) return TOO_SLOW
   if (err instanceof ApiError) {
-    if (err.status === 429) return rateLimitFailure(err, model)
+    if (err.status === 429) return rateLimitFailure(err, model, setting)
     // No `missingKey`: the key is present but wrong, and "Add GEMINI_API_KEY to .env" would mislead.
     if (err.status === 401 || err.status === 403 || (err.status === 400 && /API_KEY_[A-Z_]+|API key/.test(err.message))) {
       return { ok: false, error: 'Gemini rejected GEMINI_API_KEY. Check .env' }
     }
-    if (err.status === 404) return { ok: false, error: `Gemini has no model "${model}". Check GEMINI_MODEL in .env` }
+    if (err.status === 404) return { ok: false, error: `Gemini has no model "${model}". Check ${setting} in .env` }
     if (err.status >= 500) return { ok: false, error: 'Gemini is busy right now. Try again in a moment' }
     const message = apiErrorBody(err)?.message
     const detail = typeof message === 'string' ? message : `HTTP ${err.status}`
@@ -345,13 +381,14 @@ type JsonSchemaNode = {
   properties?: Record<string, JsonSchemaNode>
   required?: string[]
   items?: JsonSchemaNode
+  maxItems?: number
   anyOf?: JsonSchemaNode[]
 }
 
 /**
  * Gemini's responseSchema (OpenAPI subset) for a zod schema, so the schema the model is held to
  * and the one its reply is validated against are the same. Covers what the fastASL replies use:
- * objects, arrays, strings, numbers, booleans and nullable values.
+ * objects, arrays (and their maxItems), strings, numbers, booleans and nullable values.
  */
 export function geminiSchema(schema: z.ZodType): Schema {
   return convert(z.toJSONSchema(schema) as JsonSchemaNode)
@@ -372,7 +409,11 @@ function convert(node: JsonSchemaNode): Schema {
     case 'boolean':
       return { type: Type.BOOLEAN }
     case 'array':
-      if (node.items) return { type: Type.ARRAY, items: convert(node.items) }
+      if (node.items) {
+        // Gemini enforces maxItems (a string in its Schema), e.g. identifySign's 3 candidates.
+        const max = node.maxItems === undefined ? {} : { maxItems: String(node.maxItems) }
+        return { type: Type.ARRAY, items: convert(node.items), ...max }
+      }
       break
     case 'object': {
       const keys = Object.keys(node.properties ?? {})

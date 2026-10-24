@@ -1,3 +1,4 @@
+import { canvasEncoder, FrameRing } from '../engine/camera/frameRing'
 import { CameraPipeline } from '../engine/camera/pipeline'
 import type { FrameSample } from '../engine/types'
 import type { Controller } from './controller'
@@ -25,7 +26,17 @@ export function subscribeFrames(fn: (frame: FrameSample) => void): () => void {
 /** Starts the camera with the store's settings and follows later changes. Returns a stop function. */
 export function startEngines(controller: Controller): () => void {
   const { cameraOn, cameraSource } = getApp()
-  const recognition = connectRecognition(controller)
+  // Guess, confirm, learn: the last few seconds of frames (small JPEGs at 8 fps), kept only
+  // while a guess could use them, so the camera costs nothing extra anywhere else.
+  const ring = new FrameRing(canvasEncoder())
+  const stopCapture = subscribeFrames((frame) => {
+    if (live.mock || !live.source || !controller.wantsSignFrames()) {
+      if (ring.all.length) ring.clear()
+      return
+    }
+    ring.offer(live.source, live.sourceWidth, live.sourceHeight, frame.t)
+  })
+  const recognition = connectRecognition(controller, () => ring.all)
   // Gestures reach the controller through recognition: a fist is not also an S, nor MUSIC a swipe.
   const gestures = connectGestures({ gesture: recognition.gesture }, subscribeFrames)
   // Subscribed after the gesture engine, so a gesture firing on a frame suspends recognition first.
@@ -48,6 +59,8 @@ export function startEngines(controller: Controller): () => void {
     stopStatus()
     stopLog?.()
     camera.stop()
+    stopCapture()
+    ring.clear()
     gestures.stop()
     stopRecognition()
     recognition.stop()

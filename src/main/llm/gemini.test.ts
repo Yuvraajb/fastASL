@@ -10,9 +10,12 @@ import {
 } from '@google/genai'
 import { z } from 'zod/v4'
 import { IntentReply } from '../claude/intent'
+import { SIGN_SYSTEM, SignReply, buildSignRequest, identifySignWith } from '../claude/sign'
 import { SpellReply } from '../claude/spell'
 import {
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_GEMINI_SIGN_MODEL,
+  geminiSignModel,
   LOW_THINKING_ALLOWANCE,
   RATE_LIMITED_STATUS,
   geminiLlm,
@@ -189,7 +192,7 @@ describe('Gemini structured output', () => {
   it('sends JSON mode with the schema, a 300-token cap and minimal thinking, and parses the reply', async () => {
     const fake = fakeGemini(reply('{"word":"hello","score":0.5}'))
     const llm = geminiLlm(fake.generate, DEFAULT_GEMINI_MODEL)
-    expect(llm.maxTokens).toEqual({ intent: 300, spell: 300 })
+    expect(llm.maxTokens).toEqual({ intent: 300, spell: 300, sign: 300 })
 
     const result = await llm.ask(request)
     expect(result).toEqual({ ok: true, value: { word: 'hello', score: 0.5 } })
@@ -471,5 +474,110 @@ describe('rate-limit waits', () => {
     ])
     expect(nextRateLimitWait(rateLimited(), budget(), now, () => 0)).toBe(900)
     expect(nextRateLimitWait(rateLimited(), budget(1), now, () => 1)).toBe(4400)
+  })
+})
+
+describe('identifySign on Gemini', () => {
+  const FRAMES = ['/9j/AAA=', '/9j/BBB=', '/9j/CCC=']
+  const signRequest = { frames: FRAMES, motion: '0.9 s, one hand.', mode: 'dictation' as const, known: ['HELLO'] }
+  const signJson = JSON.stringify({ is_sign: true, candidates: [{ gloss: 'thank you', confidence: 0.7, hands: 1 }] })
+  const source = (generate: GenerateContent, model = DEFAULT_GEMINI_SIGN_MODEL) =>
+    geminiSource(() => ({ ok: true, value: generate }), () => model)
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    delete process.env.GEMINI_SIGN_MODEL
+  })
+
+  it('is the sign JSON exactly, with at most 3 candidates', () => {
+    expect(geminiSchema(SignReply)).toEqual({
+      type: Type.OBJECT,
+      properties: {
+        is_sign: { type: Type.BOOLEAN },
+        candidates: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: { gloss: { type: Type.STRING }, confidence: { type: Type.NUMBER }, hands: { type: Type.NUMBER } },
+            required: ['gloss', 'confidence', 'hands'],
+            propertyOrdering: ['gloss', 'confidence', 'hands']
+          },
+          maxItems: '3'
+        }
+      },
+      required: ['is_sign', 'candidates'],
+      propertyOrdering: ['is_sign', 'candidates']
+    })
+  })
+
+  it('guesses on gemini-3.5-flash unless GEMINI_SIGN_MODEL says otherwise (Flash-Lite named no sign in the feasibility check)', () => {
+    expect(geminiSignModel()).toBe('gemini-3.5-flash')
+    process.env.GEMINI_SIGN_MODEL = ' gemini-3.8-flash '
+    expect(geminiSignModel()).toBe('gemini-3.8-flash')
+  })
+
+  it('sends the frames as inline JPEG parts before the text, in JSON mode with the sign schema', async () => {
+    const fake = fakeGemini(reply(signJson))
+    expect(await identifySignWith(signRequest, source(fake.generate))).toEqual({
+      ok: true,
+      value: { is_sign: true, candidates: [{ gloss: 'THANK YOU', confidence: 0.7, hands: 1 }] }
+    })
+    const [params] = fake.calls
+    expect(params.model).toBe('gemini-3.5-flash')
+    expect(params.contents).toEqual([
+      {
+        role: 'user',
+        parts: [...FRAMES.map((data) => ({ inlineData: { mimeType: 'image/jpeg', data } })), { text: buildSignRequest(signRequest) }]
+      }
+    ])
+    expect(params.config).toMatchObject({
+      systemInstruction: SIGN_SYSTEM,
+      responseMimeType: 'application/json',
+      responseSchema: geminiSchema(SignReply),
+      // 3.5 Flash thinks at LOW, so it gets room on top of the 300-token answer.
+      maxOutputTokens: 300 + LOW_THINKING_ALLOWANCE,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+    })
+  })
+
+  it('a corrective retry repeats the images once, in the first turn only', async () => {
+    const fake = fakeGemini(reply('{"is_sign": "maybe"}'), reply(signJson))
+    expect(await identifySignWith(signRequest, source(fake.generate))).toMatchObject({ ok: true })
+    const turns = fake.calls[1].contents as Content[]
+    expect(turns.map((t) => t.role)).toEqual(['user', 'model', 'user'])
+    expect(turns[0].parts?.filter((p) => p.inlineData)).toHaveLength(3)
+    expect(turns[2].parts?.some((p) => p.inlineData)).toBe(false)
+    expect(userText(turns[2])).toMatch(/^Your reply was unusable: it did not match the schema/)
+  })
+
+  it('retries a 429 the same way intent does, saying so, and answers once the limit lifts', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const fake = fakeGemini(rateLimited('2s'), reply(signJson))
+    const statuses: string[] = []
+    const pending = identifySignWith(signRequest, source(fake.generate), (s) => statuses.push(s))
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(await pending).toMatchObject({ ok: true, value: { candidates: [{ gloss: 'THANK YOU' }] } })
+    expect(fake.calls).toHaveLength(2)
+    expect(statuses).toEqual([RATE_LIMITED_STATUS])
+  })
+
+  it('a per-minute limit asking for longer than the deadline fails at once with how long to wait', async () => {
+    const fake = fakeGemini(rateLimited('51s', { quotaId: PER_MINUTE }))
+    expect(await identifySignWith(signRequest, source(fake.generate))).toEqual({
+      ok: false,
+      error: 'Gemini is rate limited. Try again in 51 s'
+    })
+    expect(fake.calls).toHaveLength(1)
+  })
+
+  it('a cancelled guess stops at once', async () => {
+    const fake = fakeGemini(hang)
+    const abort = new AbortController()
+    const pending = identifySignWith(signRequest, source(fake.generate), undefined, abort.signal)
+    await Promise.resolve()
+    abort.abort()
+    expect(await pending).toEqual(CANCELLED)
   })
 })

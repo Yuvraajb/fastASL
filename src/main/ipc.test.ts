@@ -210,4 +210,51 @@ describe('LLM status IPC', () => {
     cancel('w-2') // settled: nothing left to abort
     expect(signals[1].aborted).toBe(false)
   })
+
+  it('identifySign: tags status lines, can be cancelled, and refuses a malformed request before any provider sees it', async () => {
+    const sent = liveWindow()
+    const signals: AbortSignal[] = []
+    const answers: (() => void)[] = []
+    const guess = { is_sign: true, candidates: [{ gloss: 'HELLO', confidence: 0.6, hands: 1 as const }] }
+    const identifySign = vi.fn((_req: unknown, onStatus?: (s: string) => void, signal?: AbortSignal) => {
+      onStatus?.('Rate limited, retrying...')
+      signals.push(signal!)
+      return new Promise<{ ok: true; value: typeof guess }>((resolve) => answers.push(() => resolve({ ok: true, value: guess })))
+    })
+    registerIpc(() => null, { identifySign })
+    const sign = { frames: ['/9j/AAA='], motion: '1 s', mode: 'command', known: ['YES'] }
+
+    const a = invoke(IPC.identifySign, sign, 's-1')
+    const b = invoke(IPC.identifySign, sign, 's-2')
+    electron.listeners.get(IPC.llmCancel)?.({}, 's-1')
+    expect(signals.map((x) => x.aborted)).toEqual([true, false])
+    answers.forEach((answer) => answer())
+    expect(await b).toEqual({ ok: true, value: guess })
+    await a
+    expect(sent).toContainEqual({ channel: IPC.llmStatus, event: { callId: 's-1', status: 'Rate limited, retrying...' } })
+
+    const tooMany = { ...sign, frames: Array.from({ length: 9 }, () => '/9j/AAA=') }
+    const bads = [
+      null,
+      { ...sign, frames: 'x' },
+      tooMany,
+      { ...sign, mode: 'shout' },
+      { ...sign, known: [1] },
+      { ...sign, motion: 'x'.repeat(2001) },
+      { ...sign, known: Array.from({ length: 501 }, () => 'YES') },
+      { ...sign, known: ['Y'.repeat(65)] }
+    ]
+    for (const bad of bads) {
+      expect(await invoke(IPC.identifySign, bad, 's-3')).toEqual({ ok: false, error: 'Bad sign request' })
+    }
+    expect(identifySign).toHaveBeenCalledTimes(2)
+  })
+
+  it('identifySign without the service answers softly', async () => {
+    registerIpc(() => null, {})
+    expect(await invoke(IPC.identifySign, { frames: [], motion: '', mode: 'command', known: [] })).toEqual({
+      ok: false,
+      error: 'Sign guessing is not available yet'
+    })
+  })
 })

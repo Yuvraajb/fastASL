@@ -1,20 +1,63 @@
 import type { Mode, SignTemplate } from '@shared/types'
+import { pickFrames, type CapturedFrame } from '../engine/camera/frameRing'
 import { HOLD_MS } from '../engine/gestures/engine'
 import { slotPresent } from '../engine/recognition/features'
+import { summarizeMotion } from '../engine/recognition/motionSummary'
 import { Segmenter } from '../engine/recognition/segmenter'
-import { RecognitionSession, type RecognitionEvent } from '../engine/recognition/session'
-import { TeachSession } from '../engine/recognition/teach'
+import { RecognitionSession, type Movement, type RecognitionEvent } from '../engine/recognition/session'
+import { TEACH_REASONS, TeachSession } from '../engine/recognition/teach'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
-import { countSigns, takesSigns, type Controller, type GestureInput, type GestureName } from './controller'
+import {
+  countSigns,
+  showsSign,
+  takesSigns,
+  type Controller,
+  type GestureInput,
+  type GestureName,
+  type UnknownMovement
+} from './controller'
 import { live } from './live'
 import { getApp, useApp, type AppState } from './store'
 import type { SettingsPage, Token, View } from './types'
 
 /** How long recognition ignores the camera after a control gesture fires. */
 const GESTURE_SUSPEND_MS = 600
+/**
+ * "Listening..." shows only once a movement has lasted this long (camera frame time): a hand
+ * settling, a twitch or the start of a gesture leaves the card as it is instead of flashing it.
+ */
+const LISTEN_DELAY_MS = 400
+/** Once shown, "Listening..." stays at least this long, so a rejected movement doesn't make it flicker. */
+const LISTEN_MIN_MS = 700
 const SWIPES: ReadonlySet<GestureName> = new Set(['swipeLeft', 'swipeRight', 'swipeUp'])
 /** A swipe whose movement is still being judged after this long (the hands kept moving) is dropped. */
 const SWIPE_VERDICT_MS = 1500
+/** Guess, confirm, learn: a movement this long, start to end, can be a sign worth asking about. */
+export const GUESS_MIN_MS = 400
+export const GUESS_MAX_MS = 3000
+/**
+ * A guess waits this long (times the sensitivity's hold scale) after its movement ends: the
+ * longest control hold plus a margin. A control gesture held with the movement's last shape (a
+ * fist, a thumbs up, a finger count) fires within it, and a letter held with it arrives within
+ * it; either one drops the guess, so the movement into a gesture or a letter is never sent.
+ */
+export const GUESS_WAIT_MS = Math.max(...Object.values(HOLD_MS)) + 250
+/**
+ * After a control gesture acts, a movement that starts within this long is its follow-through
+ * (a swipe's return stroke, the hand coming down from a pick), never a guess.
+ */
+export const GUESS_AFTER_GESTURE_MS = 1500
+
+/**
+ * Whether a movement nothing matched is worth a guess: clean (it neither started with the hands
+ * coming into view nor ended with them leaving, so no raise or lowering) and of sign length.
+ */
+export function signLike(m: Pick<Movement, 'entered' | 'left' | 'durationMs'>): 'yes' | 'edge' | 'short' | 'long' {
+  if (m.entered || m.left) return 'edge'
+  if (m.durationMs < GUESS_MIN_MS) return 'short'
+  if (m.durationMs > GUESS_MAX_MS) return 'long'
+  return 'yes'
+}
 
 type Target = Pick<
   Controller,
@@ -26,6 +69,11 @@ type Target = Pick<
   | 'teachListening'
   | 'teachProgress'
   | 'teachLearned'
+  | 'guessesSigns'
+  | 'unknownSign'
+  | 'showSignListening'
+  | 'showSignEnded'
+  | 'showSign'
 >
 type TeachPage = Extract<SettingsPage, { page: 'teachRecord' }>
 
@@ -49,6 +97,22 @@ interface Teaching {
   segmenter: Segmenter
 }
 
+/** Teach › Show me a sign, listening for its one repetition. */
+interface Showing {
+  segmenter: Segmenter
+  /** The first frame it saw: movements that start within SHOW_SETTLE_MS of it are ignored. */
+  since: number | null
+  /** The movement in progress started within the settle time: its outcome is ignored too. */
+  settling: boolean
+}
+
+/**
+ * Show me a sign ignores movements that start this soon after it begins listening: the hand
+ * coming down from the finger pick that opened the page (or getting ready after a failed try)
+ * is no sign, and asking the LLM about it would block the real one.
+ */
+export const SHOW_SETTLE_MS = 1000
+
 /**
  * Connects sign recognition to the app. Frames go to a RecognitionSession in the views that
  * take signs (takesSigns) and to a TeachSession on Teach › record; events go to the
@@ -56,7 +120,11 @@ interface Teaching {
  * word is letters only). Word labels are glosses (MEETING); their tokens are lower case,
  * the way sentences and typed text use them.
  */
-export function connectRecognition(controller: Target): RecognitionConnection {
+export function connectRecognition(
+  controller: Target,
+  /** The camera frames engines.ts keeps for guesses (none unless a guess could use them). */
+  recentFrames: () => readonly CapturedFrame[] = () => []
+): RecognitionConnection {
   const initial = getApp()
   // Outside Spell mode a letter waits out the longest control hold, so suspend() can drop it.
   const rec = new RecognitionSession({ controlHoldMs: Math.max(...Object.values(HOLD_MS)) })
@@ -74,40 +142,113 @@ export function connectRecognition(controller: Target): RecognitionConnection {
   let lettersOnly = recognitionMode(initial) === 'spell'
   rec.setMode(recognitionMode(initial))
   let teaching: Teaching | null = null
+  let showing: Showing | null = null
   /** Whether the previous frame went to `rec`; if not, its motion and holds are stale. */
   let fed = false
   let cameraSession: CanvasImageSource | null = null
   let lastT = 0
+  /** The camera's aspect at the last frame, for the motion summary of a movement routed from it. */
+  let aspectNow = 1
   /** A movement got signStart and no outcome yet. */
   let moving = false
   /** A swipe made by that movement, waiting for its verdict. */
   let heldSwipe: { input: GestureInput; t: number } | null = null
+  /** A movement to guess once GUESS_WAIT_MS has passed with no gesture, sign or letter. */
+  let pendingGuess: { movement: UnknownMovement; at: number } | null = null
+  /** When a control gesture last acted (frame time). */
+  let lastGestureT = -Infinity
   const forgetMovement = (): void => {
     moving = false
     heldSwipe = null
   }
+
+  // "Listening..." on the card, debounced by frame time (LISTEN_DELAY_MS, LISTEN_MIN_MS).
+  /** A movement started and Listening isn't up yet: when (frame time). */
+  let movingSince: number | null = null
+  /** When Listening went up (controller.signStart); null while it isn't. */
+  let listeningSince: number | null = null
+  /** The movement got no outcome while Listening was up for less than LISTEN_MIN_MS: hide it later. */
+  let hidePending = false
+  const listenStart = (t: number): void => {
+    // A new movement while Listening is still up keeps it up.
+    if (listeningSince !== null) hidePending = false
+    else movingSince = t
+  }
+  const listenTick = (t: number): void => {
+    if (movingSince !== null && t - movingSince >= LISTEN_DELAY_MS) {
+      movingSince = null
+      listeningSince = t
+      controller.signStart()
+    }
+    if (hidePending && listeningSince !== null && t - listeningSince >= LISTEN_MIN_MS) listenEnd()
+  }
+  /** The movement got no outcome: Listening goes (now, or once it has been up LISTEN_MIN_MS). */
+  const listenRejected = (): void => {
+    movingSince = null
+    if (listeningSince !== null && lastT - listeningSince < LISTEN_MIN_MS) {
+      hidePending = true
+      return
+    }
+    listenEnd()
+  }
+  /** Listening goes now (a gesture acted, the camera went away). */
+  const listenEnd = (): void => {
+    movingSince = null
+    listeningSince = null
+    hidePending = false
+    controller.signRejected()
+  }
+  /** A sign or letter replaced Listening, or recognition stopped listening here. */
+  const listenForget = (): void => {
+    movingSince = null
+    listeningSince = null
+    hidePending = false
+  }
+
   /** The movement in progress gets no outcome (the camera went away or changed): don't leave Listening up. */
   const dropMovement = (): void => {
-    if (moving) controller.signRejected()
+    if (moving || listeningSince !== null) listenEnd()
+    else listenForget()
     forgetMovement()
   }
 
   /** A control gesture acts: the sign or held-back letter it was made with is dropped. */
   const applyGesture = (input: GestureInput): void => {
+    // The movement into the gesture is no sign to guess. (Hands down only ends the phrase.)
+    if (input.gesture !== 'handsDown') {
+      if (pendingGuess) log(`[sign] guess dropped: ${input.gesture}`)
+      pendingGuess = null
+      lastGestureT = lastT
+    }
     forgetMovement()
     rec.suspend(GESTURE_SUSPEND_MS)
     controller.gesture(input)
     // The dropped sign gets no outcome: don't leave Listening up.
-    controller.signRejected()
+    listenEnd()
   }
 
-  /** A new recorder each time a Teach › record page opens; none elsewhere. */
+  /**
+   * A new recorder each time a Teach › record page opens, and each time Show me a sign starts
+   * waiting for a repetition; none elsewhere.
+   */
   const followTeachPage = (view: View): void => {
     const page = teachPage(view)
     if (!page) teaching = null
     else if (teaching?.label !== page.label) teaching = startTeaching(page)
+    showing = showsSign(view) ? (showing ?? startShowing()) : null
   }
   followTeachPage(initial.view)
+
+  /** What a guess needs: the frames around the movement, what hand tracking measured, its vectors. */
+  const unknownMovement = (m: Movement, aspect: number): UnknownMovement => {
+    const start = m.frames[0].t
+    const end = m.frames[m.frames.length - 1].t
+    return {
+      frames: pickFrames(recentFrames(), start, end).map((f) => f.jpeg),
+      motion: summarizeMotion(m.frames, aspect, m.durationMs),
+      features: m.features
+    }
+  }
 
   const stopStore = useApp.subscribe((s, prev) => {
     if (s.templates !== prev.templates) setTemplates(s.templates)
@@ -126,17 +267,31 @@ export function connectRecognition(controller: Target): RecognitionConnection {
     log(`[sign] ${describe(e)}`)
     if (e.type === 'signStart') {
       moving = true
-      return controller.signStart()
+      return listenStart(lastT)
     }
     if (e.type === 'rejected') {
       const swipe = heldSwipe
       forgetMovement()
-      if (swipe && lastT - swipe.t <= SWIPE_VERDICT_MS) return applyGesture(swipe.input)
-      return controller.signRejected()
+      // A movement that made a swipe is the swipe's (or, judged too late, nobody's): never a guess.
+      if (swipe) return lastT - swipe.t <= SWIPE_VERDICT_MS ? applyGesture(swipe.input) : listenRejected()
+      // A whole, clean movement of sign length that nothing taught matched: maybe the LLM knows
+      // it, once a control gesture or letter made with its last shape has had time to act.
+      const movement = rec.rejectedMovement
+      const afterGesture = movement !== null && movement.frames[0].t < lastGestureT + GUESS_AFTER_GESTURE_MS
+      if (movement && signLike(movement) === 'yes' && !afterGesture && controller.guessesSigns()) {
+        const wait = GUESS_WAIT_MS * SENSITIVITY[getApp().sensitivity].holdScale
+        log(`[sign] unknown movement, ${Math.round(movement.durationMs)} ms: asking the LLM in ${Math.round(wait)} ms`)
+        pendingGuess = { movement: unknownMovement(movement, aspectNow), at: lastT + wait }
+      }
+      return listenRejected()
     }
+    // A sign or a letter arrived: the movement before it was not the one to ask about.
+    if (pendingGuess) log(`[sign] guess dropped: ${e.type === 'token' ? e.text : 'a sign'} came first`)
+    pendingGuess = null
     if (e.kind === 'word') {
       if (heldSwipe) log(`[gesture] ${heldSwipe.input.gesture} dropped: the movement was a sign`)
       forgetMovement()
+      listenForget()
     }
     if (e.type === 'token') return controller.token(tokenFor(e.text, e.kind))
     // A close call between letters takes the best guess: asking for every letter would
@@ -151,6 +306,34 @@ export function connectRecognition(controller: Target): RecognitionConnection {
     if (!teachPage(getApp().view)?.listening) return
     const { done, reason } = t.session.progress
     controller.teachProgress(done, reason)
+  }
+
+  /** Show me a sign: a raise or lowering of the hands, or a too-short movement, just ends Listening. */
+  const show = (sh: Showing, frame: FrameSample, aspect: number, newCamera: boolean): void => {
+    sh.segmenter.setAspect(aspect)
+    if (newCamera) {
+      sh.segmenter.reset()
+      controller.showSignEnded()
+    }
+    sh.since ??= frame.t
+    for (const segment of sh.segmenter.push(frame)) {
+      if (segment.kind === 'start') {
+        // Decided once per movement, at its start: every start gets exactly one outcome.
+        sh.settling = segment.t < (sh.since ?? segment.t) + SHOW_SETTLE_MS
+        if (!sh.settling) controller.showSignListening()
+      } else if (segment.kind === 'cancel') {
+        controller.showSignEnded(segment.reason === 'too-long' && !sh.settling ? TEACH_REASONS.tooLong : undefined)
+      } else if (segment.kind === 'dynamic') {
+        if (sh.settling) {
+          controller.showSignEnded()
+          continue
+        }
+        const verdict = signLike(segment)
+        log(`[teach] shown movement ${Math.round(segment.durationMs)} ms: ${verdict}`)
+        if (verdict === 'yes') controller.showSign(unknownMovement(segment, aspect))
+        else controller.showSignEnded(verdict === 'long' ? TEACH_REASONS.tooLong : undefined)
+      }
+    }
   }
 
   const teach = (t: Teaching, frame: FrameSample, aspect: number, newCamera: boolean): void => {
@@ -188,17 +371,26 @@ export function connectRecognition(controller: Target): RecognitionConnection {
       // the camera goes away, which ends a movement in progress.
       if (live.mock) {
         fed = false
+        pendingGuess = null
         dropMovement()
         if (teaching) restartTeaching(teaching)
+        if (showing) {
+          showing.segmenter.reset()
+          controller.showSignEnded()
+        }
         return false
       }
       const aspect = live.sourceWidth / live.sourceHeight
+      aspectNow = aspect
       const newCamera = live.source !== cameraSession
       cameraSession = live.source
-      if (teaching || !takesSigns(getApp().view)) {
+      if (teaching || showing || !takesSigns(getApp().view)) {
         fed = false
+        pendingGuess = null
         forgetMovement()
+        listenForget()
         if (teaching) teach(teaching, frame, aspect, newCamera)
+        if (showing) show(showing, frame, aspect, newCamera)
         return false
       }
       rec.setAspect(aspect)
@@ -216,6 +408,12 @@ export function connectRecognition(controller: Target): RecognitionConnection {
         rec.lastWord = null
       }
       events.forEach(route)
+      listenTick(frame.t)
+      if (pendingGuess && frame.t >= pendingGuess.at) {
+        const { movement } = pendingGuess
+        pendingGuess = null
+        if (controller.guessesSigns()) controller.unknownSign(movement)
+      }
       return events.some((e) => (e.type === 'token' || e.type === 'ambiguous') && (e.kind === 'word' || lettersOnly))
     },
     gesture(input) {
@@ -268,6 +466,13 @@ function startTeaching(page: TeachPage): Teaching {
   const segmenter = new Segmenter()
   segmenter.reset()
   return { label: page.label, session: new TeachSession(page.label, page.kind, page.total), segmenter }
+}
+
+/** Show me a sign's recorder starts blocked too: the finger pick that opened the page is no repetition. */
+function startShowing(): Showing {
+  const segmenter = new Segmenter()
+  segmenter.reset()
+  return { segmenter, since: null, settling: false }
 }
 
 function tokenFor(label: string, kind: Token['kind']): Token {

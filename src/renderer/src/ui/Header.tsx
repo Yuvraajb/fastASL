@@ -1,9 +1,16 @@
 import { useEffect, useState } from 'react'
+import { IDENTIFYING } from '../app/controller'
 import { useApp } from '../app/store'
 import { MODE_LABEL, statusFor, type StatusInfo, type View } from '../app/types'
 import { StatusLabel } from './StatusLabel'
 import { CloseButton } from './CloseButton'
 import './Header.css'
+
+/** Cards where a movement being judged shows as "Listening..." in the header (store.signing). */
+const SIGNING_VIEWS: ReadonlySet<View['kind']> = new Set(['ready', 'recognizing', 'building', 'sentence', 'dictation'])
+const LISTENING: StatusInfo = { label: 'Listening...', tone: 'active' }
+/** An unknown sign is with the LLM (the notice IDENTIFYING, which Notice leaves to the header). */
+const IDENTIFYING_STATUS: StatusInfo = { label: 'Identifying...', tone: 'idle' }
 
 /** How long the mode label stays highlighted after a swipe switches modes. */
 const MODE_FLASH_MS = 1600
@@ -35,8 +42,11 @@ function useModeFlash(): boolean {
 /** Card header: "fastASL" (+ subtle mode label) left, status (and optional X) right. */
 export function Header({ view, status, close = false, onClose, title = 'fastASL' }: HeaderProps): React.JSX.Element {
   const mode = useApp((s) => s.mode)
+  const signing = useApp((s) => s.signing)
+  const identifying = useApp((s) => s.notice === IDENTIFYING)
   const flashing = useModeFlash()
-  const info = status === undefined ? statusFor(view, mode) : status
+  const live = SIGNING_VIEWS.has(view.kind) ? (signing ? LISTENING : identifying ? IDENTIFYING_STATUS : null) : null
+  const info = status === undefined ? (live ?? statusFor(view, mode)) : status
   const showMode = mode !== 'command' || flashing
   return (
     <header className="hdr">

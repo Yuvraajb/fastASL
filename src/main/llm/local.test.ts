@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod/v4'
+import { SignReply, identifySignWith } from '../claude/sign'
 import {
   LOCAL_DEFAULT_MODEL,
   LOCAL_DEFAULT_URL,
   localConfig,
   localLlm,
   localSource,
+  noVision,
   ollamaChat,
+  ollamaShow,
   type LocalChat,
+  type LocalShow,
   type OllamaChatRequest,
   type OllamaChatResponse
 } from './local'
@@ -118,5 +122,83 @@ describe('local (Ollama) structured output', () => {
     const model = source()
     expect(model.ok).toBe(true)
     expect(urls).toEqual(['http://localhost:9999'])
+  })
+})
+
+describe('identifySign on Ollama', () => {
+  const FRAMES = ['/9j/AAA=', '/9j/BBB=', '/9j/CCC=']
+  const signRequest = { frames: FRAMES, motion: '0.9 s, one hand.', mode: 'command' as const, known: [] }
+  const signJson = '{"is_sign":true,"candidates":[{"gloss":"hello","confidence":0.6,"hands":1}]}'
+  const recording = (content: string) => {
+    const calls: OllamaChatRequest[] = []
+    const chat: LocalChat = async (body) => {
+      calls.push(body)
+      return answer(content)
+    }
+    return { chat, calls }
+  }
+  const showing = (capabilities?: string[]): LocalShow => async () => (capabilities ? { capabilities } : {})
+  const source = (chat: LocalChat, show: LocalShow, model = 'llava') =>
+    localSource(() => chat, () => ({ url: LOCAL_DEFAULT_URL, model }), () => show)
+
+  it('a vision model gets the frames on the user message', async () => {
+    const { chat, calls } = recording(signJson)
+    expect(await identifySignWith(signRequest, source(chat, showing(['completion', 'vision'])))).toEqual({
+      ok: true,
+      value: { is_sign: true, candidates: [{ gloss: 'HELLO', confidence: 0.6, hands: 1 }] }
+    })
+    expect(calls[0].model).toBe('llava')
+    expect(calls[0].messages[1]).toMatchObject({ role: 'user', images: FRAMES })
+    expect(calls[0].format).toMatchObject({ required: ['is_sign', 'candidates'] })
+  })
+
+  it('a model without vision is a short error, and no frames are sent; Ollama is asked once per model', async () => {
+    const { chat, calls } = recording(signJson)
+    const show = vi.fn(showing(['completion']))
+    const llm = source(chat, show, 'llama3.2')
+    const error = { ok: false, error: "llama3.2 can't see images. Set LOCAL_LLM_MODEL to a vision model" }
+    expect(await identifySignWith(signRequest, llm)).toEqual(error)
+    expect(await identifySignWith(signRequest, llm)).toEqual(error)
+    expect(show).toHaveBeenCalledTimes(1)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('an Ollama too old to list capabilities just gets the call, and its image error is mapped', async () => {
+    const fetch = async () => json(400, { error: 'this model is missing data required for image input' })
+    const llm = localLlm(ollamaChat(cfg.url, fetch as unknown as typeof globalThis.fetch), cfg, showing())
+    const res = await llm.ask({
+      system: 'S',
+      user: '{}',
+      images: [{ mimeType: 'image/jpeg', data: '/9j/AAA=' }],
+      schema: SignReply,
+      maxTokens: 300
+    })
+    expect(res).toEqual({ ok: false, error: noVision('llama3.2') })
+  })
+
+  it('asks /api/show for the model, and says to start Ollama when nothing listens', async () => {
+    const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json(200, { capabilities: ['completion', 'vision'] }))
+    expect(await ollamaShow(cfg.url, fetch as unknown as typeof globalThis.fetch)('llava', new AbortController().signal)).toEqual({
+      capabilities: ['completion', 'vision']
+    })
+    expect(fetch.mock.calls[0][0]).toBe('http://127.0.0.1:11434/api/show')
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ model: 'llava' })
+
+    const { chat, calls } = recording(signJson)
+    const down: LocalShow = async () => {
+      throw refused
+    }
+    expect(await identifySignWith(signRequest, source(chat, down))).toEqual({
+      ok: false,
+      error: 'Start Ollama (ollama serve) or set LOCAL_LLM_URL'
+    })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('text-only calls never ask about vision', async () => {
+    const show = vi.fn(showing(['completion']))
+    const { chat } = recording('{"word":"hi","score":1}')
+    expect(await localLlm(chat, cfg, show).ask(request)).toMatchObject({ ok: true })
+    expect(show).not.toHaveBeenCalled()
   })
 })

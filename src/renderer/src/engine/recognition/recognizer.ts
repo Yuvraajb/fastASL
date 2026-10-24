@@ -1,7 +1,7 @@
 import type { SignTemplate } from '@shared/types'
 import { SENSITIVITY, type SensitivityProfile } from '../types'
 import { dtw, resample } from './dtw'
-import { FRAME_FEATURE_DIM, STATIC_FEATURE_DIM } from './features'
+import { FRAME_FEATURE_DIM, SLOTS, STATIC_FEATURE_DIM, selectSlots, slotEnergy, usedSlots } from './features'
 import { knn, type LabeledVector, type Neighbor } from './knn'
 
 export type RecognizerMode = 'words' | 'letters' | 'both'
@@ -31,6 +31,11 @@ export interface RecognizerOptions {
    */
   radiusScale: number
   maxWordThreshold: number
+  /**
+   * The radius of a word with a single template (learned from one confirmed guess): there is no
+   * spread to measure, so it gets a fixed allowance in [wordThreshold, maxWordThreshold].
+   */
+  singleTemplateRadius: number
   /** Max static-vector distance to accept a letter, before sensitivity scaling. */
   letterThreshold: number
   /** best / second-best distance above this (second best being another label) = ambiguous. */
@@ -59,26 +64,32 @@ export interface RecognizerOptions {
  * Real cameras are noisier than this model. On a MacBook camera (1280x720, ~17-30 fps) one
  * signer's clean HELLO repetitions sat 1.57-1.81 from their nearest neighbor (pairwise up to
  * ~2.3; raising the hand into view as part of it 2.2-3.4), so a fixed 1.5 rejected every real
- * repetition. Hence the per-word radius: 1.4 x that median nearest distance gives HELLO ~2.2,
- * while synthetic words (median ~0.5) keep the floor of 1.5, and the cap of 2.4 stays under
- * the raises and other movements measured there.
+ * repetition. Hence the per-word radius: 2.4 x the median nearest distance between a word's
+ * templates. That signer's 5 HELLO templates had a median nearest distance of ~0.8 (radius ~1.9),
+ * while their later HELLOs landed at 0.91-1.62 and other movements at 2.5-8.9. Synthetic words
+ * (median ~0.5) keep the floor of 1.5, and the cap of 2.4 stays under those other movements.
  */
 export const RECOGNIZER_DEFAULTS: RecognizerOptions = {
   wordThreshold: 1.5,
-  radiusScale: 1.4,
+  radiusScale: 2.4,
   maxWordThreshold: 2.4,
+  singleTemplateRadius: 2.0,
   letterThreshold: 0.7,
   ambiguityRatio: 0.85,
   band: 4,
   k: 3
 }
 
+/** A hand moving at least this share of the busiest hand's motion counts as signing (see classifyDynamic). */
+const ACTIVE_HAND_SHARE = 0.4
+
 const REJECTED: Classification = { status: 'rejected', distance: Infinity, alternatives: [] }
 
 /** Nearest-neighbor sign classifier over the user's recorded templates. */
 export class Recognizer {
   private options: RecognizerOptions
-  private words: { label: string; frames: number[][] }[] = []
+  /** `slots`: the hands the template uses; only those are compared (a stray other hand is ignored). */
+  private words: WordTemplate[] = []
   /** Accept distance per word label (see RecognizerOptions.radiusScale). */
   private radii = new Map<string, number>()
   private letters: LabeledVector[] = []
@@ -96,7 +107,8 @@ export class Recognizer {
     for (const t of templates) {
       if (t.kind === 'word') {
         if (t.frames.length >= 2 && t.frames.every((f) => f.length === FRAME_FEATURE_DIM)) {
-          this.words.push({ label: t.label, frames: resample(t.frames) })
+          const frames = resample(t.frames)
+          this.words.push({ label: t.label, frames, slots: usedSlots(frames), bySlots: new Map() })
         }
       } else {
         for (const f of t.frames) if (f.length === STATIC_FEATURE_DIM) this.letters.push({ label: t.label, vector: f })
@@ -123,8 +135,21 @@ export class Recognizer {
     if (this.mode === 'letters' || this.words.length === 0 || features.length === 0) return REJECTED
     const query = resample(features)
     const nearest = new Map<string, number>()
+    // A hand the template doesn't use is left out when it barely moved (resting or wandering in
+    // view); one that moves like a signing hand is part of the movement and still counts.
+    const used = usedSlots(query)
+    const energy = slotEnergy(query)
+    const active = SLOTS.map((_, s) => used.includes(s) && energy[s] >= ACTIVE_HAND_SHARE * Math.max(...energy))
+    const bySlots = new Map<string, [number[][], number[]]>()
+    const compared = (slots: number[]): [number[][], number[]] => {
+      const all = SLOTS.map((_, s) => s).filter((s) => slots.includes(s) || active[s])
+      const key = all.join()
+      if (!bySlots.has(key)) bySlots.set(key, [selectSlots(query, all), all])
+      return bySlots.get(key)!
+    }
     for (const word of this.words) {
-      const d = dtw(query, word.frames, { band: this.options.band })
+      const [q, slots] = compared(word.slots)
+      const d = dtw(q, framesFor(word, slots), { band: this.options.band })
       if (d < (nearest.get(word.label) ?? Infinity)) nearest.set(word.label, d)
     }
     const ranked = [...nearest]
@@ -153,17 +178,42 @@ export class Recognizer {
 }
 
 /** Each word's accept distance from how close its templates are to one another. */
-function wordRadii(words: readonly { label: string; frames: number[][] }[], o: RecognizerOptions): Map<string, number> {
-  const byLabel = new Map<string, number[][][]>()
-  for (const w of words) byLabel.set(w.label, [...(byLabel.get(w.label) ?? []), w.frames])
+interface WordTemplate {
+  label: string
+  frames: number[][]
+  /** The hands the template uses; only those (and any other hand that is signing) are compared. */
+  slots: number[]
+  /** `frames` cut down to a set of slots, cached by the set. */
+  bySlots: Map<string, number[][]>
+}
+
+function framesFor(word: WordTemplate, slots: number[]): number[][] {
+  const key = slots.join()
+  let frames = word.bySlots.get(key)
+  if (!frames) word.bySlots.set(key, (frames = selectSlots(word.frames, slots)))
+  return frames
+}
+
+function wordRadii(words: readonly WordTemplate[], o: RecognizerOptions): Map<string, number> {
+  const byLabel = new Map<string, WordTemplate[]>()
+  for (const w of words) byLabel.set(w.label, [...(byLabel.get(w.label) ?? []), w])
+  const between = (a: WordTemplate, b: WordTemplate): number => {
+    const slots = [...new Set([...a.slots, ...b.slots])].sort()
+    return dtw(framesFor(a, slots), framesFor(b, slots), { band: o.band })
+  }
+  const clamp = (r: number): number => Math.min(o.maxWordThreshold, Math.max(o.wordThreshold, r))
   const radii = new Map<string, number>()
   for (const [label, seqs] of byLabel) {
+    if (seqs.length === 1) {
+      radii.set(label, clamp(o.singleTemplateRadius))
+      continue
+    }
     const nearest = seqs
-      .map((a, i) => Math.min(...seqs.map((b, j) => (i === j ? Infinity : dtw(a, b, { band: o.band })))))
+      .map((a, i) => Math.min(...seqs.map((b, j) => (i === j ? Infinity : between(a, b)))))
       .filter(Number.isFinite)
       .sort((a, b) => a - b)
     const median = nearest.length ? nearest[Math.floor((nearest.length - 1) / 2)] : 0
-    radii.set(label, Math.min(o.maxWordThreshold, Math.max(o.wordThreshold, median * o.radiusScale)))
+    radii.set(label, clamp(median * o.radiusScale))
   }
   return radii
 }

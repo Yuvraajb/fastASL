@@ -1,7 +1,7 @@
 import type { View } from '../app/types'
 import { GestureDetailPage, GesturesPage, NewGestureHoldPage, NewGesturePickPage } from './settings/GesturePages'
 import { CameraPage, RootPage, SensitivityPage } from './settings/PreferencePages'
-import { TeachPickPage, TeachRecordPage, TeachSpellPage } from './settings/TeachPages'
+import { TeachPickPage, TeachRecordPage, TeachShowPage, TeachSpellPage } from './settings/TeachPages'
 
 type Props = { view: Extract<View, { kind: 'settings' }> }
 
@@ -17,6 +17,8 @@ export function SettingsView({ view }: Props): React.JSX.Element {
       return <TeachSpellPage view={view} page={page} />
     case 'teachRecord':
       return <TeachRecordPage view={view} page={page} />
+    case 'teachShow':
+      return <TeachShowPage view={view} page={page} />
     case 'newGesturePick':
       return <NewGesturePickPage view={view} page={page} />
     case 'newGestureHold':

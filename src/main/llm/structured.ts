@@ -1,9 +1,17 @@
 import type { z } from 'zod/v4'
 import type { Result } from '@shared/types'
 
+/** An image sent with a request (identifySign's camera frames): base64 without the data: prefix. */
+export interface JsonImage {
+  mimeType: 'image/jpeg' | 'image/png'
+  data: string
+}
+
 export interface JsonRequest<S extends z.ZodType> {
   system: string
   user: string
+  /** Sent before the text in the first user turn only; the corrective retry is text. */
+  images?: JsonImage[]
   schema: S
   maxTokens: number
   /** Progress for the card while the call runs, e.g. "Rate limited, retrying..." (Gemini only). */
@@ -25,7 +33,8 @@ export interface JsonTransport<Turn, Reply> {
   name: string
   /** Budget for the whole exchange: both attempts and every retry the transport makes inside one. */
   deadlineMs: number
-  userTurn(text: string): Turn
+  /** A user turn: the text, after `images` when there are any (the first turn only). */
+  userTurn(text: string, images?: JsonImage[]): Turn
   /** One model call. A soft failure (a refusal) comes back as an error; a throw goes to `failure`. */
   send(turns: Turn[], signal: AbortSignal): Promise<Result<Reply>>
   /** The reply's text, or why it can't be used before parsing it (cut off at the token cap). */
@@ -38,8 +47,8 @@ export interface JsonTransport<Turn, Reply> {
 
 /** A structured-output model behind one LLM_PROVIDER. */
 export interface StructuredLlm {
-  /** Output-token caps of the two calls. */
-  maxTokens: { intent: number; spell: number }
+  /** Output-token caps of the calls. */
+  maxTokens: { intent: number; spell: number; sign: number }
   ask<S extends z.ZodType>(req: JsonRequest<S>): Promise<Result<z.infer<S>>>
 }
 
@@ -53,7 +62,7 @@ export type LlmSource = () => Result<StructuredLlm>
  */
 export async function askStructured<S extends z.ZodType, Turn, Reply>(
   transport: JsonTransport<Turn, Reply>,
-  req: { user: string; schema: S; signal?: AbortSignal }
+  req: { user: string; images?: JsonImage[]; schema: S; signal?: AbortSignal }
 ): Promise<Result<z.infer<S>>> {
   const cancelled = req.signal
   if (cancelled?.aborted) return CANCELLED
@@ -72,7 +81,7 @@ export async function askStructured<S extends z.ZodType, Turn, Reply>(
 
 async function exchange<S extends z.ZodType, Turn, Reply>(
   t: JsonTransport<Turn, Reply>,
-  req: { user: string; schema: S },
+  req: { user: string; images?: JsonImage[]; schema: S },
   signal: AbortSignal
 ): Promise<Result<z.infer<S>>> {
   const tooSlow: Result<never> = { ok: false, error: `${t.name} took too long to answer` }
@@ -86,7 +95,7 @@ async function exchange<S extends z.ZodType, Turn, Reply>(
     }
   }
 
-  const first = [t.userTurn(req.user)]
+  const first = [t.userTurn(req.user, req.images?.length ? req.images : undefined)]
   const reply = await call(first)
   if (!reply.ok) return reply
   const parsed = parseReply(t, reply.value, req.schema)

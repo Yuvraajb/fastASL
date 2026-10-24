@@ -5,11 +5,13 @@ import type {
   AgentEvent,
   AgentRunRequest,
   CustomGesture,
+  IdentifySignRequest,
   InterpretRequest,
   LlmStatusEvent,
   Result,
   Settings,
   ShortcutRunResult,
+  SignGuess,
   SpellRequest,
   TemplatePack,
   TemplateStore,
@@ -38,6 +40,12 @@ export interface MainServices {
     onStatus?: (status: string) => void,
     signal?: AbortSignal
   ) => Promise<Result<string[]>>
+  /** Guess, confirm, learn: camera frames and a motion summary in, up to 3 glosses out. */
+  identifySign?: (
+    req: IdentifySignRequest,
+    onStatus?: (status: string) => void,
+    signal?: AbortSignal
+  ) => Promise<Result<SignGuess>>
   agentRun?: (req: AgentRunRequest, emit: (e: AgentEvent) => void) => Promise<Result<{ runId: string }>>
   agentStop?: () => Promise<void>
   agentRespond?: (requestId: string, approved: boolean) => Promise<void>
@@ -50,6 +58,33 @@ export interface MainServices {
 }
 
 const notReady = <T>(what: string): Result<T> => ({ ok: false, error: `${what} is not available yet` })
+
+/**
+ * The renderer sends at most 8 small JPEGs, a summary of a few lines and the taught word labels;
+ * anything else is refused before it reaches a provider's prompt.
+ */
+const MAX_SIGN_FRAMES = 8
+const MAX_FRAME_BASE64 = 400_000
+const MAX_MOTION = 2000
+const MAX_KNOWN = 500
+const MAX_LABEL = 64
+
+function isSignRequest(req: unknown): req is IdentifySignRequest {
+  const r = req as Partial<IdentifySignRequest> | null
+  return (
+    typeof r === 'object' &&
+    r !== null &&
+    Array.isArray(r.frames) &&
+    r.frames.length <= MAX_SIGN_FRAMES &&
+    r.frames.every((f) => typeof f === 'string' && f.length <= MAX_FRAME_BASE64) &&
+    typeof r.motion === 'string' &&
+    r.motion.length <= MAX_MOTION &&
+    (r.mode === 'command' || r.mode === 'dictation' || r.mode === 'spell') &&
+    Array.isArray(r.known) &&
+    r.known.length <= MAX_KNOWN &&
+    r.known.every((k) => typeof k === 'string' && k.length <= MAX_LABEL)
+  )
+}
 
 export function registerIpc(getOverlay: () => OverlayWindow | null, services: MainServices): void {
   const broadcast = (channel: string, event: AgentEvent | LlmStatusEvent): void => {
@@ -107,6 +142,12 @@ export function registerIpc(getOverlay: () => OverlayWindow | null, services: Ma
   ipcMain.handle(IPC.spellSuggest, (_e, req: SpellRequest, callId?: string) => {
     const { spellSuggest } = services
     return spellSuggest ? llmCall(callId, (onStatus, signal) => spellSuggest(req, onStatus, signal)) : notReady('Claude')
+  })
+  ipcMain.handle(IPC.identifySign, (_e, req: IdentifySignRequest, callId?: string) => {
+    const { identifySign } = services
+    if (!identifySign) return notReady('Sign guessing')
+    if (!isSignRequest(req)) return { ok: false, error: 'Bad sign request' }
+    return llmCall(callId, (onStatus, signal) => identifySign(req, onStatus, signal))
   })
   ipcMain.on(IPC.llmCancel, (_e, callId: unknown) => {
     if (typeof callId === 'string') llmCalls.get(callId)?.abort()

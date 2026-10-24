@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, session, systemPreferences } from 'electro
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
-import type { AgentEvent, Result } from '@shared/types'
+import type { AgentEvent, IdentifySignRequest, Result } from '@shared/types'
 import { loadEnv } from './env'
 import { registerIpc, type MainServices } from './ipc'
 import { getSettings } from './store'
@@ -48,7 +48,9 @@ function loadRenderer(win: BrowserWindow, query: Record<string, string> = {}): v
 function devLogged<Req, T>(
   tag: string,
   name: string,
-  call: (req: Req, onStatus?: (status: string) => void, signal?: AbortSignal) => Promise<Result<T>>
+  call: (req: Req, onStatus?: (status: string) => void, signal?: AbortSignal) => Promise<Result<T>>,
+  /** How the request is printed, and the call's duration after the answer (identifySign). */
+  sign?: { describe: (req: Req) => string }
 ): (req: Req, onStatus?: (status: string) => void, signal?: AbortSignal) => Promise<Result<T>> {
   if (!dev) return call
   return async (req, onStatus, signal) => {
@@ -56,12 +58,18 @@ function devLogged<Req, T>(
       console.log(`[${tag}] ${name} status: ${s}`)
       onStatus?.(s)
     }
+    const started = Date.now()
     const res = await call(req, status, signal)
     const answer = res.ok ? (res.value === undefined ? 'ok' : JSON.stringify(res.value)) : JSON.stringify({ error: res.error })
-    console.log(`[${tag}] ${name} ${JSON.stringify(req)} -> ${answer}`)
+    const request = sign ? sign.describe(req) : JSON.stringify(req)
+    console.log(`[${tag}] ${name} ${request} -> ${answer}${sign ? ` (${Date.now() - started} ms)` : ''}`)
     return res
   }
 }
+
+/** A sign request without its frames (base64 JPEGs would flood the terminal). */
+const signLogLine = (req: IdentifySignRequest): string =>
+  JSON.stringify({ frames: req.frames.length, motion: req.motion, mode: req.mode, known: req.known })
 
 /** Dev: one terminal line per agent event, next to the [agent] session logs. */
 function devLoggedEmit(emit: (e: AgentEvent) => void): (e: AgentEvent) => void {
@@ -106,6 +114,7 @@ const llm = createLlmService({
 const services: MainServices = {
   interpret: devLogged(llmLabel, 'interpret', llm.interpret),
   spellSuggest: devLogged(llmLabel, 'spellSuggest', llm.spellSuggest),
+  identifySign: devLogged(llmLabel, 'identifySign', llm.identifySign, { describe: signLogLine }),
   frontmostApp: getFrontmostApp,
   typeText: devLogged('mac', 'typeText', typeAtCursor),
   capture: async (name: string) => {

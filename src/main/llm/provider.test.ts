@@ -202,4 +202,88 @@ describe('createLlmService', () => {
     expect(result.ok).toBe(true)
     expect(statuses).toEqual(['Rate limited, retrying...'])
   })
+
+  it('identifySign: the same sign prompt, images and schema on every provider; Gemini guesses on its sign model', async () => {
+    const signJson = '{"is_sign":true,"candidates":[{"gloss":"HELLO","confidence":0.7,"hands":1}]}'
+    const claude = fakeClaude(signJson)
+    const gemini = geminiAnswering(signJson)
+    const local = ollamaAnswering(signJson)
+    const service = (provider: 'claude' | 'gemini' | 'local') =>
+      createLlmService({
+        tools: () => tools,
+        provider: { ok: true, value: provider },
+        overrides: {
+          claude: claude.provider,
+          gemini: () => ({ ok: true, value: gemini.generate }),
+          geminiModel: () => 'gemini-3.5-flash-lite',
+          geminiSignModel: () => 'gemini-3.5-flash',
+          localChat: () => local.chat,
+          localShow: () => async () => ({ capabilities: ['completion', 'vision'] })
+        }
+      })
+    const req = { frames: ['/9j/AAA=', '/9j/BBB=', '/9j/CCC='], motion: '1.0 s, one hand.', mode: 'command' as const, known: ['YES'] }
+    const answer = { ok: true, value: { is_sign: true, candidates: [{ gloss: 'HELLO', confidence: 0.7, hands: 1 }] } }
+    expect(await service('claude').identifySign(req)).toEqual(answer)
+    expect(await service('gemini').identifySign(req)).toEqual(answer)
+    expect(await service('local').identifySign(req)).toEqual(answer)
+    // Intent stays on the text model (this answer is no intent, so it also gets the corrective retry).
+    await service('gemini').interpret(request)
+
+    const system = systemText(claude.calls[0])
+    expect(system).toMatch(/^You identify American Sign Language/)
+    expect(gemini.calls[0].config?.systemInstruction).toBe(system)
+    expect(local.calls[0].messages[0]).toEqual({ role: 'system', content: system })
+    const text = (claude.calls[0].messages[0].content as { type: string; text?: string }[]).at(-1)?.text
+    expect(gemini.calls[0].contents).toEqual([
+      { role: 'user', parts: [...req.frames.map((data) => ({ inlineData: { mimeType: 'image/jpeg', data } })), { text }] }
+    ])
+    expect(local.calls[0].messages[1]).toEqual({ role: 'user', content: text, images: req.frames })
+    expect(gemini.calls.map((c) => c.model)).toEqual(['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash-lite'])
+  })
+
+  it('identifySign: without the key or with an unknown provider, nothing is sent', async () => {
+    process.env.GEMINI_API_KEY = ''
+    const req = { frames: ['/9j/AAA='], motion: '1.0 s.', mode: 'command' as const, known: [] }
+    expect(await createLlmService({ tools: () => [], provider: { ok: true, value: 'gemini' } }).identifySign(req)).toEqual({
+      ok: false,
+      error: 'Add GEMINI_API_KEY to .env',
+      missingKey: 'GEMINI_API_KEY'
+    })
+    const claude = fakeClaude()
+    const unknown = createLlmService({ tools: () => [], provider: parseLlmProvider('gpt'), overrides: { claude: claude.provider } })
+    expect(await unknown.identifySign(req)).toMatchObject({ ok: false, error: expect.stringMatching(/^Unknown LLM_PROVIDER/) })
+    expect(claude.calls).toHaveLength(0)
+  })
+
+  it('identifySign: a sign model Gemini lacks (404) or has no quota for says GEMINI_SIGN_MODEL, and never falls back', async () => {
+    const { ApiError } = await import('@google/genai')
+    const models: string[] = []
+    const failing = (status: number, body: object): GenerateContent => async (params) => {
+      models.push(params.model)
+      throw new ApiError({ status, message: JSON.stringify(body) })
+    }
+    const req = { frames: ['/9j/AAA=', '/9j/BBB=', '/9j/CCC='], motion: '1.0 s.', mode: 'command' as const, known: [] }
+    const service = (generate: GenerateContent) =>
+      createLlmService({
+        tools: () => [],
+        provider: { ok: true, value: 'gemini' },
+        overrides: { gemini: () => ({ ok: true, value: generate }), geminiSignModel: () => 'gemini-nope' }
+      })
+    expect(await service(failing(404, { error: { code: 404, message: 'not found' } })).identifySign(req)).toEqual({
+      ok: false,
+      error: 'Gemini has no model "gemini-nope". Check GEMINI_SIGN_MODEL in .env'
+    })
+    const noQuota = {
+      error: {
+        code: 429,
+        message: 'limit: 0',
+        details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'PerMinute', quotaValue: '0' }] }]
+      }
+    }
+    expect(await service(failing(429, noQuota)).identifySign(req)).toEqual({
+      ok: false,
+      error: 'Gemini has no quota for gemini-nope on this key. Change GEMINI_SIGN_MODEL in .env'
+    })
+    expect(models).toEqual(['gemini-nope', 'gemini-nope'])
+  })
 })

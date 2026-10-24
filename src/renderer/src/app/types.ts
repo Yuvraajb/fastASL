@@ -12,6 +12,18 @@ export type SettingsPage =
   | { page: 'teachPick'; offset: number; recorded: Record<string, number> }
   /** `canSpell`: some letter is taught, so the word can be fingerspelled (else only typed). */
   | { page: 'teachSpell'; letters: string; canSpell: boolean }
+  /**
+   * Teach › Show me a sign: one clean repetition, guessed by the LLM, confirmed by a pick.
+   * waiting -> listening (a movement started) -> identifying (the LLM is asked) -> guess.
+   */
+  | {
+      page: 'teachShow'
+      phase: 'waiting' | 'listening' | 'identifying' | 'guess'
+      /** The LLM's glosses (guess), most likely first; "None of these" follows them on screen. */
+      guesses?: string[]
+      /** Why the last attempt gave no guess (not a sign, too long, the LLM's error). */
+      reason?: string
+    }
   | {
       page: 'teachRecord'
       label: string
@@ -62,7 +74,11 @@ export type View =
       variant: 'list' | 'quote'
       quote?: string
       options: string[]
-      purpose: 'sign' | 'intent' | 'spell'
+      /**
+       * sign: recognition was unsure between taught signs. learn: the LLM's guesses for a
+       * movement nothing taught matched ("Is this HELLO?"); a pick adds the word and learns it.
+       */
+      purpose: 'sign' | 'intent' | 'spell' | 'learn'
       /** Spell: Claude's spellings are on their way (the raw letters can be picked meanwhile). */
       pending?: boolean
     }

@@ -53,4 +53,18 @@ describe('LLM_PROVIDER=mock', () => {
       value: ['Krish', 'krish.com']
     })
   })
+
+  it('guesses every sign as HELLO (then THANK YOU, PLEASE), through the same validation', async () => {
+    expect(await service.identifySign({ frames: [], motion: '1.0 s, one hand.', mode: 'command', known: [] })).toEqual({
+      ok: true,
+      value: {
+        is_sign: true,
+        candidates: [
+          { gloss: 'HELLO', confidence: 0.62, hands: 1 },
+          { gloss: 'THANK YOU', confidence: 0.21, hands: 1 },
+          { gloss: 'PLEASE', confidence: 0.09, hands: 1 }
+        ]
+      }
+    })
+  })
 })

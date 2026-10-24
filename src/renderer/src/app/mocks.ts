@@ -1,7 +1,7 @@
 import type { Mode } from '@shared/types'
 import type { PickProgress } from './store'
 import type { View } from './types'
-import { cameraFallbackNotice, QUICK_MENU } from './controller'
+import { cameraFallbackNotice, IDENTIFYING, NOT_A_SIGN, QUICK_MENU } from './controller'
 import type { MockPose } from './live'
 import { STREAM_LOST, STREAM_NOT_MJPEG } from '../engine/camera/cameraSource'
 
@@ -336,6 +336,46 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     mode: 'dictation',
     notice: 'Turn on System Events for fastASL in Privacy & Security › Automation',
     pose: 'twoHands'
+  },
+  // Guess, confirm, learn: a movement no taught word matched goes to the LLM while the phrase carries on.
+  signIdentifying: {
+    view: {
+      kind: 'building',
+      tokens: [
+        { text: 'meeting', kind: 'word' },
+        { text: 'tomorrow', kind: 'word' }
+      ],
+      current: null,
+      sentence: 'Meeting tomorrow'
+    },
+    notice: IDENTIFYING,
+    pose: 'palm'
+  },
+  signGuess: {
+    view: { kind: 'didYouMean', variant: 'list', options: ['HELLO', 'HI', 'GOODBYE'], purpose: 'learn' },
+    pose: 'palm'
+  },
+  signLearned: {
+    view: { kind: 'recognizing', token: 'hello', isWord: true },
+    notice: 'Learned HELLO',
+    pose: 'palm'
+  },
+  settingsTeachShow: {
+    view: { kind: 'settings', settings: { page: 'teachShow', phase: 'waiting' } },
+    pose: 'palm'
+  },
+  settingsTeachShowIdentifying: {
+    view: { kind: 'settings', settings: { page: 'teachShow', phase: 'identifying' } },
+    pose: 'palm'
+  },
+  settingsTeachShowGuess: {
+    view: { kind: 'settings', settings: { page: 'teachShow', phase: 'guess', guesses: ['HELLO', 'HI', 'GOODBYE'] } },
+    pick: { count: 1, progress: 0.5 },
+    pose: 'point'
+  },
+  settingsTeachShowRetry: {
+    view: { kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', reason: NOT_A_SIGN } },
+    pose: 'palm'
   }
 }
 
@@ -383,5 +423,12 @@ export const SCREENSHOT_ORDER: string[] = [
   'toastGestureSaved',
   'settingsCameraUrl',
   'settingsCameraError',
-  'settingsCameraLost'
+  'settingsCameraLost',
+  'signIdentifying',
+  'signGuess',
+  'signLearned',
+  'settingsTeachShow',
+  'settingsTeachShowIdentifying',
+  'settingsTeachShowGuess',
+  'settingsTeachShowRetry'
 ]

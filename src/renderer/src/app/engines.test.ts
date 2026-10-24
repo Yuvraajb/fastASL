@@ -19,6 +19,7 @@ import { GestureEngine } from '../engine/gestures/engine'
 import { RecognitionSession } from '../engine/recognition/session'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
 import { Controller, QUICK_MENU } from './controller'
+import { GUESS_MAX_MS, GUESS_MIN_MS, GUESS_WAIT_MS, SHOW_SETTLE_MS, signLike } from './recognitionInput'
 import { startEngines, subscribeFrames } from './engines'
 import { live } from './live'
 import { mockServices, type Services } from './services'
@@ -368,7 +369,6 @@ describe('gesture control', () => {
 /** Synthetic signers through the real wiring: pipeline subscribers → gesture engine, then RecognitionSession or TeachSession → Controller → store. */
 describe('sign recognition', () => {
   const ASPECT = 640 / 480
-  const LISTENING: View = { kind: 'recognizing', token: null, isWord: false }
 
   type Part = (t0: number) => FrameSample[]
   type Extra = Partial<PerformOptions>
@@ -394,6 +394,8 @@ describe('sign recognition', () => {
   ]
 
   let views: View[]
+  /** Every change of the header's Listening flag (store.signing). */
+  let listens: boolean[]
   let stopViews: () => void
   let clock: number
 
@@ -432,9 +434,11 @@ describe('sign recognition', () => {
     Object.assign(live, { source: {} as CanvasImageSource, sourceWidth: 640, sourceHeight: 480, mock: false })
     setApp({ templates: TEMPLATES })
     views = []
+    listens = []
     clock = 0
     stopViews = useApp.subscribe((s, prev) => {
       if (s.view !== prev.view) views.push(s.view)
+      if (s.signing !== prev.signing) listens.push(s.signing)
     })
   })
 
@@ -446,41 +450,61 @@ describe('sign recognition', () => {
   it('a known word: Listening, then the word as a lower-case token', () => {
     stop = startEngines(controller)
     play([sign(WORDS.HELLO, 900)])
-    expect(views).toEqual([LISTENING, { kind: 'recognizing', token: 'hello', isWord: true }])
+    expect(listens).toEqual([true, false])
+    expect(views).toEqual([{ kind: 'recognizing', token: 'hello', isWord: true }])
   })
 
   it('a movement that is no sign: Listening, then back to Ready', () => {
     stop = startEngines(controller)
     play([sign(UNKNOWN.reach, 901)])
-    expect(views).toEqual([LISTENING, { kind: 'ready' }])
+    expect(listens).toEqual([true, false])
+    expect(views).toEqual([]) // the card never changed
   })
 
   it('two words, then both hands down: the Sentence', () => {
     stop = startEngines(controller)
-    play([sign(WORDS.HELLO, 902), sign(WORDS.PLAY, 903)], 1500)
+    play([sign(WORDS.HELLO, 902)], 600)
+    play([sign(WORDS.PLAY, 903)], 1500)
     expect(getApp().view).toMatchObject({ kind: 'sentence', sentence: 'Hello play' })
+  })
+
+  it('a sign after the Sentence starts the next phrase', () => {
+    stop = startEngines(controller)
+    play([sign(WORDS.HELLO, 902)], 1500)
+    expect(getApp().view).toMatchObject({ kind: 'sentence', sentence: 'Hello' })
+    play([sign(WORDS.PLAY, 903)], 1500)
+    expect(getApp().view).toMatchObject({ kind: 'sentence', sentence: 'Play' })
+  })
+
+  it('a twitch never shows Listening, and Listening does not flash for a movement that is no sign', () => {
+    stop = startEngines(controller)
+    play([sign(UNKNOWN.scratch, 905)])
+    expect(listens.filter(Boolean).length).toBeLessThanOrEqual(1)
+    expect(views).toEqual([])
+    expect(getApp().signing).toBe(false)
   })
 
   it('the camera going away mid-sign ends Listening', () => {
     stop = startEngines(controller)
-    playUntil(sign(WORDS.HELLO, 980), () => views.length > 0)
-    expect(getApp().view).toEqual(LISTENING)
+    playUntil(sign(WORDS.HELLO, 980), () => getApp().signing)
     cameraOff()
+    expect(getApp().signing).toBe(false)
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
   it('a new camera session mid-sign ends Listening', () => {
     stop = startEngines(controller)
-    playUntil(sign(WORDS.HELLO, 981), () => views.length > 0)
+    playUntil(sign(WORDS.HELLO, 981), () => getApp().signing)
     live.source = {} as CanvasImageSource
     send([{ t: clock, hands: [] }])
+    expect(getApp().signing).toBe(false)
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
   it('a fist raised into view collapses the card: Listening neither swallows it nor reads an S', () => {
     stop = startEngines(controller)
     play([hold('S', 2500, 904, { raiseMs: 400 })])
-    expect(views[0]).toEqual(LISTENING)
+    expect(listens[0]).toBe(true)
     expect(getApp().view).toEqual({ kind: 'collapsed' })
     expect(views.some((v) => v.kind === 'recognizing' && v.token !== null)).toBe(false)
   })
@@ -652,6 +676,120 @@ describe('sign recognition', () => {
     playUntil(sign(WORDS.PLAY, 982), () => teachViews().some((p) => p.page === 'teachRecord' && p.listening))
     cameraOff()
     expect(getApp().view).toMatchObject({ kind: 'settings', settings: { page: 'teachRecord', done: 0, listening: false } })
+  })
+
+  describe('guess, confirm, learn', () => {
+    const ZIGZAG_GUESS = { is_sign: true, candidates: [{ gloss: 'ZIGZAG', confidence: 0.7, hands: 1 }, { gloss: 'SNAKE', confidence: 0.2, hands: 1 }] }
+    let identify: ReturnType<typeof vi.fn>
+
+    /** Mock services with a recorded guess; frames are wanted (the node test has no canvas, so none come). */
+    function guessing(unavailable: string | null = null): void {
+      identify = vi.fn(async () => ({ ok: true as const, value: ZIGZAG_GUESS }))
+      controller.setServices({ ...mockServices(), identifySign: identify, signGuessUnavailable: () => unavailable, sendsFrames: () => true })
+    }
+
+    it('a clean movement no taught word matches is guessed once a control gesture could have acted; a pick learns it for next time', async () => {
+      guessing()
+      stop = startEngines(controller)
+      // The hand rests after it for 2.5 s: the guess waits GUESS_WAIT_MS (a hold could still fire).
+      play([sign(UNKNOWN.reach, 1001, { restAfterMs: 2500 })])
+      expect(identify).toHaveBeenCalledTimes(1)
+      const [req] = identify.mock.calls[0]
+      expect(req).toMatchObject({ frames: [], mode: 'command', known: ['HELLO', 'PLAY'] })
+      expect(req.motion).toMatch(/^\d\.\d s, one hand, .*\nHand: curved hand, fingers bent \(C or claw\) throughout\. Moves toward the signer's left and down/)
+      await vi.waitFor(() => expect(getApp().view).toMatchObject({ kind: 'didYouMean', purpose: 'learn', options: ['ZIGZAG', 'SNAKE'] }))
+      controller.gesture({ gesture: 'fingers', count: 1 })
+      expect(getApp().view).toEqual({ kind: 'recognizing', token: 'zigzag', isWord: true })
+      await vi.waitFor(() => expect(getApp().templates.some((t) => t.label === 'ZIGZAG')).toBe(true))
+
+      // Recognized locally from now on (the label is the user's pick, whatever the movement).
+      play([sign(UNKNOWN.reach, 1002)])
+      expect(getApp().view).toMatchObject({ kind: 'building', sentence: 'Zigzag zigzag' })
+      expect(identify).toHaveBeenCalledTimes(1)
+    })
+
+    it('the hand resting in a taught letter afterwards still gives the letter, as before, and nothing is asked', () => {
+      guessing()
+      stop = startEngines(controller)
+      play([sign(UNKNOWN.zigzag, 1011, { restAfterMs: 2500 })]) // ends in an L, a taught letter
+      expect(views).toContainEqual({ kind: 'recognizing', token: 'L', isWord: false })
+      expect(identify).not.toHaveBeenCalled()
+    })
+
+    it('a movement into a control gesture is never asked about: the gesture acts (a fist cancels the phrase)', () => {
+      guessing()
+      stop = startEngines(controller)
+      controller.token({ text: 'meeting', kind: 'word' })
+      controller.token({ text: 'tomorrow', kind: 'word' })
+      const intoFist: SignSpec = { durationMs: 800, hands: [{ handedness: 'Right', shape: 'B', endShape: 'S', path: (u) => [1.5 * u, 0.5 * u] }] }
+      play([sign(intoFist, 1012, { restAfterMs: 2500 })])
+      expect(getApp().view).toEqual({ kind: 'ready' })
+      expect(identify).not.toHaveBeenCalled()
+    })
+
+    it('a swipe and its return stroke are never asked about', () => {
+      guessing()
+      stop = startEngines(controller)
+      const palm: HandSpec = { pose: 'openPalm', noise: 0.002, x: 0.7 }
+      const swipeAndBack: Part = (t0) =>
+        new Timeline({ aspect: ASPECT })
+          .hold(300, palm)
+          .move(250, palm, { x: 0.3 })
+          // The swipe acts as this hold settles; the hand goes back after recognition's 600 ms pause.
+          .hold(1200, { ...palm, x: 0.3 })
+          .move(800, { ...palm, x: 0.3 }, { x: 0.6 })
+          .hold(2500, { ...palm, x: 0.6 })
+          .frames.map((f) => ({ ...f, t: f.t + t0 }))
+      play([swipeAndBack])
+      expect(getApp().mode).toBe('dictation')
+      expect(identify).not.toHaveBeenCalled()
+    })
+
+    it('without an LLM a movement nothing matched is rejected as before, and nothing is asked', () => {
+      guessing('Add GEMINI_API_KEY to .env')
+      stop = startEngines(controller)
+      play([sign(UNKNOWN.reach, 1007, { restAfterMs: 2500 })])
+      expect(listens).toEqual([true, false])
+      expect(views).toEqual([])
+      expect(identify).not.toHaveBeenCalled()
+      expect(getApp().notice).toBeNull()
+    })
+
+    it('signLike: clean, and 0.4 to 3 s long; a guess waits out the longest control hold', () => {
+      expect(GUESS_WAIT_MS).toBe(1250)
+      const clean = { entered: false, left: false }
+      expect(signLike({ ...clean, durationMs: 1000 })).toBe('yes')
+      expect(signLike({ ...clean, durationMs: GUESS_MIN_MS - 1 })).toBe('short')
+      expect(signLike({ ...clean, durationMs: GUESS_MAX_MS + 1 })).toBe('long')
+      expect(signLike({ entered: true, left: false, durationMs: 1000 })).toBe('edge')
+      expect(signLike({ entered: false, left: true, durationMs: 1000 })).toBe('edge')
+    })
+
+    it('Settings › Show me a sign: the hand coming down from the pick is ignored, then one clean repetition is guessed and learned', async () => {
+      guessing()
+      setApp({ templates: [] })
+      controller.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting' } })
+      stop = startEngines(controller)
+      play([sign(UNKNOWN.zigzag, 1008)]) // starts within SHOW_SETTLE_MS of the page listening
+      expect(SHOW_SETTLE_MS).toBe(1000)
+      expect(identify).not.toHaveBeenCalled()
+      expect(getApp().view).toEqual({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting' } })
+
+      play([sign(UNKNOWN.zigzag, 1009)])
+      expect(identify).toHaveBeenCalledTimes(1)
+      expect(views).toContainEqual({ kind: 'settings', settings: { page: 'teachShow', phase: 'listening' } })
+      await vi.waitFor(() =>
+        expect(getApp().view).toEqual({ kind: 'settings', settings: { page: 'teachShow', phase: 'guess', guesses: ['ZIGZAG', 'SNAKE'] } })
+      )
+      controller.gesture({ gesture: 'thumbsUp' })
+      await vi.waitFor(() => expect(getApp().view).toMatchObject({ kind: 'toast', title: 'Learned ZIGZAG', subtitle: '1 recording saved' }))
+      expect(getApp().templates.map((t) => t.label)).toEqual(['ZIGZAG'])
+
+      controller.setView({ kind: 'ready' })
+      play([sign(UNKNOWN.zigzag, 1010)])
+      expect(getApp().view).toEqual({ kind: 'recognizing', token: 'zigzag', isWord: true })
+      expect(identify).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('Teach › record a letter: the hand still up from the finger pick is not a repetition', async () => {

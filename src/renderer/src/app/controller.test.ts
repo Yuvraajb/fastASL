@@ -3,16 +3,26 @@ import type {
   AgentEvent,
   CompletedTask,
   CustomGesture,
+  IdentifySignRequest,
   IntentResult,
+  Result,
   Settings,
   ShortcutRunResult,
+  SignGuess,
   SignTemplate,
   TemplateStore
 } from '@shared/types'
 import {
   Controller,
+  IDENTIFYING,
+  NONE_OF_THESE,
+  NOT_A_SIGN,
   QUICK_MENU,
   SETTINGS_ROOT,
+  SHOW_ME,
+  SIGN_GUESS_COOLDOWN_MS,
+  SIGN_GUESS_ERROR_EVERY_MS,
+  type UnknownMovement,
   activeGestures,
   assembleSentence,
   dictationChunk,
@@ -24,6 +34,7 @@ import {
   type GestureName
 } from './controller'
 import { CAPTURE_REASONS } from '../engine/gestures/customShapes'
+import { FRAME_FEATURE_DIM, HAND_FEATURE_DIM } from '../engine/recognition/features'
 import { live } from './live'
 import { mockServices, type Services } from './services'
 import { getApp, setApp, useApp } from './store'
@@ -574,25 +585,28 @@ describe('settings by hand', () => {
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
-  it('1 Teach a sign: swipes page, fingers pick a sign (5: Spell a new word), and back leads to Settings', () => {
+  it('1 Teach a sign: swipes page, fingers pick a sign (1: Show me a sign, 5: Spell a new word), and back leads to Settings', () => {
     c.openSettings()
     fingers(1)
     expect(page()).toMatchObject({ page: 'teachPick', offset: 0 })
-    expect(optionsFor(getApp().view)).toEqual(['YES', 'NO', 'HELLO', 'MEETING', 'Spell a new word'])
+    expect(optionsFor(getApp().view)).toEqual(['Show me a sign', 'YES', 'NO', 'HELLO', 'Spell a new word'])
     g('swipeRight')
-    fingers(1)
+    fingers(3)
     expect(page()).toEqual({ page: 'teachRecord', label: 'TOMORROW', kind: 'word', done: 0, total: 5 })
     g('fist')
-    expect(page()).toMatchObject({ page: 'teachPick', offset: 4 })
+    expect(page()).toMatchObject({ page: 'teachPick', offset: 3 })
     // A letter's page goes back by swipe: S, T, M and N are held still like a fist.
-    for (let i = 0; i < 3; i++) g('swipeRight')
-    fingers(1)
+    for (let i = 0; i < 4; i++) g('swipeRight')
+    fingers(3)
     expect(page()).toEqual({ page: 'teachRecord', label: 'A', kind: 'letter', done: 0, total: 5 })
     g('fist')
     expect(page()).toMatchObject({ page: 'teachRecord', label: 'A' })
     g('swipeLeft')
-    expect(page()).toMatchObject({ page: 'teachPick', offset: 16 })
-    for (let i = 0; i < 4; i++) g('swipeLeft')
+    expect(page()).toMatchObject({ page: 'teachPick', offset: 15 })
+    fingers(1)
+    expect(page()).toEqual({ page: 'teachShow', phase: 'waiting' })
+    g('fist')
+    expect(page()).toMatchObject({ page: 'teachPick', offset: 0 })
     fingers(5)
     expect(page()).toEqual({ page: 'teachSpell', letters: '', canSpell: false })
     g('fist')
@@ -899,8 +913,8 @@ describe('teach a sign', () => {
   })
   const RECORD_MEETING = { page: 'teachRecord', label: 'MEETING', kind: 'word', done: 0, total: 5 } as const
   const RECORD_S = { page: 'teachRecord', label: 'S', kind: 'letter', done: 0, total: 5 } as const
-  /** S is letter 18 of the list after the 16 starter words: the page at offset 32. */
-  const S_PAGE = 32
+  /** S is letter 18 of the list after the 16 starter words (index 33): the page at offset 33. */
+  const S_PAGE = 33
   /** Spell a new word with some letter taught. */
   const spelling = (letters: string): SettingsPage => ({ page: 'teachSpell', letters, canSpell: true })
 
@@ -909,23 +923,27 @@ describe('teach a sign', () => {
     c.openSettings()
     fingers(1)
     expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 0, recorded: { YES: 2, V: 1 } })
-    expect(optionsFor(getApp().view)).toEqual(['YES', 'NO', 'HELLO', 'MEETING', 'Spell a new word'])
+    expect(optionsFor(getApp().view)).toEqual(['Show me a sign', 'YES', 'NO', 'HELLO', 'Spell a new word'])
     g('swipeLeft')
     expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 0 })
     g('swipeRight')
-    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 4 })
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 3 })
+    expect(optionsFor(getApp().view)).toEqual(['Show me a sign', 'MEETING', 'TOMORROW', 'TIME', 'Spell a new word'])
+    for (let i = 0; i < 10; i++) g('swipeRight')
+    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 33, recorded: { YES: 2, V: 1 } })
+    expect(optionsFor(getApp().view)).toEqual(['Show me a sign', 'S', 'T', 'U', 'Spell a new word'])
     for (let i = 0; i < 20; i++) g('swipeRight')
-    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 36, recorded: { YES: 2, V: 1 } })
-    expect(optionsFor(getApp().view)).toEqual(['V', 'W', 'X', 'Y', 'Spell a new word'])
+    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 39, recorded: { YES: 2, V: 1 } })
+    expect(optionsFor(getApp().view)).toEqual(['Show me a sign', 'Y', 'Spell a new word'])
   })
 
   it('records words and letters 5 times each; the last option spells a new word', () => {
     const list = (offset: number): View => ({ kind: 'settings', settings: { page: 'teachPick', offset, recorded: {} } })
-    c.setView(list(0))
-    fingers(4)
+    c.setView(list(3))
+    fingers(2)
     expect(viewAs('settings').settings).toEqual(RECORD_MEETING)
-    c.setView(list(16))
-    fingers(1)
+    c.setView(list(15))
+    fingers(3)
     expect(viewAs('settings').settings).toMatchObject({ label: 'A', kind: 'letter', total: 5 })
     c.setView(list(0))
     fingers(5)
@@ -965,7 +983,7 @@ describe('teach a sign', () => {
     expect(getApp().templates).toEqual(templates)
     expect(viewAs('toast')).toMatchObject({ title: 'Learned MEETING', subtitle: '2 recordings saved', ok: true })
     await settle(TOAST_MS)
-    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 0, recorded: { YES: 1, MEETING: 2 } })
+    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 3, recorded: { YES: 1, MEETING: 2 } })
   })
 
   it('reports a failed save and still returns to the list', async () => {
@@ -989,7 +1007,7 @@ describe('teach a sign', () => {
     c.setView({ kind: 'settings', settings: RECORD_MEETING })
     expect(activeGestures(getApp().view)).toEqual(new Set(['fist']))
     g('fist')
-    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 0 })
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 3 })
   })
 
   it('spell a new word: letters append, swipe left deletes one, thumbs up records it as a word', () => {
@@ -1041,9 +1059,15 @@ describe('teach a sign', () => {
 })
 
 describe('listening', () => {
-  it('signStart in ready shows listening', () => {
+  it('signStart says Listening in the header and leaves the card as it is', () => {
     c.signStart()
-    expect(getApp().view).toEqual({ kind: 'recognizing', token: null, isWord: false })
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(getApp().signing).toBe(true)
+    c.signRejected()
+    expect(getApp().signing).toBe(false)
+    c.signStart()
+    c.token(word('hello'))
+    expect(getApp().signing).toBe(false)
   })
 
   it('returns to ready when the movement was no sign; a recognized sign stays', () => {
@@ -1186,10 +1210,27 @@ describe('phrase building', () => {
     expect(viewAs('sentence')).toMatchObject({ sentence: 'Meeting tomorrow at 3', tokens: MEETING.slice(0, 4) })
   })
 
-  it('signing more on the sentence keeps building', () => {
+  it('a sign after a finished sentence starts the next phrase', () => {
     signSentence(word('meeting'), word('tomorrow'))
     c.token(word('morning'))
-    expect(viewAs('building')).toMatchObject({ sentence: 'Meeting tomorrow morning', current: 'morning' })
+    expect(viewAs('recognizing').token).toBe('morning')
+    c.token(word('call'))
+    expect(viewAs('building')).toMatchObject({ sentence: 'Morning call', current: 'call' })
+  })
+
+  it('a movement on a finished sentence keeps it until a sign arrives; a sign moves on', () => {
+    signSentence(word('meeting'), word('tomorrow'))
+    const sentence = getApp().view
+    c.signStart()
+    expect(getApp().view).toBe(sentence)
+    expect(getApp().signing).toBe(true)
+    c.signRejected()
+    expect(getApp().view).toBe(sentence)
+    c.signStart()
+    c.token(word('hello'))
+    expect(viewAs('recognizing').token).toBe('hello')
+    c.token(word('friend'))
+    expect(viewAs('building').sentence).toBe('Hello friend')
   })
 
   it('ignores tokens in views that are not collecting a phrase', () => {
@@ -2982,5 +3023,430 @@ describe('LLM status notice (rate limits)', () => {
     expect(viewAs('agentReady').intent).toBe('Open Notes')
     g('fist')
     expect(llm.interprets[0].signal?.aborted).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Guess, confirm, learn
+
+/** identifySign answered by the test: each call waits until `answer` (or its signal aborts). */
+function scriptedGuesses(base: Services, unavailable: () => string | null = () => null) {
+  const calls: { req: IdentifySignRequest; signal?: AbortSignal; onStatus?: (s: string) => void; answer: (res: Result<SignGuess>) => void }[] = []
+  const services: Services = {
+    ...base,
+    signGuessUnavailable: unavailable,
+    sendsFrames: () => true,
+    identifySign: vi.fn(
+      (req: IdentifySignRequest, onStatus?: (s: string) => void, signal?: AbortSignal) =>
+        new Promise<Result<SignGuess>>((answer) => calls.push({ req, signal, onStatus, answer }))
+    )
+  }
+  return { services, calls }
+}
+
+/** A movement's frame vectors: 20 frames of the 136 features (values don't matter to the controller). */
+const FEATURES = Array.from({ length: 20 }, (_, i) => Array.from({ length: 136 }, (_, j) => (i * 136 + j) / 1e4 + 1e-5))
+const MOVEMENT: UnknownMovement = { frames: ['/9j/A=', '/9j/B=', '/9j/C='], motion: '1.0 s, one hand.', features: FEATURES }
+const HELLO_GUESS: SignGuess = {
+  is_sign: true,
+  candidates: [
+    { gloss: 'HELLO', confidence: 0.8, hands: 1 },
+    { gloss: 'HI', confidence: 0.4, hands: 1 },
+    { gloss: 'GOODBYE', confidence: 0.2, hands: 1 }
+  ]
+}
+const LEARN_LIST: View = { kind: 'didYouMean', variant: 'list', options: ['HELLO', 'HI', 'GOODBYE'], purpose: 'learn' }
+
+describe('guess, confirm, learn', () => {
+  let guesses: ReturnType<typeof scriptedGuesses>
+
+  beforeEach(() => {
+    guesses = scriptedGuesses(mockServices())
+    useServices(guesses.services)
+  })
+
+  /** A movement nothing taught matched, as recognition reports it: Listening, rejected, then the guess. */
+  const unknown = (movement: UnknownMovement = MOVEMENT): void => {
+    c.signStart()
+    c.signRejected()
+    c.unknownSign(movement)
+  }
+  const answer = async (res: Result<SignGuess>, call = guesses.calls.length - 1): Promise<void> => {
+    guesses.calls[call].answer(res)
+    await settle()
+  }
+
+  it('in Ready: Listening ends, "Identifying sign..." shows, then "Is this HELLO?" with up to 3 options', async () => {
+    setApp({
+      templates: [
+        { id: 'y', label: 'YES', kind: 'word', frames: [], createdAt: 0 },
+        { id: 'a', label: 'A', kind: 'letter', frames: [], createdAt: 0 }
+      ]
+    })
+    unknown()
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(getApp().notice).toBe(IDENTIFYING)
+    expect(guesses.calls[0].req).toEqual({ frames: MOVEMENT.frames, motion: MOVEMENT.motion, mode: 'command', known: ['YES'] })
+    await answer({ ok: true, value: HELLO_GUESS })
+    expect(getApp().view).toEqual(LEARN_LIST)
+    expect(getApp().notice).toBeNull()
+    expect(activeGestures(getApp().view)).toEqual(new Set(['fingers', 'fist', 'thumbsUp']))
+  })
+
+  it('a one-handed sign is learned without the other hand in view; a two-handed one keeps both', async () => {
+    // Both hands seen throughout; the right one (slot 0) moves, the left barely does.
+    const frames = Array.from({ length: 20 }, (_, i) => {
+      const f = new Array<number>(FRAME_FEATURE_DIM).fill(0.5)
+      f[0] = 1
+      f[HAND_FEATURE_DIM] = 1
+      f[65] = 1.2 * (i % 2 ? 1 : -1)
+      f[66] = 0.9
+      f[HAND_FEATURE_DIM + 65] = 0.03
+      f[HAND_FEATURE_DIM + 66] = 0
+      return f
+    })
+    unknown({ ...MOVEMENT, features: frames })
+    await answer({ ok: true, value: HELLO_GUESS }) // HELLO: one hand
+    g('thumbsUp')
+    await settle()
+    const one = api.saveTemplates.mock.calls[0][0].templates[0].frames
+    expect(one.every((f: number[]) => f.slice(HAND_FEATURE_DIM).every((v) => v === 0))).toBe(true)
+    expect(one[0][0]).toBe(1)
+
+    await settle(SIGN_GUESS_COOLDOWN_MS)
+    unknown({ ...MOVEMENT, features: frames })
+    await answer({ ok: true, value: { is_sign: true, candidates: [{ gloss: 'MEETING', confidence: 0.8, hands: 2 }] } })
+    g('thumbsUp')
+    await settle()
+    const calls = api.saveTemplates.mock.calls
+    const meeting = calls[calls.length - 1][0].templates.find((tp: { label: string }) => tp.label === 'MEETING')
+    expect(meeting!.frames[0][HAND_FEATURE_DIM]).toBe(1)
+  })
+
+  it('a pick adds the word as a recognized sign would, and learns that movement as it (saved, recognition reloads)', async () => {
+    unknown()
+    await answer({ ok: true, value: HELLO_GUESS })
+    g('thumbsUp') // = option 1
+    expect(getApp().view).toEqual({ kind: 'recognizing', token: 'hello', isWord: true })
+    await settle()
+    const saved = api.saveTemplates.mock.calls[0][0].templates
+    expect(saved).toHaveLength(1)
+    expect(saved[0]).toMatchObject({ label: 'HELLO', kind: 'word' })
+    expect(saved[0].frames).toHaveLength(32)
+    expect(saved[0].frames[0][0]).toBe(Math.round(saved[0].frames[0][0] * 1000) / 1000)
+    expect(getApp().templates).toEqual(saved) // recognition follows the store
+    expect(getApp().notice).toBe('Learned HELLO')
+    // No toast: the phrase carries on, and the next sign builds on it.
+    c.token(word('tomorrow'))
+    expect(viewAs('building').tokens).toEqual([word('hello'), word('tomorrow')])
+  })
+
+  it('while building a phrase: a pick by fingers joins the phrase; a fist learns nothing and the phrase carries on', async () => {
+    sign(word('meeting'))
+    c.token(word('tomorrow'))
+    const building = viewAs('building')
+    unknown()
+    expect(getApp().view).toBe(building)
+    await answer({ ok: true, value: HELLO_GUESS })
+    fingers(2)
+    expect(viewAs('building').tokens).toEqual([word('meeting'), word('tomorrow'), word('hi')])
+    await settle()
+    expect(api.saveTemplates.mock.calls[0][0].templates[0]).toMatchObject({ label: 'HI' })
+
+    await settle(SIGN_GUESS_COOLDOWN_MS)
+    const before = viewAs('building')
+    unknown()
+    await answer({ ok: true, value: HELLO_GUESS })
+    g('fist')
+    expect(getApp().view).toBe(before)
+    expect(api.saveTemplates).toHaveBeenCalledTimes(1)
+    c.token(word('3'))
+    expect(viewAs('building').tokens.map((t) => t.text)).toEqual(['meeting', 'tomorrow', 'hi', '3'])
+  })
+
+  it('a guess answered after the phrase ended: the pick starts the next phrase with the word', async () => {
+    sign(word('meeting'))
+    c.token(word('tomorrow'))
+    unknown()
+    g('handsDown') // the phrase ends while the guess runs: the guess goes on
+    expect(viewAs('sentence').sentence).toBe('Meeting tomorrow')
+    expect(guesses.calls[0].signal?.aborted).toBe(false)
+    await answer({ ok: true, value: HELLO_GUESS })
+    fingers(2)
+    expect(viewAs('recognizing').token).toBe('hi')
+    g('handsDown')
+    expect(viewAs('sentence')).toMatchObject({ sentence: 'Hi', tokens: [word('hi')] })
+  })
+
+  it('the X and Edit also decline', async () => {
+    unknown()
+    await answer({ ok: true, value: HELLO_GUESS })
+    c.tap('close')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    await settle(SIGN_GUESS_COOLDOWN_MS)
+    unknown()
+    await answer({ ok: true, value: HELLO_GUESS })
+    c.tap('secondary')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(api.saveTemplates).not.toHaveBeenCalled()
+  })
+
+  it('a guess of a word already taught adds this movement to its templates', async () => {
+    const taught = [1, 2].map((n) => ({ id: `HELLO-${n}`, label: 'HELLO', kind: 'word' as const, frames: [], createdAt: n }))
+    api.getTemplates.mockResolvedValue({ version: 1, templates: taught })
+    setApp({ templates: taught })
+    unknown()
+    expect(guesses.calls[0].req.known).toEqual(['HELLO'])
+    await answer({ ok: true, value: HELLO_GUESS })
+    fingers(1)
+    await settle()
+    expect(getApp().templates.filter((t) => t.label === 'HELLO')).toHaveLength(3)
+  })
+
+  it('in Dictation: a pick types the word like a recognized sign', async () => {
+    const typeText = vi.spyOn(guesses.services, 'typeText')
+    setApp({ mode: 'dictation' })
+    c.setView({ kind: 'dictation', text: 'see you' })
+    c.unknownSign(MOVEMENT)
+    expect(guesses.calls[0].req.mode).toBe('dictation')
+    await answer({ ok: true, value: HELLO_GUESS })
+    fingers(1)
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'see you hello' })
+    expect(typeText).toHaveBeenCalledWith(' hello')
+  })
+
+  it('"not a sign" carries on quietly, as for any movement nothing matched', async () => {
+    unknown()
+    await answer({ ok: true, value: { is_sign: false, candidates: [] } })
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('one call at a time, and a cooldown of 3 s between them', async () => {
+    unknown()
+    unknown() // in flight: rejected as before
+    expect(guesses.calls).toHaveLength(1)
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    await answer({ ok: true, value: { is_sign: false, candidates: [] } })
+    unknown() // answered at once, but the cooldown runs from the start
+    expect(guesses.calls).toHaveLength(1)
+    await settle(SIGN_GUESS_COOLDOWN_MS)
+    unknown()
+    expect(guesses.calls).toHaveLength(2)
+  })
+
+  it('is superseded (and cancelled in main) by a sign recognized meanwhile, a control gesture or a mode switch', async () => {
+    unknown()
+    c.token(word('hello'))
+    expect(guesses.calls[0].signal?.aborted).toBe(true)
+    await answer({ ok: true, value: HELLO_GUESS }, 0)
+    expect(viewAs('recognizing').token).toBe('hello')
+    expect(getApp().notice).toBeNull()
+
+    c.expand()
+    await settle(SIGN_GUESS_COOLDOWN_MS)
+    unknown()
+    g('thumbsUp') // the quick menu
+    expect(guesses.calls[1].signal?.aborted).toBe(true)
+    await answer({ ok: true, value: HELLO_GUESS }, 1)
+    expect(viewAs('quickMenu').options).toEqual(QUICK_MENU)
+
+    c.expand()
+    await settle(SIGN_GUESS_COOLDOWN_MS)
+    unknown()
+    c.cycleMode(1)
+    expect(guesses.calls[2].signal?.aborted).toBe(true)
+  })
+
+  it('survives the hands moving on (Listening and back), which is no new phrase', async () => {
+    unknown()
+    c.signStart()
+    c.signRejected()
+    expect(guesses.calls[0].signal?.aborted).toBe(false)
+    c.signStart() // still moving when the answer comes: the list replaces Listening, and goes back to Ready
+    await answer({ ok: true, value: HELLO_GUESS })
+    expect(getApp().view).toEqual(LEARN_LIST)
+    g('fist')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('a failure falls back to a rejected movement, saying why at most once a minute', async () => {
+    unknown()
+    await answer({ ok: false, error: 'Gemini is rate limited. Try again in 51 s' })
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(getApp().notice).toBe('Gemini is rate limited. Try again in 51 s')
+    await settle(5000)
+    expect(getApp().notice).toBeNull()
+    unknown()
+    await answer({ ok: false, error: 'Gemini is rate limited. Try again in 40 s' })
+    expect(getApp().notice).toBeNull()
+    await settle(SIGN_GUESS_ERROR_EVERY_MS)
+    unknown()
+    await answer({ ok: false, error: 'Can\'t reach Gemini. Check your connection' })
+    expect(getApp().notice).toBe("Can't reach Gemini. Check your connection")
+  })
+
+  it('a bridge that throws is a failed guess, not a stuck one', async () => {
+    const identifySign = vi.fn(() => {
+      throw new TypeError('api.identifySign is not a function')
+    })
+    useServices({ ...guesses.services, identifySign })
+    unknown()
+    await settle()
+    expect(getApp().notice).toBe('api.identifySign is not a function')
+    await settle(SIGN_GUESS_COOLDOWN_MS)
+    expect(c.guessesSigns()).toBe(true)
+  })
+
+  it('a rate-limit status replaces "Identifying sign..." while the call retries', async () => {
+    unknown()
+    guesses.calls[0].onStatus?.('Rate limited, retrying...')
+    expect(getApp().notice).toBe('Rate limited, retrying...')
+    await answer({ ok: true, value: HELLO_GUESS })
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('never guesses without an LLM, in Spell mode, or while the Sentence card proceeds', async () => {
+    const off = scriptedGuesses(mockServices(), () => 'Add GEMINI_API_KEY to .env')
+    useServices(off.services)
+    unknown()
+    expect(off.calls).toHaveLength(0)
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(getApp().notice).toBeNull()
+    expect(c.guessesSigns()).toBe(false)
+    expect(c.wantsSignFrames()).toBe(false)
+
+    useServices(guesses.services)
+    setApp({ mode: 'spell' })
+    c.setView({ kind: 'ready' })
+    expect(c.guessesSigns()).toBe(false)
+    expect(c.wantsSignFrames()).toBe(false)
+    setApp({ mode: 'command' })
+    c.setView({ kind: 'sentence', sentence: 'Hi', tokens: [word('hi')], thinking: true })
+    expect(c.guessesSigns()).toBe(false)
+    c.setView({ kind: 'collapsed' })
+    expect(c.guessesSigns()).toBe(false)
+    expect(c.wantsSignFrames()).toBe(false)
+    c.setView({ kind: 'ready' })
+    expect(c.guessesSigns()).toBe(true)
+    expect(c.wantsSignFrames()).toBe(true)
+  })
+
+  it('the mock services never want frames (they never look at them)', () => {
+    useServices(mockServices())
+    expect(c.guessesSigns()).toBe(true)
+    expect(c.wantsSignFrames()).toBe(false)
+  })
+})
+
+describe('Teach › Show me a sign', () => {
+  let guesses: ReturnType<typeof scriptedGuesses>
+  const show = (phase: 'waiting' | 'listening' | 'identifying', reason?: string): View => ({
+    kind: 'settings',
+    settings: { page: 'teachShow', phase, ...(reason ? { reason } : {}) }
+  })
+
+  beforeEach(() => {
+    guesses = scriptedGuesses(mockServices())
+    useServices(guesses.services)
+  })
+
+  const open = (): void => {
+    c.openSettings()
+    fingers(1) // Teach a sign
+    expect(optionsFor(getApp().view)[0]).toBe(SHOW_ME)
+    fingers(1) // Show me a sign
+  }
+  const answer = async (res: Result<SignGuess>, call = guesses.calls.length - 1): Promise<void> => {
+    guesses.calls[call].answer(res)
+    await settle()
+  }
+
+  it('is the first option of the Teach page; it waits, listens, identifies, then asks "Is this HELLO?"', async () => {
+    open()
+    expect(getApp().view).toEqual(show('waiting'))
+    expect(activeGestures(getApp().view)).toEqual(new Set(['fist']))
+    c.showSignListening()
+    expect(getApp().view).toEqual(show('listening'))
+    c.showSign(MOVEMENT)
+    expect(getApp().view).toEqual(show('identifying'))
+    expect(guesses.calls[0].req).toMatchObject({ frames: MOVEMENT.frames, motion: MOVEMENT.motion })
+    await answer({ ok: true, value: HELLO_GUESS })
+    expect(viewAs('settings').settings).toEqual({ page: 'teachShow', phase: 'guess', guesses: ['HELLO', 'HI', 'GOODBYE'] })
+    expect(optionsFor(getApp().view)).toEqual(['HELLO', 'HI', 'GOODBYE', NONE_OF_THESE])
+    expect(activeGestures(getApp().view)).toEqual(new Set(['fingers', 'thumbsUp', 'fist']))
+    // A new screen: a shape still held from the sign can't pick.
+    expect(gestureScreen(getApp().view)).not.toBe(gestureScreen(show('waiting')))
+  })
+
+  it('a pick learns that one repetition as the word: "Learned HELLO", then the list on its page', async () => {
+    open()
+    c.showSign(MOVEMENT)
+    await answer({ ok: true, value: HELLO_GUESS })
+    g('thumbsUp')
+    await settle()
+    expect(viewAs('toast')).toMatchObject({ title: 'Learned HELLO', subtitle: '1 recording saved', ok: true })
+    const saved = api.saveTemplates.mock.calls[0][0].templates
+    expect(saved).toHaveLength(1)
+    expect(saved[0]).toMatchObject({ label: 'HELLO', kind: 'word' })
+    expect(saved[0].frames).toHaveLength(32)
+    await settle(TOAST_MS)
+    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 0, recorded: { HELLO: 1 } })
+  })
+
+  it('"None of these" leads to the list; a fist goes back from every step', async () => {
+    open()
+    c.showSign(MOVEMENT)
+    await answer({ ok: true, value: HELLO_GUESS })
+    fingers(4)
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 0 })
+    expect(api.saveTemplates).not.toHaveBeenCalled()
+
+    fingers(1)
+    c.showSign(MOVEMENT)
+    await answer({ ok: true, value: HELLO_GUESS })
+    g('fist')
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick' })
+
+    fingers(1)
+    c.showSign(MOVEMENT)
+    g('fist') // while identifying: the call is cancelled
+    expect(guesses.calls[2].signal?.aborted).toBe(true)
+    await answer({ ok: true, value: HELLO_GUESS }, 2)
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick' })
+  })
+
+  it('says why when there is no guess, and waits for another try', async () => {
+    open()
+    c.showSign(MOVEMENT)
+    await answer({ ok: true, value: { is_sign: false, candidates: [] } })
+    expect(getApp().view).toEqual(show('waiting', NOT_A_SIGN))
+    c.showSignListening()
+    expect(getApp().view).toEqual(show('listening'))
+    c.showSignEnded('Too long. Sign it once, then hold still.')
+    expect(getApp().view).toEqual(show('waiting', 'Too long. Sign it once, then hold still.'))
+    c.showSign(MOVEMENT)
+    await answer({ ok: false, error: 'Gemini is busy right now. Try again in a moment' })
+    expect(getApp().view).toEqual(show('waiting', 'Gemini is busy right now. Try again in a moment'))
+  })
+
+  it('without an LLM it says what to add, and sends nothing', () => {
+    const off = scriptedGuesses(mockServices(), () => 'Add GEMINI_API_KEY to .env')
+    useServices(off.services)
+    open()
+    expect(getApp().view).toEqual(show('waiting', 'Add GEMINI_API_KEY to .env'))
+    c.showSign(MOVEMENT)
+    expect(off.calls).toHaveLength(0)
+    expect(getApp().view).toEqual(show('waiting', 'Add GEMINI_API_KEY to .env'))
+  })
+
+  it('ignores recorder updates elsewhere', () => {
+    const root: View = { kind: 'settings', settings: { page: 'root' } }
+    c.setView(root)
+    c.showSignListening()
+    c.showSignEnded('x')
+    c.showSign(MOVEMENT)
+    expect(getApp().view).toBe(root)
+    expect(guesses.calls).toHaveLength(0)
   })
 })

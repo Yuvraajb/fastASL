@@ -28,6 +28,8 @@ export function localConfig(env: NodeJS.ProcessEnv = process.env): LocalConfig {
 export interface OllamaMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
+  /** Base64 images (identifySign's camera frames); only vision models can take them. */
+  images?: string[]
 }
 
 /** POST /api/chat, non-streaming. */
@@ -66,6 +68,42 @@ export class OllamaHttpError extends Error {
 /** The single call this module makes. Injectable so tests run without a server. */
 export type LocalChat = (body: OllamaChatRequest, signal: AbortSignal) => Promise<OllamaChatResponse>
 
+/**
+ * POST /api/show: the model's capabilities ("completion", "vision", ...), asked before sending
+ * images. An older Ollama doesn't list them (undefined): the call then just goes ahead.
+ */
+export type LocalShow = (model: string, signal: AbortSignal) => Promise<{ capabilities?: string[] }>
+
+export function ollamaShow(baseUrl: string, fetchImpl: typeof fetch = fetch): LocalShow {
+  return async (model, signal) => {
+    const res = await fetchImpl(`${baseUrl}/api/show`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model }),
+      signal
+    })
+    const text = await res.text()
+    if (!res.ok) {
+      let apiError: string | undefined
+      try {
+        const parsed = JSON.parse(text) as { error?: unknown } | null
+        if (typeof parsed?.error === 'string') apiError = parsed.error
+      } catch {
+        // not an Ollama server
+      }
+      throw new OllamaHttpError(res.status, apiError, text)
+    }
+    const body = JSON.parse(text) as { capabilities?: unknown }
+    return Array.isArray(body.capabilities) ? { capabilities: body.capabilities.map(String) } : {}
+  }
+}
+
+/** identifySign on a model that can't take images. */
+export const noVision = (model: string): string => `${model} can't see images. Set LOCAL_LLM_MODEL to a vision model`
+
+/** How long the capability check may take before the call goes ahead anyway. */
+const SHOW_TIMEOUT_MS = 5_000
+
 export function ollamaChat(baseUrl: string, fetchImpl: typeof fetch = fetch): LocalChat {
   return async (body, signal) => {
     const res = await fetchImpl(`${baseUrl}/api/chat`, {
@@ -90,17 +128,66 @@ export function ollamaChat(baseUrl: string, fetchImpl: typeof fetch = fetch): Lo
 }
 
 /** Ollama at LOCAL_LLM_URL as an LlmSource. Settings are read on every call, like the keys. */
-export function localSource(chatFor: (url: string) => LocalChat = ollamaChat, config: () => LocalConfig = localConfig): LlmSource {
+export function localSource(
+  chatFor: (url: string) => LocalChat = ollamaChat,
+  config: () => LocalConfig = localConfig,
+  showFor: (url: string) => LocalShow = ollamaShow
+): LlmSource {
+  // What /api/show said about each URL and model, so a model without vision is refused at once
+  // on later guesses instead of being asked again every time.
+  const vision: VisionCache = new Map()
   return () => {
     const cfg = config()
-    return { ok: true, value: localLlm(chatFor(cfg.url), cfg) }
+    return { ok: true, value: localLlm(chatFor(cfg.url), cfg, showFor(cfg.url), vision) }
   }
 }
 
-export function localLlm(chat: LocalChat, cfg: LocalConfig): StructuredLlm {
+/** Whether a model (by "<url> <model>") takes images, as /api/show said. Unknown answers aren't kept. */
+export type VisionCache = Map<string, boolean>
+
+export function localLlm(chat: LocalChat, cfg: LocalConfig, show?: LocalShow, vision: VisionCache = new Map()): StructuredLlm {
   return {
-    maxTokens: { intent: LOCAL_MAX_TOKENS, spell: LOCAL_MAX_TOKENS },
-    ask: (req) => askStructured(localTransport(chat, cfg, req), req)
+    maxTokens: { intent: LOCAL_MAX_TOKENS, spell: LOCAL_MAX_TOKENS, sign: LOCAL_MAX_TOKENS },
+    async ask(req) {
+      if (req.images?.length && show) {
+        const sees = await seesImages(show, cfg, vision, req.signal)
+        if (!sees.ok) return sees
+      }
+      return askStructured(localTransport(chat, cfg, req), req)
+    }
+  }
+}
+
+/**
+ * Whether LOCAL_LLM_MODEL takes images, from /api/show. A model that doesn't is a short error
+ * before any frames are sent. When Ollama can't say (old server, slow), the call goes ahead and
+ * its own error, if any, is mapped by localFailure.
+ */
+async function seesImages(show: LocalShow, cfg: LocalConfig, cache: VisionCache, signal?: AbortSignal): Promise<Result<void>> {
+  const key = `${cfg.url} ${cfg.model}`
+  const known = cache.get(key)
+  if (known !== undefined) return known ? { ok: true, value: undefined } : { ok: false, error: noVision(cfg.model) }
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), SHOW_TIMEOUT_MS)
+  const relay = (): void => ctl.abort()
+  signal?.addEventListener('abort', relay, { once: true })
+  try {
+    const { capabilities } = await show(cfg.model, ctl.signal)
+    if (!capabilities) return { ok: true, value: undefined }
+    const sees = capabilities.includes('vision')
+    cache.set(key, sees)
+    return sees ? { ok: true, value: undefined } : { ok: false, error: noVision(cfg.model) }
+  } catch (err) {
+    if (signal?.aborted) return { ok: false, error: 'Cancelled' }
+    // Nothing listening or no such model: the same messages the call itself would give.
+    if (err instanceof OllamaHttpError && err.status === 404) return localFailure(err, cfg)
+    const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code
+    if (typeof code === 'string' && UNREACHABLE.has(code)) return localFailure(err, cfg)
+    if (err instanceof TypeError && err.message === 'fetch failed') return localFailure(err, cfg)
+    return { ok: true, value: undefined }
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', relay)
   }
 }
 
@@ -113,7 +200,7 @@ function localTransport<S extends z.ZodType>(
   return {
     name: 'The local model',
     deadlineMs: LOCAL_DEADLINE_MS,
-    userTurn: (content) => ({ role: 'user', content }),
+    userTurn: (content, images) => (images ? { role: 'user', content, images: images.map((i) => i.data) } : { role: 'user', content }),
     async send(turns, signal) {
       const value = await chat(
         {
@@ -152,6 +239,7 @@ export function localFailure(err: unknown, cfg: LocalConfig): Result<never> {
       return { ok: false, error: `Run: ollama pull ${cfg.model}` }
     }
     if (err.status === 404) return { ok: false, error: `No Ollama server at ${cfg.url}. Check LOCAL_LLM_URL in .env` }
+    if (err.status === 400 && /\b(image|images|vision|multimodal)\b/i.test(message)) return { ok: false, error: noVision(cfg.model) }
     if (err.status === 400 && /does not support (chat|thinking)/i.test(message)) {
       return { ok: false, error: `${cfg.model} can't do this. Set LOCAL_LLM_MODEL to a chat model, e.g. ${LOCAL_DEFAULT_MODEL}` }
     }

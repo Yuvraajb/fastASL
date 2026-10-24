@@ -2,13 +2,17 @@ import type {
   AgentEvent,
   AgentRunRequest,
   FrontmostApp,
+  IdentifySignRequest,
   InterpretRequest,
   IntentResult,
   Result,
+  KeyStatus,
   ShortcutRunResult,
+  SignGuess,
   SpellRequest,
   ViewAction
 } from '@shared/types'
+import { getApp } from './store'
 
 /** Status lines of one LLM call while it runs, e.g. "Rate limited, retrying...". */
 export type LlmStatusListener = (status: string) => void
@@ -21,6 +25,16 @@ export interface Services {
   /** `onStatus` gets the call's progress lines; aborting `signal` cancels the call in main. */
   interpret(req: InterpretRequest, onStatus?: LlmStatusListener, signal?: AbortSignal): Promise<Result<IntentResult>>
   spellSuggest(req: SpellRequest, onStatus?: LlmStatusListener, signal?: AbortSignal): Promise<Result<string[]>>
+  /** Guess, confirm, learn: names a movement the local recognizer didn't know. */
+  identifySign(req: IdentifySignRequest, onStatus?: LlmStatusListener, signal?: AbortSignal): Promise<Result<SignGuess>>
+  /**
+   * Why identifySign can't answer at all (an unknown LLM_PROVIDER, its key missing), or null
+   * when it can (local and mock need no key). When it can't, unknown movements are rejected as
+   * before and no frames are captured.
+   */
+  signGuessUnavailable(): string | null
+  /** Whether identifySign should get camera frames: not on the mock provider, which never looks at them. */
+  sendsFrames(): boolean
   agentRun(req: AgentRunRequest): Promise<Result<{ runId: string }>>
   agentStop(): Promise<void>
   agentRespond(requestId: string, approved: boolean): Promise<void>
@@ -64,6 +78,11 @@ export function ipcServices(): Services {
   return {
     interpret: (req, onStatus, signal) => tracked(onStatus, signal, (callId) => api.interpret(req, callId)),
     spellSuggest: (req, onStatus, signal) => tracked(onStatus, signal, (callId) => api.spellSuggest(req, callId)),
+    identifySign: (req, onStatus, signal) => tracked(onStatus, signal, (callId) => api.identifySign(req, callId)),
+    // A renderer reloaded onto an older preload (dev hot reload) has no identifySign until a restart.
+    signGuessUnavailable: () =>
+      typeof api.identifySign === 'function' ? llmUnavailable(api.llmProvider, getApp().keyStatus) : 'Restart fastASL to guess signs',
+    sendsFrames: () => api.llmProvider !== 'mock',
     agentRun: (req) => api.agentRun(req),
     agentStop: () => api.agentStop(),
     agentRespond: (id, approved) => api.agentRespond(id, approved),
@@ -75,7 +94,35 @@ export function ipcServices(): Services {
   }
 }
 
+/**
+ * Why LLM_PROVIDER (as main resolved it) can't answer, or null when it can: claude and gemini
+ * need their key, local (Ollama) and mock need none, an unknown provider never can.
+ */
+export function llmUnavailable(provider: string, keys: KeyStatus): string | null {
+  switch (provider) {
+    case 'claude':
+      return keys.ANTHROPIC_API_KEY ? null : 'Add ANTHROPIC_API_KEY to .env'
+    case 'gemini':
+      return keys.GEMINI_API_KEY ? null : 'Add GEMINI_API_KEY to .env'
+    case 'local':
+    case 'mock':
+      return null
+    default:
+      return 'Set LLM_PROVIDER in .env to claude, gemini, local or mock'
+  }
+}
+
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** The mock services' guess for any movement, like LLM_PROVIDER=mock's. */
+export const MOCK_SIGN_GUESS: SignGuess = {
+  is_sign: true,
+  candidates: [
+    { gloss: 'HELLO', confidence: 0.62, hands: 1 },
+    { gloss: 'THANK YOU', confidence: 0.21, hands: 1 },
+    { gloss: 'PLEASE', confidence: 0.09, hands: 1 }
+  ]
+}
 
 /**
  * Mock services for UI work, screenshots and demos without keys. They script a
@@ -134,6 +181,12 @@ export function mockServices(): Services {
       const l = req.letters.toLowerCase()
       return { ok: true, value: [l, `${l}@calhacks.io`, `${l}.com`] }
     },
+    async identifySign() {
+      await wait(700)
+      return { ok: true, value: MOCK_SIGN_GUESS }
+    },
+    signGuessUnavailable: () => null,
+    sendsFrames: () => false,
     async agentRun(req) {
       const runId = `mock-${Date.now()}`
       stopped = false

@@ -187,3 +187,31 @@ describe('RecognitionSession', () => {
     expect(at(SENSITIVITY.low)).toBeGreaterThanOrEqual(500 * SENSITIVITY.low.holdScale)
   })
 })
+
+describe('RecognitionSession.rejectedMovement (guess, confirm, learn)', () => {
+  it('holds the whole movement behind a rejection, for that update only', () => {
+    const s = session()
+    let seen: { durationMs: number; entered: boolean; left: boolean; frames: number } | null = null
+    let after = false
+    for (const f of timeline([sign(UNKNOWN.zigzag, 700)])) {
+      const events = s.update(f)
+      if (events.some((e) => e.type === 'rejected')) {
+        const m = s.rejectedMovement
+        seen = m && { durationMs: m.durationMs, entered: m.entered, left: m.left, frames: m.features.length }
+      } else if (seen && s.rejectedMovement === null) after = true
+    }
+    expect(seen).toMatchObject({ entered: false, left: false })
+    expect(seen!.durationMs).toBeGreaterThan(400)
+    expect(seen!.frames).toBeGreaterThan(10)
+    expect(after).toBe(true)
+  })
+
+  it('is null for a recognized word and for a cancelled (too short) movement', () => {
+    const s = session()
+    const twitch: SignSpec = { durationMs: 120, hands: [{ handedness: 'Right', shape: 'B', path: (u) => [0.8 * u, 0] }] }
+    for (const f of timeline([sign(WORDS.HELLO, 701), sign(twitch, 702)])) {
+      const events = s.update(f)
+      if (events.some((e) => e.type !== 'signStart')) expect(s.rejectedMovement).toBeNull()
+    }
+  })
+})

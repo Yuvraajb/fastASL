@@ -48,6 +48,7 @@ const api: FastAslApi = {
 
   interpret: (req, callId) => ipcRenderer.invoke(IPC.interpret, req, callId),
   spellSuggest: (req, callId) => ipcRenderer.invoke(IPC.spellSuggest, req, callId),
+  identifySign: (req, callId) => ipcRenderer.invoke(IPC.identifySign, req, callId),
   onLlmStatus: (cb) => subscribe<LlmStatusEvent>(IPC.llmStatus, cb),
   cancelLlm: (callId) => ipcRenderer.send(IPC.llmCancel, callId),
 

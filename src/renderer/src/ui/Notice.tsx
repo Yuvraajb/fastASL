@@ -1,4 +1,5 @@
 import { Info } from 'lucide-react'
+import { IDENTIFYING } from '../app/controller'
 import { useApp } from '../app/store'
 import './Notice.css'
 
@@ -14,7 +15,8 @@ export interface NoticeProps {
 export function Notice({ text, lines, className }: NoticeProps): React.JSX.Element | null {
   const notice = useApp((s) => s.notice)
   const message = text === undefined ? notice : text
-  if (!message) return null
+  // A guess in flight shows in the header (Header.tsx) instead: a row coming and going resizes the card.
+  if (!message || (text === undefined && message === IDENTIFYING)) return null
   return (
     <div className={`notice${className ? ` ${className}` : ''}`} role="status" title={message}>
       <Info size={14} strokeWidth={2} aria-hidden />

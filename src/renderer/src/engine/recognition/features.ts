@@ -165,3 +165,54 @@ export function slotVelocity(features: readonly number[], slot: number): [number
   const base = slot * HAND_FEATURE_DIM + VELOCITY
   return [features[base] / VELOCITY_WEIGHT, features[base + 1] / VELOCITY_WEIGHT]
 }
+
+/** Hand slots present in at least half of a sequence's frames (both when neither is). */
+export function usedSlots(frames: readonly (readonly number[])[]): number[] {
+  const used = SLOTS.map((_, slot) => slot).filter(
+    (slot) => frames.filter((f) => slotPresent(f, slot)).length * 2 >= frames.length
+  )
+  return used.length ? used : SLOTS.map((_, slot) => slot)
+}
+
+/** Each frame cut down to the given hand slots (in order), for comparing only those hands. */
+export function selectSlots(frames: readonly (readonly number[])[], slots: readonly number[]): number[][] {
+  return frames.map((f) => slots.flatMap((slot) => f.slice(slot * HAND_FEATURE_DIM, (slot + 1) * HAND_FEATURE_DIM)))
+}
+
+/**
+ * A one-handed sign recorded with the other hand also in view: keeps the signing hand and
+ * empties the other slot, so recognition doesn't expect a second hand next time. The signing
+ * hand is `dominant` (the slot the user's other one-handed signs use) when it was seen in at
+ * least half the frames, else the hand that moved more: the other hand can move a lot too, while
+ * it is lowered or raised.
+ */
+export function keepActiveHand(frames: readonly (readonly number[])[], dominant: number | null = null): number[][] {
+  const energy = slotEnergy(frames)
+  const keep = dominant !== null && usedSlots(frames).includes(dominant) ? dominant : energy[0] >= energy[1] ? 0 : 1
+  const drop = 1 - keep
+  const [from, to] = [drop * HAND_FEATURE_DIM, (drop + 1) * HAND_FEATURE_DIM]
+  return frames.map((f) => f.map((v, i) => (i >= from && i < to ? 0 : v)))
+}
+
+/** Per slot: the hand's speed summed over the frames it was seen in (how much it moved). */
+export function slotEnergy(frames: readonly (readonly number[])[]): number[] {
+  return SLOTS.map((_, slot) =>
+    frames.reduce((sum, f) => (slotPresent(f, slot) ? sum + Math.hypot(...slotVelocity(f, slot)) : sum), 0)
+  )
+}
+
+/**
+ * The slot the user signs one-handed words with: the one most of their one-handed word templates
+ * use (null with none). That hand is the dominant one, whichever label MediaPipe gives it.
+ */
+export function dominantSlot(templates: readonly { kind: string; frames: readonly (readonly number[])[] }[]): number | null {
+  const count = SLOTS.map(() => 0)
+  for (const t of templates) {
+    if (t.kind !== 'word' || !t.frames.length || t.frames[0].length !== FRAME_FEATURE_DIM) continue
+    const used = usedSlots(t.frames)
+    if (used.length === 1) count[used[0]]++
+  }
+  if (count[0] === count[1]) return null
+  return count[0] > count[1] ? 0 : 1
+}
+

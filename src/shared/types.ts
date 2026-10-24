@@ -100,10 +100,39 @@ export interface SpellRequest {
   frontmost: FrontmostApp | null
 }
 
+/**
+ * Guess, confirm, learn: a movement the local recognizer didn't know, sent to the LLM to name.
+ * Frames leave the Mac only in this request, and only on a real provider (claude, gemini, local).
+ */
+export interface IdentifySignRequest {
+  /** 3 to 8 camera frames across the movement, oldest first: JPEG, base64 without the data: prefix. */
+  frames: string[]
+  /** Measured from hand tracking: hands, handshape at start and end, movement, duration. */
+  motion: string
+  mode: Mode
+  /** Words the user has taught, so the model can name one it plausibly is. */
+  known: string[]
+}
+
+export interface SignCandidate {
+  /** Upper-case English gloss: one word or a short phrase ("HELLO", "THANK YOU"). */
+  gloss: string
+  /** 0 to 1. */
+  confidence: number
+  /** How many hands the sign uses in standard ASL: a one-handed sign is learned without the other hand. */
+  hands: 1 | 2
+}
+
+/** Strict JSON contract of identifySign (every LLM_PROVIDER). At most 3 candidates, most likely first. */
+export interface SignGuess {
+  is_sign: boolean
+  candidates: SignCandidate[]
+}
+
 /** Which LLM answers interpret and spellSuggest (LLM_PROVIDER in .env; unset = claude). */
 export type LlmProviderName = 'claude' | 'gemini' | 'local' | 'mock'
 
-/** Main -> renderer while an interpret / spellSuggest call runs, e.g. "Rate limited, retrying...". */
+/** Main -> renderer while an interpret / spellSuggest / identifySign call runs, e.g. "Rate limited, retrying...". */
 export interface LlmStatusEvent {
   /** The id the renderer passed with the call. */
   callId: string

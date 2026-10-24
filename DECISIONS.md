@@ -480,3 +480,135 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - **Measured after the change.** Teaching HELLO with the hand kept up between repetitions completed 5/5 at the first try, with repetitions 0.68-1.93 apart (radius 1.5). In Dictation, HELLO matched at 0.91 and became "hello", and Gemini answered "Hello." with Insert text / More options. Other movements (swipes, reaching, scratching) sat at 2.99-8.9. One attempt at 1.62 was rejected; it is unknown whether it was a HELLO.
     - **Dev diagnostics.** `[teach-dbg]` logs each repetition's frames, duration, entered/left, hand slots and distances to the earlier ones. `[sign-dbg]` logs each movement's nearest word, its distance and that word's radius.
 
+## Guess, confirm, learn
+
+140. **A sign the app doesn't know is guessed on the first try, confirmed by hand, and learned from that one movement.** When a whole, clean movement matches no taught word, a vision-capable LLM looks at a few camera frames and a summary of the hand tracking and names up to 3 signs. The card asks "Is this HELLO?". A pick adds the word to the phrase, as a recognized sign would, and saves that movement as one more `SignTemplate`, so the next one is recognized locally, with no call. A fist learns nothing. Nothing about the vocabulary is hardcoded: the model names the sign, the user confirms it. Settings › Teach a sign gets the same flow as its first option, "Show me a sign" (150).
+
+141. **Feasibility was checked first, on real dictionary clips, before any UI was built.** 25 live API requests in all: 24 `generateContent` calls and one model list. The key was read from `.env` and never printed.
+    - **Clips.** 11 short public clips from signasl.org: HELLO, THANK YOU, YES, PLEASE and MUSIC (StartASL); NO (Elemental ASL Concepts); EMAIL (Marie Katzenbach School); PLAY, HELP, WATER and MORE (ASLbricks). They were kept in the session scratchpad, and nothing in them was run.
+    - **Method.** A headless Electron harness ran each clip through the app's own MediaPipe tracker, segmenter, frame ring (288 px JPEG at 8 fps) and motion summary, then sent the request through the shipped `identifySign` prompt and Gemini transport. The clips start and end with the hands down, which the app never guesses (146). So the movement was taken as the span where a hand is at least 1.5 hand lengths above its resting height, by the same rule for every clip. Each request carried 7–8 frames.
+    - **`gemini-3.5-flash-lite`** (the intent default): 10 of 11 answered (one 5xx). Top-1 **0/10**, top-3 **0/10**. It answered CURIOUS for EMAIL, SUPPORT for HELP, NICE for MUSIC and THANK YOU, FINE for PLEASE and CALIFORNIA for PLAY, and called NO and WATER "not a sign". Latency 4.1–10.1 s, median 6.4 s. For signs, that is chance level.
+    - **`gemini-3.8-flash`**: the one call answered 5xx.
+    - **`gemini-3.5-flash`**: 7 of 12 answered. Top-1 **5/7** and top-3 **5/7**: HELLO (0.95), THANK YOU (0.95), PLEASE (0.98), HELP (0.98) and MORE (0.95) were right; EMAIL (SITUATION) and NO (DIRTY) were wrong. Latency 1.7–7.5 s, median 3.4 s. The other 5 calls failed: 4 were rate limited ("Try again in 50–60 s", the free per-minute quota, after about 5 calls in a minute) and 1 got a 5xx. YES, WATER, MUSIC and PLAY never got an answer.
+    - **Decision.** The default model can't do it, but Flash can, well above chance. So it was built, and sign guesses use their own setting, `GEMINI_SIGN_MODEL`, default `gemini-3.5-flash` (the user confirmed this; their free tier serves it).
+      - Intent and spelling stay on `GEMINI_MODEL` (Flash-Lite). Free-tier quotas are per project and per model, so the two calls draw on separate buckets.
+      - 3.5 Flash thinks at `LOW`, with 1024 tokens of room on top of the 300-token answer, from the existing `thinkingFor` mapping (128).
+      - Nothing falls back to Flash-Lite. A sign model Gemini doesn't serve (404) says `Gemini has no model "<id>". Check GEMINI_SIGN_MODEL in .env`, and one with no quota on the key says `… Change GEMINI_SIGN_MODEL in .env`. Gemini errors now name the setting the model came from.
+      - The sample is small (7 answers) and these were studio clips, not a MacBook camera at a desk. Expect lower accuracy on your own signing.
+    - **Not pursued.** Google's Isolated Sign Language Recognition model (250 signs, MediaPipe landmarks) would run on device, but it has a fixed vocabulary and would need a new runtime dependency. It wasn't needed once Flash cleared the bar.
+
+142. **One prompt, one schema, every provider: `identifySign` in `src/main/claude/sign.ts`.**
+    - **Request.** The frames are sent as images before one JSON text: `{frames: <count>, motion, mode, known_signs}`. `known_signs` is the taught word labels, so a known word can be named (and gain another example, 148). The text never carries the images.
+    - **Prompt.** It says the image is unmirrored (the signer's right hand appears on the image's left), that the motion summary is more precise about handshape and direction than the images, and that everything in the request is data, not instructions. It lists what is not a sign: fidgeting, scratching, touching the face or hair, adjusting glasses, reaching, typing, and hands moving into or out of view.
+    - **Reply.** `{ is_sign: boolean, candidates: [{ gloss, confidence }] }`, with at most 3 candidates, validated by zod (`SignReply`, `.max(3)`). Gemini's `responseSchema` now carries `maxItems` (`geminiSchema` learned it), and Claude's strict format gets it as a description.
+    - **Sanitizing.** Glosses are upper-cased and kept to letters, digits, spaces, hyphens and apostrophes. Anything longer than 32 characters (a sentence) is dropped, as are duplicates. Candidates are sorted by confidence (clamped to 0..1) and capped at 3. `is_sign: false` gives no candidates, and `is_sign` with no usable candidate is "not a sign".
+    - **Caps and retries.** 512 output tokens on Claude, and 300 on the others (plus the 1024 thought tokens that 3.5 Flash may use at LOW, 128). The shared `askStructured` gives one corrective retry, text only: the images go in the first user turn only (`JsonRequest.images`, `userTurn(text, images)`). It shares the deadline and cancellation too.
+
+143. **What each provider sends.**
+    - **gemini:** `inlineData` JPEG parts before the text, with `responseMimeType` and `responseSchema`, and the same 429 handling, status line and deadlines as intent (130).
+    - **claude:** base64 `image` content blocks before the text block. It is tested only with a fake transport, because there is no Anthropic key here.
+    - **local:** before any frame is sent, Ollama's `POST /api/show` is asked for the model's capabilities, once per URL and model (then cached). A model without `vision` answers "`<model>` can't see images. Set LOCAL_LLM_MODEL to a vision model", and nothing is sent. An Ollama too old to list capabilities just gets the call, and a 400 about images maps to the same message. "Start Ollama" and "Run: ollama pull" work as for intent.
+    - **mock:** a canned HELLO / THANK YOU / PLEASE, through the same validation. The renderer's `mockServices` (`FASTASL_MOCK=1`) answer the same.
+
+144. **Frames come from a small ring buffer in the renderer (`engine/camera/frameRing.ts`).**
+    - **What it keeps.** About 8 fps (one per 125 ms) of the tracked camera frames, drawn to a reused 288 px-wide canvas at the camera's aspect and stored as JPEG (quality 0.7, about 4–10 KB). Only the last 4 s are kept. A frame in between is never drawn. Each frame keeps the tracker's timestamp, so it lines up with the movement's landmarks.
+    - **When it runs.** `engines.ts` feeds it only while `controller.wantsSignFrames()` holds: a provider that looks at frames, with its key, on a card where a guess can start or on Show me a sign. Elsewhere the ring is empty and costs nothing. Encoding one frame takes about a millisecond, inside the frame callback.
+    - **Picking.** `pickFrames` spreads up to 8 frames evenly over [movement start − 100 ms, end + 100 ms], always keeping the first and the last. A short movement or a slow camera widens the window, 100 ms at a time up to 400 ms each side, until it holds 6.
+
+145. **The motion summary (`engine/recognition/motionSummary.ts`) says what the frames blur.**
+    - **Contents.** The duration, then one hand or two. For each hand: the side it is on (the signer's own), its height in the frame, and its handshape at the start and the end (a majority over 3 frames, per digit, from `analyzeHand`), named with the ASL shape it resembles ("thumb and pinky extended (Y)"). Then how it moved: the direction of its farthest point from the start, in the signer's terms ("toward the signer's right and down"), the distance in hand lengths, "then back" when it returns, "in a circle", "repeated: 4 strokes up and down", and toward or away from the camera when the hand's size changes by 20%. With two hands, it also says whether they come together or move apart.
+    - **Hands are followed by position, not by label.** MediaPipe's Left/Right flickers (40), and a flicker split one hand into two in the first version of the summary. A hand more than 2.5 hand lengths from the only tracked hand, within 200 ms, is the second hand.
+    - **Example**, measured live from a dictionary HELLO: "0.4 s, one hand, on the signer's right, high in the frame. Hand: flat hand, four fingers extended (B) throughout. Moves toward the signer's right 0.8 hand lengths."
+
+146. **Only sign-like movements are guessed.** All of these must hold:
+    - The local recognizer rejected it. `RecognitionSession.rejectedMovement` holds the movement behind that one `rejected` event. A cancel (too short or too long) has none.
+    - It is clean: not `entered` and not `left`, so it is not a raise or a lowering of the hands.
+    - It lasted 400–3000 ms (`signLike`).
+    - It is not a control gesture, nor the movement into one, nor what follows one:
+      - A movement that made a swipe is never guessed. If the swipe is judged in time, the swipe acts; if too late, nothing happens, as before.
+      - A movement that starts within 1.5 s of a control gesture acting is its follow-through (a swipe's return stroke, the hand coming down from a pick), so it is never guessed (`GUESS_AFTER_GESTURE_MS`).
+      - The guess waits `GUESS_WAIT_MS` after the movement ends: the longest control hold (1 s) plus 250 ms, times the sensitivity's hold scale. That is about 1.25 s at medium, measured in camera-frame time. A control gesture held with the movement's last shape (moving into a fist, a thumbs up or a finger count) fires within it, and a letter held with that shape arrives within it. Either one drops the guess, as does any recognized sign, a new screen, or the camera going away.
+    - An LLM is available: `Services.signGuessUnavailable()` is null. That needs a known provider with its key (`local` and `mock` need none).
+    - No guess is in flight, the last one started at least 3 s ago, and the card is Ready, Listening, Recognizing, Building, Sentence (not while it proceeds) or Dictation. Spell mode never guesses.
+
+    A movement that fails any of these is rejected as before, with no call and no frames sent. Letters keep working as they did: a hand that rests in a taught letter's shape after an unknown movement gives the letter, and nothing is asked. The cost is about 1.25 s added to a guess, on top of the model's 2–7 s.
+
+147. **While the guess runs, the phrase carries on.** Listening ends as for any rejected movement, and "Identifying sign..." shows through the existing notice (`showLlmStatus`), which a rate-limit status replaces. The guess is superseded, and cancelled in main over `llm:cancel`, by anything that moves the phrase on:
+    - a sign recognized meanwhile
+    - an edit or a delete
+    - a mode switch or a reset
+    - a control gesture that leaves the phrase (quick menu, collapse, Settings)
+
+    Hands moving on (Listening and back) don't cancel it, and neither does ending the phrase with both hands down. When the answer comes on the Sentence card, a pick adds the word and goes back to the Sentence card with it (and asks for a new interpretation). When it comes during a new movement, the list replaces Listening, and "no" goes back to Ready.
+
+148. **"Is this HELLO?" is the existing Did you mean list with a new purpose, `learn`.**
+    - **The list.** Its heading is "Is this <first gloss>?", followed by the up to 3 options. The hint reads "hold up 1–3 fingers · thumbs up = 1 · fist = no". It is a new screen for the gesture engine, so a shape still held from the sign can't pick.
+    - **A pick** puts the card back where it was, then adds the word as a recognized sign does: in Ready it becomes "Recognizing" with the word, in a phrase it joins the strip, and in Dictation it is typed. It also saves `wordTemplate(gloss, features)`: the segment's frame vectors, resampled to 32 frames and rounded to 3 decimals, exactly as `TeachSession.finish` makes each repetition (a test compares the two).
+    - **Saving.** It goes through the same merge-and-save as `teachLearned` (`addTemplates`). The store updates, so recognition reloads at once. A word already taught gets this movement as one more template, which helps exactly where matching had failed. A notice "Learned HELLO" stands in for the toast, which would interrupt the phrase.
+    - **No.** A fist, the X or Edit learns nothing and goes back to the phrase as it was.
+
+149. **When a guess fails, the movement stays rejected, as before.** A missing key, a rate limit or no network gives the error as a notice, at most once a minute, so it doesn't nag. "Not a sign" is silent. A bridge that throws (a renderer hot-reloaded onto an older preload) counts as a failed guess, never a stuck one. `ipcServices` reports "Restart fastASL to guess signs" when the preload has no `identifySign`. `controller.dispose()` cancels a guess in flight.
+
+150. **Settings › Teach a sign › Show me a sign.**
+    - **The list.** Row 1 of every page is "Show me a sign". The list shows 3 signs per page (it was 4), so that with "Spell a new word" every page still has 5 rows, picked by 1 to 5 fingers. There are now 14 pages. List-based teaching itself didn't change.
+    - **The page.** It waits for one clean repetition ("Waiting for a sign", then "Listening..."). It asks `identifySign`, showing a spinner and "Identifying sign...". Then it shows "Is this HELLO?" with the guesses and "None of these: pick from list". Fingers or thumbs up (option 1) pick.
+    - **A pick** saves that one repetition through `teachLearned`: the toast "Learned HELLO · 1 recording saved", then the list on that word's page. "None of these" opens the list. A fist goes back to the list from every step and cancels a call in flight.
+    - **Settling.** Movements that start within 1 s of the page listening are ignored. This is decided once, when the movement starts. That is the hand coming down from the finger pick that opened it, and asking about it would block the real sign. Raises, lowerings and movements that are too short are ignored silently. "Too long" and "That didn't look like a sign. Try again." are said, as is the LLM's error. Without an LLM, the page says what to add ("Add GEMINI_API_KEY to .env") and sends nothing.
+
+151. **Privacy: camera frames leave the Mac only for these guesses.** Each guess sends at most 8 small JPEGs of the movement (288 px wide, about 4–10 KB each) to the provider in `LLM_PROVIDER`. That is Anthropic or Google, or `LOCAL_LLM_URL` for `local`, which is this Mac unless you point it elsewhere. No frames are captured or sent when the provider is `mock` (`sendsFrames()` is false), when there is no key or the provider is unknown, outside the cards where a guess can start, or in Spell mode. Main refuses a request with more than 8 frames or oversized ones. The dev log prints a guess's frame count, motion summary and answer, never the images.
+
+152. **Plumbing.**
+    - The IPC channel is `llm:identifySign`, with the same call ids, status events and `llm:cancel` as intent (131). Main refuses a request with more than 8 frames, a frame over 400,000 base64 characters, a motion summary over 2000 characters, or more than 500 known words (or one over 64 characters). `MainServices.identifySign`, `FastAslApi.identifySign` and `Services.identifySign` were added, with `signGuessUnavailable()` and `sendsFrames()` on `ipcServices` and `mockServices`.
+    - `llmSource(provider, overrides, 'vision')` picks `GEMINI_SIGN_MODEL` on Gemini. The other providers use their one model.
+    - Dev log: `[gemini] identifySign {"frames":8,"motion":"…","mode":"command","known":[…]} -> {…} (3421 ms)`. The renderer logs `[sign] unknown movement, 812 ms: asking the LLM in 1250 ms`, and `[sign] guess dropped: …` when a gesture, sign or letter came first.
+    - No new dependencies.
+
+153. **Verified, and not verified.**
+    - **Checks.** Both typechecks pass, and 1050 tests pass (85 new). The new tests cover:
+      - the schema and sanitizing
+      - every transport, with fake SDKs and fetch, including the sign model's own error names and no fallback
+      - the IPC channel and its validation
+      - frame selection and the ring
+      - the motion summary on the synthetic signer
+      - `wordTemplate` against `TeachSession.finish`
+      - the controller flows: guess, pick, no, cooldown, in flight, supersede, failure and once-a-minute, Dictation, a pick on the Sentence card, Show me a sign
+      - engine-level gating with synthetic camera frames:
+        - raises, lowerings, a twitch, a known word, a swipe and its return stroke
+        - a movement into a fist, and a hand resting in a taught letter
+        - Spell mode, and no LLM
+
+      The wait and the after-gesture window were each checked by disabling them: the tests then fail.
+
+      `electron-vite build` succeeds (built into a scratch `--outDir`, so the running dev app's `out/` was untouched). Screenshots 44–50 are new, and 25 (the Teach list) was updated.
+    - **End to end, in the built app.** This ran with a throwaway `FASTASL_DATA_DIR`, no camera, and an MJPEG stream of the dictionary HELLO clip (hand up, still, the sign, still, looped). `LLM_PROVIDER=gemini` was sent to a local stub through `GOOGLE_GEMINI_BASE_URL`, with a fake key and no quota. It was driven over CDP, twice.
+      - **First run** (camera at 7–8 fps): Listening, then "Identifying sign...", then "Is this HELLO?". The stub received 3 real 288×162 JPEG parts, the motion summary in 145, the sign schema, and the model `gemini-3.5-flash`. Option 1 gave "hello" and "Learned HELLO", and `signs.json` gained a HELLO template of 32×134 values. The next loop was recognized locally (distance 0.16), with no second request. Earlier loops were 270 ms of motion and were cancelled as too short.
+      - **After the review fixes** (camera at about 33 fps): the log read `[sign] unknown movement, 514 ms: asking the LLM in 1250 ms`. The stub got one request with 6 frames, the window having widened (144). The pick learned HELLO, and the next loop matched locally at 0.41, with one request in all.
+    - **Not verified.**
+      - A real camera.
+      - Real Gemini calls from inside the app (only through the harness, 141).
+      - Claude with images against the real API (no key here).
+      - An Ollama vision model live.
+      - How well guesses do on the user's own signing at a desk.
+      - How the 3.5 Flash free quota (about 5 requests a minute in 141) holds up in real use.
+
+154. **Review fixes.** A code review of the change found no crashes, stuck states or frame leaks. It found these, now fixed:
+    - **A movement into a hold gesture could be guessed** (moving into a thumbs up to end a phrase, or into a fist to cancel). It used up a call and the cooldown, could put "Is this GOOD?" over the Sentence card, and with a fast provider could swallow the gesture. Now there is the wait, the after-gesture window, and no guess for a movement that made a swipe (146).
+    - **A held letter could be swallowed.** The first version blocked letters after a guessed movement, so a hand raised in view into a fingerspelled letter lost that letter. The block is gone, and the letter now wins (146).
+    - **Ollama on a model without vision** asked `/api/show` before every guess. Now the answer is cached per URL and model (143).
+    - **IPC** didn't cap the summary or the known words. Now it does (152).
+    - **Show me a sign** decided "settling" twice, from two different times, so a movement starting just after 1 s could show Listening and then be dropped silently. Now it is decided once (150).
+
+    Not changed:
+    - Claude's strict format can only carry the 3-candidate limit as a description. A reply with 4 would fail validation and get the corrective retry (a 4th candidate is unlikely; the prompt says "up to 3").
+    - The key status is read at launch. `.env` is too (`loadEnv`), so a new key needs a restart either way.
+
+## Live-testing fixes (Listening, moving on, the other hand)
+
+155. **"Listening..." is a header status, not a card.** A movement used to switch the card to the Listening layout (feed + bars) and back again when it turned out to be no sign. The two layouts differ in height, so the window resized on almost every movement, which read as flashing. Now `controller.signStart` only sets `store.signing`, and the header shows "● Listening..." over the current card (Ready, Recognizing, Building, Sentence, Dictation). The card changes only when a sign arrives. recognitionInput debounces it by camera-frame time: it shows after a movement has lasted 400 ms and stays at least 700 ms, so twitches never show it and it doesn't blink.
+156. **"Identifying sign..." moved to the header too.** It was a Notice row that came and went, which also resized the card. Notice now skips that one text, and the header shows "Identifying..." while a guess is in flight.
+157. **A sign after a finished sentence starts the next phrase.** On the Sentence card, a recognized sign (or a confirmed guess) clears the old words and starts a new phrase (`startNextPhrase`), keeping only a quick-menu prefix or gesture task. Before, it was appended to the sentence, so the card seemed stuck on the old words. Hands down between words still ends the phrase, as before.
+158. **Only the hands a word uses are compared.** Each word template knows its hand slots (present in at least half its frames). When matching, the query's other hand is left out if it moved less than 40% of the busiest hand: resting or wandering in view. One that moves like a signing hand still counts, so a two-handed movement can't pass as a one-handed word. The synthetic "two-hand swing" unknown caught the first version, which ignored every extra hand. Slot-cut template frames are cached per slot set, because recutting them per query pushed the calibration tests past their timeout.
+159. **Confirmed guesses learn only the signing hand of a one-handed sign.** identifySign's candidates now carry `hands` (1 or 2, how many hands the sign uses in standard ASL), in every provider's schema. For a one-handed sign, the saved template keeps only the user's dominant hand: the slot most of their one-handed word templates use. With no history it keeps the hand that moved more. Motion alone picked the wrong hand on a real THANK YOU, because the other hand was being lowered and moved more. That saved THANK YOU was cleaned the same way (backup kept outside the repo).
+160. **Wider per-word radius, and one for single templates.** radiusScale went from 1.4 to 2.4. The real HELLO templates' median nearest distance was ~0.8 (radius ~1.9), and the signer's later HELLOs landed at 0.91-2.2, while other movements landed at 2.5-8.9. A word with one template (one confirmed guess) has no spread to measure, so it gets `singleTemplateRadius` 2.0. A real one-shot THANK YOU then matched at 1.88-1.89. Synthetic words keep the 1.5 floor.
+161. **Swipes need a quick sweep.** A slow sideways fist (1.8 hand lengths over 1.2 s) is not a swipe (≥ 0.22 frame widths within 300 ms), so it went to identifySign as an unknown movement. Thumbs up continues on the Sentence card as well.
+

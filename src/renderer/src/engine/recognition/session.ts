@@ -1,7 +1,10 @@
 import type { Mode, SignTemplate } from '@shared/types'
 import type { FrameSample, SensitivityProfile } from '../types'
 import { Recognizer, type Classification, type RecognizerOptions } from './recognizer'
-import { Segmenter, type SegmenterThresholds } from './segmenter'
+import { Segmenter, type Segment, type SegmenterThresholds } from './segmenter'
+
+/** A movement the segmenter cut out (see Segment): its frames, frame vectors, duration and edges. */
+export type Movement = Extract<Segment, { kind: 'dynamic' }>
 
 export type RecognitionEvent =
   | { type: 'signStart' }
@@ -47,6 +50,12 @@ export class RecognitionSession {
   private lettersOnly = false
   /** Dev diagnostics: how the last movement classified (nearest word and its distance). */
   lastWord: Classification | null = null
+  /**
+   * The movement behind this update's 'rejected' event, when it was a whole movement that no
+   * taught word matched (not a cancel): guess, confirm, learn may ask an LLM what it was.
+   * Null after every other update.
+   */
+  rejectedMovement: Movement | null = null
   private suspendedUntil = -Infinity
   private lastT = 0
   private pending: { event: RecognitionEvent; until: number } | null = null
@@ -96,6 +105,7 @@ export class RecognitionSession {
 
   update(frame: FrameSample): RecognitionEvent[] {
     this.lastT = frame.t
+    this.rejectedMovement = null
     if (frame.t < this.suspendedUntil) return []
     const segments = this.segmenter.push(frame)
     const events: RecognitionEvent[] = []
@@ -120,7 +130,9 @@ export class RecognitionSession {
         this.lastWord = result
         // The hand usually rests in a word's last shape; that is not a letter.
         if (result.status !== 'rejected') this.segmenter.blockStatic()
-        events.push(outcome(result) ?? { type: 'rejected' })
+        const event = outcome(result)
+        if (!event) this.rejectedMovement = segment
+        events.push(event ?? { type: 'rejected' })
       }
     }
     return events

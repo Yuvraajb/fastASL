@@ -8,7 +8,7 @@ import { askStructured, type JsonRequest, type JsonTransport, type StructuredLlm
 const DEADLINE_MS = 15_000
 
 export const mockLlm: StructuredLlm = {
-  maxTokens: { intent: 300, spell: 300 },
+  maxTokens: { intent: 300, spell: 300, sign: 300 },
   ask: (req) => askStructured(mockTransport(req), req)
 }
 
@@ -26,9 +26,23 @@ function mockTransport<S extends z.ZodType>(req: JsonRequest<S>): JsonTransport<
 
 const capitalize = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
 
-/** The reply to one request JSON: a spelling request has `letters`, an intent request a `draft`. */
+/** identifySign's canned guess. A real model sees the frames; this one never gets any. */
+export const MOCK_SIGN_GUESS = {
+  is_sign: true,
+  candidates: [
+    { gloss: 'HELLO', confidence: 0.62, hands: 1 },
+    { gloss: 'THANK YOU', confidence: 0.21, hands: 1 },
+    { gloss: 'PLEASE', confidence: 0.09, hands: 1 }
+  ]
+}
+
+/**
+ * The reply to one request JSON: a spelling request has `letters`, a sign request `motion`,
+ * an intent request a `draft`.
+ */
 export function mockReply(user: string): Record<string, unknown> {
-  const req = JSON.parse(user) as { letters?: string; draft?: string; intent_prefix?: string | null }
+  const req = JSON.parse(user) as { letters?: string; draft?: string; intent_prefix?: string | null; motion?: string }
+  if (typeof req.motion === 'string') return MOCK_SIGN_GUESS
   if (typeof req.letters === 'string') {
     const lower = req.letters.toLowerCase()
     // The address is dropped unless "@" was spelled, as for a real model.
