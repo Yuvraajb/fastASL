@@ -21,13 +21,16 @@
   background: var(--text);
 }
 
-/* Spell a new word (inside a ui Panel): the letters so far with a blinking caret. */
+/* Spell a new word (inside a ui Panel): the letters so far with a blinking caret,
+   a keyboard button on the right (or the typing field in its place). */
 .teach-spell {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 3px;
   height: 52px;
+  padding-inline: 44px; /* room for the keyboard button, kept symmetric so the word stays centered */
   overflow: hidden;
 }
 
@@ -50,6 +53,35 @@
   border-radius: 1px;
   background: var(--text);
   animation: teach-blink 1.06s steps(1) infinite;
+}
+
+.teach-spell__type {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+}
+
+.teach-spell__input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-token);
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: 0.06em;
+  text-align: center;
+  color: var(--text);
+  caret-color: var(--text);
+  user-select: text;
+}
+
+.teach-spell__input::placeholder {
+  color: var(--text-3);
 }
 
 @keyframes teach-blink {
@@ -138,7 +170,23 @@
   margin: 0;
   font-size: var(--fs-small);
   font-weight: 500;
+  text-align: center;
   color: var(--text-2);
+}
+
+/* A movement is being recorded: the dot turns green (status color) and pulses faster. */
+.teach-rec__hint--listening {
+  color: var(--text);
+}
+
+.teach-rec__hint--listening .teach-rec__pulse {
+  background: var(--green);
+  animation-duration: 0.6s;
+}
+
+/* The last repetition was not kept: the reason, in brighter text. */
+.teach-rec__hint--retry {
+  color: var(--text-1);
 }
 
 .teach-rec__pulse {

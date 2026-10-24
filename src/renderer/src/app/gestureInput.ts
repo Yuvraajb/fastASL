@@ -1,21 +1,27 @@
 import { GestureEngine, gestureKey, type GestureProgress } from '../engine/gestures/engine'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
-import { activeGestures, type Controller } from './controller'
+import { activeGestures, gestureScreen, type Controller } from './controller'
 import { live } from './live'
 import { getApp, setApp, useApp } from './store'
 
 const IDLE: GestureProgress = { palmHold: 0, pick: null, shape: null }
 
+export interface GestureConnection {
+  stop(): void
+  /** Whatever a hand shows now must be released before it can fire (e.g. a recognized word's last handshape). */
+  spendShown(): void
+}
+
 /**
  * Connects the gesture engine to the app: live camera frames go in, fired gestures go to
  * controller.gesture (which gates them by view again), and hold progress goes to the store
  * (holdProgress: the collapsed pill's ring; pick: the option badges). The engine evaluates
- * only the current view's gestures and follows the sensitivity setting. Returns a stop function.
+ * only the current view's gestures and follows the sensitivity setting.
  */
 export function connectGestures(
   controller: Pick<Controller, 'gesture'>,
   subscribeFrames: (fn: (frame: FrameSample) => void) => () => void
-): () => void {
+): GestureConnection {
   const { view, sensitivity } = getApp()
   const engine = new GestureEngine({ sensitivity: SENSITIVITY[sensitivity] })
   engine.setActive(activeGestures(view))
@@ -26,7 +32,7 @@ export function connectGestures(
   const stopStore = useApp.subscribe((s, prev) => {
     if (s.view !== prev.view) engine.setActive(activeGestures(s.view))
     // A new screen needs a fresh gesture: whatever is held as it appears must be released first.
-    if (s.view.kind !== prev.view.kind) engine.spendShown()
+    if (gestureScreen(s.view) !== gestureScreen(prev.view)) engine.spendShown()
     if (s.sensitivity !== prev.sensitivity) engine.setSensitivity(SENSITIVITY[s.sensitivity])
   })
 
@@ -52,9 +58,12 @@ export function connectGestures(
     showProgress(engine.progress())
   })
 
-  return () => {
-    stopFrames()
-    stopStore()
+  return {
+    stop() {
+      stopFrames()
+      stopStore()
+    },
+    spendShown: () => engine.spendShown()
   }
 }
 

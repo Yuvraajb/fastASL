@@ -15,7 +15,8 @@
     "screens": "node scripts/screens.mjs",
     "setup": "node scripts/fetch-assets.mjs",
     "postinstall": "node scripts/fetch-assets.mjs",
-    "mock:mjpeg": "node scripts/mock-mjpeg.mjs"
+    "mock:mjpeg": "node scripts/mock-mjpeg.mjs",
+    "templates": "node scripts/templates.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { mergeTemplates, validateTemplatePack } from '@shared/templatePack'
 import type { CameraSource, CompletedTask, CustomGesture, Settings, TemplateStore } from '@shared/types'
 
 /** ~/Library/Application Support/fastASL, or FASTASL_DATA_DIR (dev / smoke tests). */
@@ -60,6 +61,17 @@ export function getTemplates(): TemplateStore {
 
 export function saveTemplates(store: TemplateStore): void {
   writeJson('signs.json', store)
+}
+
+/** Validates a template pack and adds its templates whose id is new. */
+export function importTemplatePack(json: unknown): { added: number; skipped: number } | Error {
+  const pack = validateTemplatePack(json)
+  if (pack instanceof Error) return pack
+  const current = getTemplates().templates
+  const templates = mergeTemplates(current, pack.templates)
+  saveTemplates({ version: 1, templates })
+  const added = templates.length - current.length
+  return { added, skipped: pack.templates.length - added }
 }
 
 /** The built-in peace-sign screenshot shortcut is always present. */

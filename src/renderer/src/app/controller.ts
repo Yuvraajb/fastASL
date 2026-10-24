@@ -1,4 +1,5 @@
-import type { AgentEvent, AgentStep, CameraSource, EnvKey, IntentResult, Mode, Result } from '@shared/types'
+import { mergeTemplates } from '@shared/templatePack'
+import type { AgentEvent, AgentStep, CameraSource, EnvKey, IntentResult, Mode, Result, SignTemplate } from '@shared/types'
 import { getApp, setApp } from './store'
 import type { Services } from './services'
 import type { SettingsPage, Token, View } from './types'
@@ -81,6 +82,11 @@ export function assembleSentence(tokens: Token[]): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
 }
 
+/** Listening: a movement started in Ready and nothing is recognized yet. */
+function isListening(view: View): boolean {
+  return view.kind === 'recognizing' && view.token === null
+}
+
 /** Which gestures make sense in each view. The gesture engine ignores the rest. */
 export function activeGestures(view: View): Set<GestureName> {
   switch (view.kind) {
@@ -89,6 +95,9 @@ export function activeGestures(view: View): Set<GestureName> {
     case 'ready':
       return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'swipeUp', 'shape'])
     case 'recognizing':
+      // Raising a hand to make a control gesture is a movement too: Listening keeps Ready's gestures.
+      if (isListening(view)) return activeGestures({ kind: 'ready' })
+      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
     case 'building':
       return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
     case 'sentence':
@@ -113,7 +122,40 @@ export function activeGestures(view: View): Set<GestureName> {
     case 'toast':
       return new Set(['fist'])
     case 'settings':
-      return new Set(['fingers', 'fist', 'swipeLeft', 'swipeRight'])
+      switch (view.settings.page) {
+        case 'teachSpell':
+          return new Set(['thumbsUp', 'fist', 'swipeLeft'])
+        case 'teachRecord':
+          // Letters are held still and S, T, M, N read as a fist: a swipe goes back instead.
+          return new Set([view.settings.kind === 'letter' ? 'swipeLeft' : 'fist'])
+        default:
+          return new Set(['fingers', 'fist', 'swipeLeft', 'swipeRight'])
+      }
+  }
+}
+
+/**
+ * The screen a view counts as when a new one must not inherit a gesture already shown
+ * (gestureInput spends them). Listening is still Ready, so a fist raised into view, which
+ * starts a movement and shows Listening, can still collapse the card.
+ */
+export function gestureScreen(view: View): View['kind'] {
+  return isListening(view) ? 'ready' : view.kind
+}
+
+/** Views that take signs from recognition. Teach › record feeds its own recorder instead. */
+export function takesSigns(view: View): boolean {
+  switch (view.kind) {
+    case 'ready':
+    case 'recognizing':
+    case 'building':
+    case 'sentence':
+    case 'dictation':
+      return true
+    case 'settings':
+      return view.settings.page === 'teachSpell'
+    default:
+      return false
   }
 }
 
@@ -140,16 +182,27 @@ export const STARTER_WORDS = [
   'SEND', 'EMAIL', 'TEXT', 'FRIEND', 'PLAY', 'MUSIC', 'CALENDAR', 'GOOD'
 ]
 export const LETTERS = 'ABCDEFGHIKLMNOPQRSTUVWXY'.split('')
+const TEACH_LABELS = [...STARTER_WORDS, ...LETTERS]
 const TEACH_PAGE = 4
+/** Repetitions recorded per sign (TeachSession defaults). */
+const TEACH_REPS = { word: 10, letter: 5 } as const
+const MAX_TEACH_WORD = 32
+
+/** Recorded templates per label (one per kept repetition). */
+export function countSigns(templates: readonly SignTemplate[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const t of templates) counts[t.label] = (counts[t.label] ?? 0) + 1
+  return counts
+}
+
+const hasLetters = (templates: readonly SignTemplate[]): boolean => templates.some((t) => t.kind === 'letter')
 
 export function settingsOptions(page: SettingsPage): string[] {
   switch (page.page) {
     case 'root':
       return SETTINGS_ROOT
-    case 'teachPick': {
-      const all = [...STARTER_WORDS, ...LETTERS]
-      return [...all.slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
-    }
+    case 'teachPick':
+      return [...TEACH_LABELS.slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
     case 'newGesturePick':
       return [...page.tasks.slice(0, 4), 'Sign a new task']
     case 'gestures':
@@ -234,7 +287,9 @@ export class Controller {
   }
 
   private idleView(): View {
-    return getApp().mode === 'dictation' ? { kind: 'dictation', text: '' } : { kind: 'ready' }
+    if (getApp().mode === 'dictation') return { kind: 'dictation', text: '' }
+    // A quick-menu pick keeps waiting for its details, also after a movement that was no sign.
+    return this.intentPrefix ? { kind: 'ready', hint: `${this.intentPrefix}: sign the details` } : { kind: 'ready' }
   }
 
   private resetPhrase(): void {
@@ -290,15 +345,10 @@ export class Controller {
         else if (g === 'shape' && input.shapeId) void this.runShortcut(input.shapeId, 'collapsed')
         return
       case 'ready':
-        if (g === 'thumbsUp') this.setView({ kind: 'quickMenu', options: QUICK_MENU })
-        else if (g === 'fist') this.collapse()
-        else if (g === 'swipeLeft') this.cycleMode(-1)
-        else if (g === 'swipeRight') this.cycleMode(1)
-        else if (g === 'swipeUp') this.openSettings()
-        else if (g === 'shape' && input.shapeId) void this.runShortcut(input.shapeId, 'ready')
-        return
+        return this.readyGesture(input)
       case 'recognizing':
       case 'building':
+        if (isListening(view)) return this.readyGesture(input)
         if (g === 'thumbsUp' || g === 'swipeRight' || g === 'handsDown') this.endPhrase()
         else if (g === 'swipeLeft') this.deleteLastToken()
         else if (g === 'fist') this.cancel()
@@ -350,13 +400,27 @@ export class Controller {
       case 'toast':
         if (g === 'fist') this.leaveToast(view.returnTo)
         return
-      case 'settings':
+      case 'settings': {
+        const page = view.settings
         if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
         else if (g === 'fist') this.settingsBack()
-        else if (g === 'swipeRight' && view.settings.page === 'teachPick') this.teachPage(1)
-        else if (g === 'swipeLeft' && view.settings.page === 'teachPick') this.teachPage(-1)
+        else if (page.page === 'teachPick' && (g === 'swipeLeft' || g === 'swipeRight')) this.teachPage(g === 'swipeRight' ? 1 : -1)
+        else if (page.page === 'teachSpell' && g === 'swipeLeft') this.deleteTeachLetter(page.letters)
+        else if (page.page === 'teachSpell' && g === 'thumbsUp') this.confirmTeachWord()
+        else if (page.page === 'teachRecord' && g === 'swipeLeft') this.settingsBack()
         return
+      }
     }
+  }
+
+  private readyGesture(input: GestureInput): void {
+    const g = input.gesture
+    if (g === 'thumbsUp') this.setView({ kind: 'quickMenu', options: QUICK_MENU })
+    else if (g === 'fist') this.collapse()
+    else if (g === 'swipeLeft') this.cycleMode(-1)
+    else if (g === 'swipeRight') this.cycleMode(1)
+    else if (g === 'swipeUp') this.openSettings()
+    else if (g === 'shape' && input.shapeId) void this.runShortcut(input.shapeId, 'ready')
   }
 
   /** Mouse taps. */
@@ -417,10 +481,20 @@ export class Controller {
     if (view.kind === 'ready') this.setView({ kind: 'recognizing', token: null, isWord: false })
   }
 
+  /** The movement after signStart was not a known sign, or was dropped: stop listening. */
+  signRejected(): void {
+    if (isListening(this.view)) this.setView(this.idleView())
+  }
+
   /** A sign / letter was recognized. */
   token(token: Token): void {
     const view = this.view
     const mode = getApp().mode
+    if (view.kind === 'settings') {
+      // Teach a sign › Spell a new word.
+      if (view.settings.page === 'teachSpell' && token.kind === 'letter') this.setTeachWord(view.settings.letters + token.text)
+      return
+    }
     if (mode === 'dictation' && (view.kind === 'dictation' || view.kind === 'ready')) {
       const text = token.kind === 'letter' ? token.text : `${token.text} `
       const current = view.kind === 'dictation' ? view.text : ''
@@ -445,9 +519,11 @@ export class Controller {
     })
   }
 
-  /** Recognition was unsure between several signs: ask the user. */
+  /** Recognition was unsure between several signs: ask the user while a phrase is being signed. */
   ambiguousSign(options: string[]): void {
-    if (!['ready', 'recognizing', 'building'].includes(this.view.kind)) return
+    // Dictation types as you sign: a question per word would stall it, so it takes the best guess.
+    if (getApp().mode === 'dictation') return this.token({ text: options[0], kind: 'word' })
+    if (!['ready', 'recognizing', 'building', 'sentence'].includes(this.view.kind)) return
     this.setView({ kind: 'didYouMean', variant: 'list', options: options.slice(0, 3), purpose: 'sign' })
   }
 
@@ -620,7 +696,7 @@ export class Controller {
       case 'quickMenu':
         this.intentPrefix = choice
         this.tokens = []
-        this.setView({ kind: 'ready', hint: `${choice}: sign the details` })
+        this.setView(this.idleView())
         return
       case 'done':
         if (index === 0 && view.view) void this.services.openTarget(view.view)
@@ -776,8 +852,9 @@ export class Controller {
   }
 
   /** A toast ends a flow: whatever phrase led to it is finished. */
-  private leaveToast(returnTo: 'collapsed' | 'ready'): void {
+  private leaveToast(returnTo: Extract<View, { kind: 'toast' }>['returnTo']): void {
     this.resetPhrase()
+    if (typeof returnTo === 'object') return this.setView({ kind: 'settings', settings: returnTo })
     this.setView(returnTo === 'collapsed' ? { kind: 'collapsed' } : this.idleView())
   }
 
@@ -786,23 +863,118 @@ export class Controller {
   private settingsBack(): void {
     const view = this.view
     if (view.kind !== 'settings') return
-    if (view.settings.page === 'root') return this.setView(this.idleView())
-    if (view.settings.page === 'gestureDetail') return void this.openGestureList()
+    const page = view.settings
+    if (page.page === 'root') return this.setView(this.idleView())
+    if (page.page === 'gestureDetail') return void this.openGestureList()
+    if (page.page === 'teachRecord') return this.setView({ kind: 'settings', settings: this.teachList(page.label) })
+    if (page.page === 'teachSpell') return this.setView({ kind: 'settings', settings: this.teachList() })
     this.openSettings()
   }
 
   private teachPage(dir: 1 | -1): void {
     const view = this.view
     if (view.kind !== 'settings' || view.settings.page !== 'teachPick') return
-    const total = STARTER_WORDS.length + LETTERS.length
-    const offset = Math.min(Math.max(0, view.settings.offset + dir * TEACH_PAGE), total - 1)
-    this.setView({ kind: 'settings', settings: { page: 'teachPick', offset: offset - (offset % TEACH_PAGE) } })
+    const offset = Math.min(Math.max(0, view.settings.offset + dir * TEACH_PAGE), TEACH_LABELS.length - 1)
+    this.setView({ kind: 'settings', settings: { ...view.settings, offset: offset - (offset % TEACH_PAGE) } })
+  }
+
+  /** The teach list on the page showing `label` (the first page for a spelled word), with fresh counts. */
+  private teachList(label?: string): SettingsPage {
+    const index = Math.max(0, label ? TEACH_LABELS.indexOf(label) : 0)
+    return { page: 'teachPick', offset: index - (index % TEACH_PAGE), recorded: countSigns(getApp().templates) }
+  }
+
+  private teachRecordPage(): Extract<SettingsPage, { page: 'teachRecord' }> | null {
+    const view = this.view
+    return view.kind === 'settings' && view.settings.page === 'teachRecord' ? view.settings : null
+  }
+
+  /** Teach › Spell a new word: the word so far, fingerspelled or typed (letters, digits, spaces). */
+  setTeachWord(text: string): void {
+    const view = this.view
+    if (view.kind !== 'settings' || view.settings.page !== 'teachSpell') return
+    const letters = text
+      .toUpperCase()
+      .replace(/[^A-Z0-9 '-]/g, '')
+      .replace(/\s+/g, ' ')
+      .trimStart()
+      .slice(0, MAX_TEACH_WORD)
+    this.setView({ kind: 'settings', settings: { ...view.settings, letters } })
+  }
+
+  /**
+   * Swipe left on Spell a new word deletes a letter, and past the start goes back to the list:
+   * a fist can't always, since a taught S held there is a letter, not a fist.
+   */
+  private deleteTeachLetter(letters: string): void {
+    if (letters) this.setTeachWord(letters.slice(0, -1))
+    else this.settingsBack()
+  }
+
+  /** Thumbs up (or Return) on Spell a new word: record that word. */
+  confirmTeachWord(): void {
+    const view = this.view
+    if (view.kind !== 'settings' || view.settings.page !== 'teachSpell') return
+    const label = view.settings.letters.trim()
+    if (!label) return this.notify('Spell or type the word first')
+    this.setView({ kind: 'settings', settings: { page: 'teachRecord', label, kind: 'word', done: 0, total: TEACH_REPS.word } })
+  }
+
+  /** Teach › record: the recorder heard a movement start. */
+  teachListening(): void {
+    const page = this.teachRecordPage()
+    if (page) this.setView({ kind: 'settings', settings: { ...page, listening: true } })
+  }
+
+  /**
+   * Teach › record: a repetition was judged. `done` is shown as given: it can stay flat, or
+   * drop when a better-agreeing group of repetitions takes over.
+   */
+  teachProgress(done: number, reason?: string): void {
+    const page = this.teachRecordPage()
+    if (page) this.setView({ kind: 'settings', settings: { ...page, done, listening: false, reason } })
+  }
+
+  /** Teach › record finished: add the new templates to signs.json, then back to the teach list. */
+  async teachLearned(label: string, learned: SignTemplate[]): Promise<void> {
+    const view = this.view
+    let error: string | null = null
+    try {
+      // Merge with the file, not the store: a pack may have been imported meanwhile.
+      const saved = await window.fastasl?.getTemplates()
+      const templates = mergeTemplates(saved?.templates ?? getApp().templates, learned)
+      await window.fastasl?.saveTemplates({ version: 1, templates })
+      setApp({ templates })
+    } catch (err) {
+      error = errorText(err)
+    }
+    if (this.view !== view) return // left the page meanwhile
+    this.showToast({
+      kind: 'toast',
+      title: error ? `Couldn't save ${label}` : `Learned ${label}`,
+      subtitle: error ?? `${learned.length} recordings saved`,
+      ok: !error,
+      returnTo: this.teachList(label)
+    })
+  }
+
+  /** Loads the recorded signs (signs.json) into the store; recognition follows it, and so does an open teach page. */
+  async loadTemplates(): Promise<void> {
+    const saved = await window.fastasl?.getTemplates().catch(() => null)
+    if (!saved) return
+    const { templates } = saved
+    setApp({ templates })
+    const view = this.view
+    if (view.kind !== 'settings') return
+    const page = view.settings
+    if (page.page === 'teachPick') this.setView({ kind: 'settings', settings: { ...page, recorded: countSigns(templates) } })
+    if (page.page === 'teachSpell') this.setView({ kind: 'settings', settings: { ...page, canSpell: hasLetters(templates) } })
   }
 
   private settingsPick(page: SettingsPage, index: number): void {
     switch (page.page) {
       case 'root':
-        if (index === 0) this.setView({ kind: 'settings', settings: { page: 'teachPick', offset: 0 } })
+        if (index === 0) this.setView({ kind: 'settings', settings: this.teachList() })
         else if (index === 1) this.startNewGesture()
         else if (index === 2) void this.openGestureList()
         else if (index === 3) void this.openCameraSettings()
@@ -812,14 +984,12 @@ export class Controller {
         const options = settingsOptions(page)
         const label = options[index]
         if (index === options.length - 1) {
-          this.setView({ kind: 'settings', settings: { page: 'teachSpell', letters: '' } })
+          const canSpell = hasLetters(getApp().templates)
+          this.setView({ kind: 'settings', settings: { page: 'teachSpell', letters: '', canSpell } })
           return
         }
         const kind = label.length === 1 ? 'letter' : 'word'
-        this.setView({
-          kind: 'settings',
-          settings: { page: 'teachRecord', label, kind, done: 0, total: kind === 'letter' ? 5 : 10 }
-        })
+        this.setView({ kind: 'settings', settings: { page: 'teachRecord', label, kind, done: 0, total: TEACH_REPS[kind] } })
         return
       }
       case 'newGesturePick': {

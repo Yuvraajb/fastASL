@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_SETTINGS, getSettings } from './store'
+import { createTemplatePack, TEMPLATE_DIMS } from '@shared/templatePack'
+import type { SignTemplate } from '@shared/types'
+import { DEFAULT_SETTINGS, getSettings, getTemplates, importTemplatePack, saveTemplates } from './store'
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 
@@ -37,4 +39,38 @@ describe('getSettings', () => {
       expect(getSettings()).toMatchObject({ cameraSource: { kind: 'builtin' }, mode: 'spell' })
     }
   )
+})
+
+describe('importTemplatePack', () => {
+  let dir: string
+  const letter = (id: string): SignTemplate => ({
+    id,
+    label: 'A',
+    kind: 'letter',
+    frames: [new Array<number>(TEMPLATE_DIMS.letter).fill(0.5)],
+    createdAt: 1
+  })
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'fastasl-templates-'))
+    vi.stubEnv('FASTASL_DATA_DIR', dir)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('adds the templates whose id is new', () => {
+    saveTemplates({ version: 1, templates: [letter('a')] })
+    expect(importTemplatePack(createTemplatePack([letter('a'), letter('b')]))).toEqual({ added: 1, skipped: 1 })
+    expect(getTemplates().templates.map((t) => t.id)).toEqual(['a', 'b'])
+  })
+
+  it('rejects an invalid pack and leaves the store alone', () => {
+    saveTemplates({ version: 1, templates: [letter('a')] })
+    const pack = createTemplatePack([{ ...letter('b'), frames: [[1, 2, 3]] }])
+    expect(importTemplatePack(pack)).toEqual(new Error('templates[0]: frames[0] must have 63 numbers'))
+    expect(importTemplatePack({ format: 'zip' })).toBeInstanceOf(Error)
+    expect(getTemplates().templates.map((t) => t.id)).toEqual(['a'])
+  })
 })

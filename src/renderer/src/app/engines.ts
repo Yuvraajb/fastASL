@@ -2,12 +2,13 @@ import { CameraPipeline } from '../engine/camera/pipeline'
 import type { FrameSample } from '../engine/types'
 import type { Controller } from './controller'
 import { connectGestures } from './gestureInput'
+import { connectRecognition } from './recognitionInput'
 import { live } from './live'
 import { getApp, useApp } from './store'
 
 /**
- * The single owner of the camera pipeline and the engines fed by it (gestures; recognition
- * from Phase 4). App starts it on launch, except in screenshot / ?mock=1 mode where the feed
+ * The single owner of the camera pipeline and the engines fed by it (gestures, sign
+ * recognition). App starts it on launch, except in screenshot / ?mock=1 mode where the feed
  * keeps its mock hand. Camera settings flow in through the store: controller.toggleCamera sets
  * cameraOn, controller.setCameraSource sets cameraSource. Engine output goes to the controller.
  */
@@ -21,7 +22,15 @@ export function subscribeFrames(fn: (frame: FrameSample) => void): () => void {
 /** Starts the camera with the store's settings and follows later changes. Returns a stop function. */
 export function startEngines(controller: Controller): () => void {
   const { cameraOn, cameraSource } = getApp()
-  const stopGestures = connectGestures(controller, subscribeFrames)
+  const recognition = connectRecognition(controller)
+  // Gestures reach the controller through recognition: a fist is not also an S, nor MUSIC a swipe.
+  const gestures = connectGestures({ gesture: recognition.gesture }, subscribeFrames)
+  // Subscribed after the gesture engine, so a gesture firing on a frame suspends recognition first.
+  const stopRecognition = subscribeFrames((frame) => {
+    // The hand often rests in a word's last shape (TOMORROW ends in a thumbs-up, YES in a fist),
+    // and a Spell mode letter is still held when it arrives (S is a fist).
+    if (recognition.update(frame)) gestures.spendShown()
+  })
   void camera.setEnabled(cameraOn)
   void camera.start(cameraSource)
   const unsubscribe = useApp.subscribe((s, prev) => {
@@ -33,7 +42,9 @@ export function startEngines(controller: Controller): () => void {
     unsubscribe()
     stopLog?.()
     camera.stop()
-    stopGestures()
+    gestures.stop()
+    stopRecognition()
+    recognition.stop()
   }
 }
 

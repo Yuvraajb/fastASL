@@ -1,12 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CameraSource } from '@shared/types'
+import type { CameraSource, SignTemplate } from '@shared/types'
 import { Timeline, type HandSpec } from '../engine/gestures/synthetic'
+import {
+  emptyFrames,
+  performHolds,
+  performSign,
+  rng,
+  timeline,
+  UNKNOWN,
+  WORDS,
+  type PerformOptions,
+  type ShapeName,
+  type SignSpec
+} from '../engine/recognition/synthetic'
+import { TeachSession } from '../engine/recognition/teach'
 import type { FrameSample } from '../engine/types'
 import { Controller, QUICK_MENU } from './controller'
 import { startEngines, subscribeFrames } from './engines'
 import { live } from './live'
 import { mockServices } from './services'
 import { getApp, setApp, useApp } from './store'
+import type { View } from './types'
 
 const camera = vi.hoisted(() => ({
   start: vi.fn(async () => {}),
@@ -30,7 +44,13 @@ let stop: (() => void) | null = null
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubGlobal('window', {
-    fastasl: { isDev: false, saveSettings: vi.fn(async () => ({})), getGestures: vi.fn(async () => []) }
+    fastasl: {
+      isDev: false,
+      saveSettings: vi.fn(async () => ({})),
+      getGestures: vi.fn(async () => []),
+      getTemplates: vi.fn(async () => ({ version: 1, templates: getApp().templates })),
+      saveTemplates: vi.fn(async () => {})
+    }
   })
   useApp.setState(useApp.getInitialState(), true)
   controller = new Controller(mockServices())
@@ -263,5 +283,280 @@ describe('gesture control', () => {
     tl.none(500).hold(700, THUMBS_UP)
     await playTimed()
     expect(getApp().view.kind).toBe('working')
+  })
+})
+
+/** Synthetic signers through the real wiring: pipeline subscribers → gesture engine, then RecognitionSession or TeachSession → Controller → store. */
+describe('sign recognition', () => {
+  const ASPECT = 640 / 480
+  const LISTENING: View = { kind: 'recognizing', token: null, isWord: false }
+
+  type Part = (t0: number) => FrameSample[]
+  type Extra = Partial<PerformOptions>
+  const sign = (spec: SignSpec, seed: number, extra: Extra = {}): Part => (t0) =>
+    performSign(spec, { random: rng(seed), aspect: ASPECT, t0, ...extra })
+  const hold = (shape: ShapeName, holdMs: number, seed: number, extra: Extra = {}): Part => (t0) =>
+    performHolds([{ shape, holdMs }], { random: rng(seed), aspect: ASPECT, t0, ...extra })
+  /** No hands in view. A shape already up when recognition starts must change or leave first. */
+  const rest: Part = (t0) => emptyFrames(t0, 300)
+  const seeds = (n: number, from: number): number[] => Array.from({ length: n }, (_, i) => from + i * 13)
+
+  function teach(label: string, kind: 'word' | 'letter', parts: Part[]): SignTemplate[] {
+    const session = new TeachSession(label, kind, parts.length, { aspect: ASPECT })
+    for (const frame of timeline(parts)) session.update(frame)
+    return session.finish(0)
+  }
+
+  const TEMPLATES = [
+    ...teach('HELLO', 'word', seeds(5, 1).map((s) => sign(WORDS.HELLO, s))),
+    ...teach('PLAY', 'word', seeds(5, 2).map((s) => sign(WORDS.PLAY, s))),
+    ...teach('L', 'letter', seeds(5, 3).map((s) => hold('L', 900, s))),
+    ...teach('S', 'letter', seeds(5, 4).map((s) => hold('S', 900, s)))
+  ]
+
+  let views: View[]
+  let stopViews: () => void
+  let clock: number
+
+  /** Every view the card showed since the test started. */
+  const teachViews = (): Extract<View, { kind: 'settings' }>['settings'][] =>
+    views.flatMap((v) => (v.kind === 'settings' && v.settings.page === 'teachRecord' ? [v.settings] : []))
+
+  /** Sends frames to every pipeline subscriber, in subscription order. */
+  function send(frames: FrameSample[]): void {
+    const subscribers = camera.subscribe.mock.calls.map(([fn]) => fn)
+    for (const frame of frames) subscribers.forEach((fn) => fn(frame))
+    clock = frames[frames.length - 1].t + 33
+  }
+
+  /** Performs the parts, with the hands down for gapMs after each. */
+  function play(parts: Part[], gapMs?: number): void {
+    send(timeline(parts, gapMs).map((f) => ({ ...f, t: f.t + clock })))
+  }
+
+  /** Performs a sign only until `until()` holds: the movement is still in progress. */
+  function playUntil(part: Part, until: () => boolean): void {
+    for (const frame of part(clock)) {
+      send([frame])
+      if (until()) return
+    }
+    throw new Error('the condition never held')
+  }
+
+  /** The camera goes away: the pipeline puts the mock hand back, then says the hands are gone. */
+  function cameraOff(): void {
+    Object.assign(live, { source: null, sourceWidth: 0, sourceHeight: 0, mock: true })
+    send([{ t: clock, hands: [] }])
+  }
+
+  beforeEach(() => {
+    Object.assign(live, { source: {} as CanvasImageSource, sourceWidth: 640, sourceHeight: 480, mock: false })
+    setApp({ templates: TEMPLATES })
+    views = []
+    clock = 0
+    stopViews = useApp.subscribe((s, prev) => {
+      if (s.view !== prev.view) views.push(s.view)
+    })
+  })
+
+  afterEach(() => {
+    stopViews()
+    Object.assign(live, { source: null, sourceWidth: 0, sourceHeight: 0, mock: true })
+  })
+
+  it('a known word: Listening, then the word as a lower-case token', () => {
+    stop = startEngines(controller)
+    play([sign(WORDS.HELLO, 900)])
+    expect(views).toEqual([LISTENING, { kind: 'recognizing', token: 'hello', isWord: true }])
+  })
+
+  it('a movement that is no sign: Listening, then back to Ready', () => {
+    stop = startEngines(controller)
+    play([sign(UNKNOWN.reach, 901)])
+    expect(views).toEqual([LISTENING, { kind: 'ready' }])
+  })
+
+  it('two words, then both hands down: the Sentence', () => {
+    stop = startEngines(controller)
+    play([sign(WORDS.HELLO, 902), sign(WORDS.PLAY, 903)], 1500)
+    expect(getApp().view).toMatchObject({ kind: 'sentence', sentence: 'Hello play' })
+  })
+
+  it('the camera going away mid-sign ends Listening', () => {
+    stop = startEngines(controller)
+    playUntil(sign(WORDS.HELLO, 980), () => views.length > 0)
+    expect(getApp().view).toEqual(LISTENING)
+    cameraOff()
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('a new camera session mid-sign ends Listening', () => {
+    stop = startEngines(controller)
+    playUntil(sign(WORDS.HELLO, 981), () => views.length > 0)
+    live.source = {} as CanvasImageSource
+    send([{ t: clock, hands: [] }])
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('a fist raised into view collapses the card: Listening neither swallows it nor reads an S', () => {
+    stop = startEngines(controller)
+    play([hold('S', 2500, 904, { raiseMs: 400 })])
+    expect(views[0]).toEqual(LISTENING)
+    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    expect(views.some((v) => v.kind === 'recognizing' && v.token !== null)).toBe(false)
+  })
+
+  it('a fist that cancels a phrase is not also an S in the next view', () => {
+    stop = startEngines(controller)
+    controller.token({ text: 'hello', kind: 'word' })
+    play([rest, hold('S', 3000, 930)])
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('Command mode: a held L arrives once a control gesture with that shape would have fired', () => {
+    stop = startEngines(controller)
+    play([rest, hold('L', 2500, 905)])
+    expect(views).toEqual([{ kind: 'recognizing', token: 'L', isWord: false }])
+  })
+
+  it('Spell mode: a held letter arrives once', () => {
+    setApp({ mode: 'spell' })
+    stop = startEngines(controller)
+    play([rest, hold('L', 3000, 906)])
+    expect(views).toEqual([{ kind: 'recognizing', token: 'L', isWord: false }])
+  })
+
+  it('a sign that sweeps a flat hand sideways (MUSIC) is the word, not a swipe', () => {
+    setApp({ templates: [...TEMPLATES, ...teach('MUSIC', 'word', seeds(5, 7).map((s) => sign(WORDS.MUSIC, s)))] })
+    stop = startEngines(controller)
+    play([sign(WORDS.MUSIC, 940)])
+    expect(getApp().view).toEqual({ kind: 'recognizing', token: 'music', isWord: true })
+    expect(getApp().mode).toBe('command')
+    play([sign(WORDS.MUSIC, 941)])
+    expect(getApp().view).toMatchObject({ kind: 'building', current: 'music', sentence: 'Music music' })
+  })
+
+  it('a word that ends in a thumbs-up (TOMORROW) and stays up does not also end the phrase', () => {
+    setApp({ templates: [...TEMPLATES, ...teach('TOMORROW', 'word', seeds(5, 8).map((s) => sign(WORDS.TOMORROW, s)))] })
+    stop = startEngines(controller)
+    for (const text of ['meeting', 'at']) controller.token({ text, kind: 'word' })
+    play([sign(WORDS.TOMORROW, 11, { restAfterMs: 1500 })])
+    expect(getApp().view).toMatchObject({ kind: 'building', sentence: 'Meeting at tomorrow' })
+  })
+
+  it('a swipe that is no sign still switches the mode, once its movement ends', () => {
+    stop = startEngines(controller)
+    const palm: HandSpec = { pose: 'openPalm', noise: 0.002, x: 0.7 }
+    const swipe: Part = (t0) =>
+      new Timeline({ aspect: ASPECT })
+        .hold(300, palm)
+        .move(250, palm, { x: 0.3 })
+        .hold(800, { ...palm, x: 0.3 })
+        .frames.map((f) => ({ ...f, t: f.t + t0 }))
+    play([swipe])
+    expect(getApp().mode).toBe('dictation')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+  })
+
+  it('two signs it cannot tell apart: Did you mean, with lower-case options', () => {
+    const reps = seeds(5, 5).map((s) => sign(WORDS.PLAY, s))
+    setApp({ templates: [...teach('PLAY', 'word', reps), ...teach('GAME', 'word', reps)] })
+    stop = startEngines(controller)
+    play([sign(WORDS.PLAY, 960)])
+    const view = getApp().view
+    expect(view).toMatchObject({ kind: 'didYouMean', purpose: 'sign' })
+    expect(view.kind === 'didYouMean' && [...view.options].sort()).toEqual(['game', 'play'])
+  })
+
+  it('two letters it cannot tell apart: the best guess, without asking', () => {
+    const holds = seeds(5, 6).map((s) => hold('L', 900, s))
+    setApp({ mode: 'spell', templates: [...teach('L', 'letter', holds), ...teach('K', 'letter', holds)] })
+    stop = startEngines(controller)
+    play([rest, hold('L', 1500, 961)])
+    const view = getApp().view
+    expect(view).toMatchObject({ kind: 'recognizing', isWord: false })
+    expect(['K', 'L']).toContain(view.kind === 'recognizing' && view.token)
+  })
+
+  it('Dictation: two signs it cannot tell apart type the best guess', () => {
+    const reps = seeds(5, 5).map((s) => sign(WORDS.PLAY, s))
+    setApp({ mode: 'dictation', templates: [...teach('PLAY', 'word', reps), ...teach('GAME', 'word', reps)] })
+    controller.setView({ kind: 'dictation', text: '' })
+    stop = startEngines(controller)
+    play([sign(WORDS.PLAY, 962)])
+    expect(getApp().view).toEqual({ kind: 'dictation', text: expect.stringMatching(/^(play|game) $/) })
+  })
+
+  it('ignores signs in views that take none', () => {
+    const working: View = { kind: 'working', intent: 'x', steps: [] }
+    controller.setView(working)
+    stop = startEngines(controller)
+    play([sign(WORDS.HELLO, 907), hold('L', 1500, 908)])
+    expect(getApp().view).toBe(working)
+  })
+
+  it('Spell a new word: held letters are added at once', () => {
+    controller.setView({ kind: 'settings', settings: { page: 'teachSpell', letters: 'K', canSpell: true } })
+    stop = startEngines(controller)
+    play([rest, hold('L', 1500, 909)])
+    expect(getApp().view).toEqual({ kind: 'settings', settings: { page: 'teachSpell', letters: 'KL', canSpell: true } })
+  })
+
+  /** Fingerspelling in one hand: each letter held `holdMs`, the last one `lastMs`. */
+  const spell = (letters: string, holdMs: number, lastMs: number, seed: number): Part => (t0) =>
+    performHolds(
+      [...letters].map((shape, i) => ({ shape: shape as ShapeName, holdMs: i === letters.length - 1 ? lastMs : holdMs })),
+      { random: rng(seed), aspect: ASPECT, t0 }
+    )
+
+  it('Spell a new word: an S held on as the last letter is not also a fist (back)', () => {
+    controller.setView({ kind: 'settings', settings: { page: 'teachSpell', letters: '', canSpell: true } })
+    stop = startEngines(controller)
+    play([rest, spell('LS', 700, 2500, 970)])
+    expect(getApp().view).toEqual({ kind: 'settings', settings: { page: 'teachSpell', letters: 'LS', canSpell: true } })
+  })
+
+  it('Spell mode: an S held on as the last letter is not also a fist (cancel)', () => {
+    setApp({ mode: 'spell' })
+    stop = startEngines(controller)
+    play([rest, spell('LSLS', 700, 2500, 971)])
+    expect(getApp().view).toMatchObject({ kind: 'building', sentence: 'LSLS' })
+  })
+
+  it('Teach › record a word: listening and progress on the card, then the sign is saved and recognized', async () => {
+    setApp({ templates: [] })
+    controller.setView({ kind: 'settings', settings: { page: 'teachRecord', label: 'PLAY', kind: 'word', done: 0, total: 3 } })
+    stop = startEngines(controller)
+    play(seeds(3, 910).map((s) => sign(WORDS.PLAY, s)))
+    expect(teachViews().some((p) => p.page === 'teachRecord' && p.listening)).toBe(true)
+    expect(teachViews().flatMap((p) => (p.page === 'teachRecord' && p.listening === false ? [p.done] : []))).toEqual([1, 2, 3])
+    await vi.waitFor(() => expect(getApp().view).toMatchObject({ kind: 'toast', title: 'Learned PLAY' }))
+    expect(window.fastasl.saveTemplates).toHaveBeenCalledTimes(1)
+    expect(getApp().templates.map((t) => t.label)).toEqual(['PLAY', 'PLAY', 'PLAY'])
+
+    controller.setView({ kind: 'ready' })
+    play([sign(WORDS.PLAY, 950)])
+    expect(getApp().view).toEqual({ kind: 'recognizing', token: 'play', isWord: true })
+  })
+
+  it('Teach › record: the camera going away mid-repetition ends Listening', () => {
+    controller.setView({ kind: 'settings', settings: { page: 'teachRecord', label: 'PLAY', kind: 'word', done: 0, total: 3 } })
+    stop = startEngines(controller)
+    playUntil(sign(WORDS.PLAY, 982), () => teachViews().some((p) => p.page === 'teachRecord' && p.listening))
+    cameraOff()
+    expect(getApp().view).toMatchObject({ kind: 'settings', settings: { page: 'teachRecord', done: 0, listening: false } })
+  })
+
+  it('Teach › record a letter: the hand still up from the finger pick is not a repetition', async () => {
+    setApp({ templates: [] })
+    controller.setView({ kind: 'settings', settings: { page: 'teachPick', offset: 24, recorded: {} } })
+    stop = startEngines(controller)
+    play([rest])
+    // The page opens with a hand already up (it picked the letter).
+    controller.setView({ kind: 'settings', settings: { page: 'teachRecord', label: 'L', kind: 'letter', done: 0, total: 3 } })
+    play([hold('L', 2000, 920)])
+    expect(teachViews().every((p) => p.page === 'teachRecord' && p.done === 0)).toBe(true)
+    play(seeds(3, 921).map((s) => hold('L', 900, s)))
+    await vi.waitFor(() => expect(getApp().view).toMatchObject({ kind: 'toast', title: 'Learned L' }))
   })
 })

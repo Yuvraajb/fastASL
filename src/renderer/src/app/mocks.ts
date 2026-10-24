@@ -191,10 +191,31 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     pose: 'peace'
   },
   settings: { view: { kind: 'settings', settings: { page: 'root' } }, pick: { count: 1, progress: 0.4 }, pose: 'point' },
-  settingsTeach: { view: { kind: 'settings', settings: { page: 'teachPick', offset: 0 } }, pose: 'palm' },
+  settingsTeach: {
+    view: { kind: 'settings', settings: { page: 'teachPick', offset: 0, recorded: { YES: 10, HELLO: 20 } } },
+    pose: 'palm'
+  },
   settingsTeachRecord: {
     view: { kind: 'settings', settings: { page: 'teachRecord', label: 'MEETING', kind: 'word', done: 2, total: 10 } },
     pose: 'twoHands'
+  },
+  settingsTeachSpell: {
+    view: { kind: 'settings', settings: { page: 'teachSpell', letters: 'KRIS', canSpell: true } },
+    pose: 'c'
+  },
+  settingsTeachRetry: {
+    view: {
+      kind: 'settings',
+      settings: {
+        page: 'teachRecord',
+        label: 'HELLO',
+        kind: 'word',
+        done: 4,
+        total: 10,
+        reason: "That one didn't match the others. Try again."
+      }
+    },
+    pose: 'palm'
   },
   settingsNewGesture: {
     view: {
@@ -284,5 +305,7 @@ export const SCREENSHOT_ORDER: string[] = [
   'settingsGestures',
   'settingsCamera',
   'settingsSensitivity',
-  'missingKey'
+  'missingKey',
+  'settingsTeachSpell',
+  'settingsTeachRetry'
 ]

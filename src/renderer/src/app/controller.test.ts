@@ -1,17 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentEvent, CompletedTask, CustomGesture, IntentResult, Settings } from '@shared/types'
+import type {
+  AgentEvent,
+  CompletedTask,
+  CustomGesture,
+  IntentResult,
+  Settings,
+  SignTemplate,
+  TemplateStore
+} from '@shared/types'
 import {
   Controller,
   QUICK_MENU,
   SETTINGS_ROOT,
   activeGestures,
   assembleSentence,
+  gestureScreen,
   optionsFor,
+  takesSigns,
   type GestureName
 } from './controller'
 import { mockServices, type Services } from './services'
 import { getApp, setApp, useApp } from './store'
-import type { Token, View } from './types'
+import type { SettingsPage, Token, View } from './types'
 
 // Mirrors the controller's private timings.
 const TOAST_MS = 2600
@@ -40,7 +50,9 @@ function stubWindow() {
     getSettings: vi.fn(async () => SETTINGS),
     getGestures: vi.fn(async () => GESTURES),
     saveGestures: vi.fn(async (_gestures: CustomGesture[]) => {}),
-    getRecentTasks: vi.fn(async () => RECENT)
+    getRecentTasks: vi.fn(async () => RECENT),
+    getTemplates: vi.fn(async (): Promise<TemplateStore> => ({ version: 1, templates: [] })),
+    saveTemplates: vi.fn(async (_store: TemplateStore) => {})
   }
   vi.stubGlobal('window', { fastasl: api })
   return api
@@ -358,34 +370,6 @@ describe('settings', () => {
     expect(viewAs('settings').settings).toEqual({ page: 'sensitivity', current: 'high' })
   })
 
-  it('teach a sign pages with swipes and clamps at both ends', () => {
-    c.openSettings()
-    fingers(1)
-    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 0 })
-    expect(optionsFor(getApp().view)).toEqual(['YES', 'NO', 'HELLO', 'MEETING', 'Spell a new word'])
-    g('swipeLeft')
-    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 0 })
-    g('swipeRight')
-    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 4 })
-    for (let i = 0; i < 20; i++) g('swipeRight')
-    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 36 })
-    expect(optionsFor(getApp().view)).toEqual(['V', 'W', 'X', 'Y', 'Spell a new word'])
-  })
-
-  it('teach a sign: words need 10 samples, letters 5, last option spells a new word', () => {
-    c.setView({ kind: 'settings', settings: { page: 'teachPick', offset: 0 } })
-    fingers(4)
-    expect(viewAs('settings').settings).toEqual({ page: 'teachRecord', label: 'MEETING', kind: 'word', done: 0, total: 10 })
-
-    c.setView({ kind: 'settings', settings: { page: 'teachPick', offset: 16 } })
-    fingers(1)
-    expect(viewAs('settings').settings).toMatchObject({ label: 'A', kind: 'letter', total: 5 })
-
-    c.setView({ kind: 'settings', settings: { page: 'teachPick', offset: 0 } })
-    fingers(5)
-    expect(viewAs('settings').settings).toEqual({ page: 'teachSpell', letters: '' })
-  })
-
   it('new gesture lists recent tasks, then holds for the shape', async () => {
     c.openSettings()
     fingers(2)
@@ -432,11 +416,222 @@ describe('settings', () => {
   })
 })
 
-describe('phrase building', () => {
+describe('teach a sign', () => {
+  /** A stored template (frames don't matter to the controller). */
+  const tpl = (label: string, n: number): SignTemplate => ({
+    id: `${label}-${n}`,
+    label,
+    kind: label.length === 1 ? 'letter' : 'word',
+    frames: [],
+    createdAt: n
+  })
+  const RECORD_MEETING = { page: 'teachRecord', label: 'MEETING', kind: 'word', done: 0, total: 10 } as const
+  const RECORD_S = { page: 'teachRecord', label: 'S', kind: 'letter', done: 0, total: 5 } as const
+  /** S is letter 18 of the list after the 16 starter words: the page at offset 32. */
+  const S_PAGE = 32
+  /** Spell a new word with some letter taught. */
+  const spelling = (letters: string): SettingsPage => ({ page: 'teachSpell', letters, canSpell: true })
+
+  it('lists starter words and letters by page, with the recorded count per label', () => {
+    setApp({ templates: [tpl('YES', 1), tpl('YES', 2), tpl('V', 3)] })
+    c.openSettings()
+    fingers(1)
+    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 0, recorded: { YES: 2, V: 1 } })
+    expect(optionsFor(getApp().view)).toEqual(['YES', 'NO', 'HELLO', 'MEETING', 'Spell a new word'])
+    g('swipeLeft')
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 0 })
+    g('swipeRight')
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 4 })
+    for (let i = 0; i < 20; i++) g('swipeRight')
+    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 36, recorded: { YES: 2, V: 1 } })
+    expect(optionsFor(getApp().view)).toEqual(['V', 'W', 'X', 'Y', 'Spell a new word'])
+  })
+
+  it('records words 10 times and letters 5; the last option spells a new word', () => {
+    const list = (offset: number): View => ({ kind: 'settings', settings: { page: 'teachPick', offset, recorded: {} } })
+    c.setView(list(0))
+    fingers(4)
+    expect(viewAs('settings').settings).toEqual(RECORD_MEETING)
+    c.setView(list(16))
+    fingers(1)
+    expect(viewAs('settings').settings).toMatchObject({ label: 'A', kind: 'letter', total: 5 })
+    c.setView(list(0))
+    fingers(5)
+    expect(viewAs('settings').settings).toEqual({ page: 'teachSpell', letters: '', canSpell: false })
+    setApp({ templates: [tpl('S', 1)] })
+    c.setView(list(0))
+    fingers(5)
+    expect(viewAs('settings').settings).toEqual({ page: 'teachSpell', letters: '', canSpell: true })
+  })
+
+  it('shows the recorder listening, then each judged repetition with its reason', () => {
+    c.setView({ kind: 'settings', settings: RECORD_MEETING })
+    c.teachListening()
+    expect(viewAs('settings').settings).toEqual({ ...RECORD_MEETING, listening: true })
+    c.teachProgress(1)
+    expect(viewAs('settings').settings).toMatchObject({ done: 1, listening: false, reason: undefined })
+    c.teachListening()
+    c.teachProgress(1, 'Too short. Sign the whole word, then hold still.')
+    expect(viewAs('settings').settings).toMatchObject({ done: 1, listening: false, reason: expect.stringMatching(/^Too short/) })
+  })
+
+  it('ignores recorder updates on other pages', () => {
+    const root: View = { kind: 'settings', settings: { page: 'root' } }
+    c.setView(root)
+    c.teachListening()
+    c.teachProgress(3)
+    expect(getApp().view).toBe(root)
+  })
+
+  it('saves a learned sign next to the recorded ones, toasts, then shows its page of the list', async () => {
+    api.getTemplates.mockResolvedValue({ version: 1, templates: [tpl('YES', 1)] })
+    c.setView({ kind: 'settings', settings: { ...RECORD_MEETING, done: 10 } })
+    const learned = [tpl('MEETING', 10), tpl('MEETING', 11)]
+    await c.teachLearned('MEETING', learned)
+    const templates = [tpl('YES', 1), ...learned]
+    expect(api.saveTemplates).toHaveBeenCalledWith({ version: 1, templates })
+    expect(getApp().templates).toEqual(templates)
+    expect(viewAs('toast')).toMatchObject({ title: 'Learned MEETING', subtitle: '2 recordings saved', ok: true })
+    await settle(TOAST_MS)
+    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 0, recorded: { YES: 1, MEETING: 2 } })
+  })
+
+  it('reports a failed save and still returns to the list', async () => {
+    api.saveTemplates.mockRejectedValue(new Error('disk full'))
+    c.setView({ kind: 'settings', settings: { ...RECORD_S, done: 5 } })
+    await c.teachLearned('S', [tpl('S', 1)])
+    expect(viewAs('toast')).toMatchObject({ title: "Couldn't save S", subtitle: 'disk full', ok: false })
+    expect(getApp().templates).toEqual([])
+    g('fist')
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: S_PAGE })
+  })
+
+  it('goes back to the list with a fist from a word and a swipe left from a letter (a held S reads as a fist)', () => {
+    c.setView({ kind: 'settings', settings: RECORD_S })
+    expect(activeGestures(getApp().view)).toEqual(new Set(['swipeLeft']))
+    g('fist')
+    expect(viewAs('settings').settings).toEqual(RECORD_S)
+    g('swipeLeft')
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: S_PAGE })
+
+    c.setView({ kind: 'settings', settings: RECORD_MEETING })
+    expect(activeGestures(getApp().view)).toEqual(new Set(['fist']))
+    g('fist')
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 0 })
+  })
+
+  it('spell a new word: letters append, swipe left deletes one, thumbs up records it as a word', () => {
+    c.setView({ kind: 'settings', settings: spelling('') })
+    g('thumbsUp')
+    expect(getApp().notice).toBe('Spell or type the word first')
+    sign(letter('K'), letter('C'), word('hello'), letter('X'))
+    expect(viewAs('settings').settings).toEqual(spelling('KCX'))
+    g('swipeLeft')
+    fingers(2)
+    expect(viewAs('settings').settings).toEqual(spelling('KC'))
+    g('thumbsUp')
+    expect(viewAs('settings').settings).toEqual({ page: 'teachRecord', label: 'KC', kind: 'word', done: 0, total: 10 })
+    g('fist')
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 0 })
+  })
+
+  it('spell a new word: swipe left past the first letter goes back (a taught S held there is a letter, not a fist)', () => {
+    c.setView({ kind: 'settings', settings: spelling('S') })
+    g('swipeLeft')
+    expect(viewAs('settings').settings).toEqual(spelling(''))
+    g('swipeLeft')
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 0 })
+  })
+
+  it('spell a new word: typed text is upper-cased and cleaned up, and Return records it', () => {
+    c.setView({ kind: 'settings', settings: spelling('') })
+    c.setTeachWord('  cal  hacks!')
+    expect(viewAs('settings').settings).toEqual(spelling('CAL HACKS'))
+    c.confirmTeachWord()
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachRecord', label: 'CAL HACKS', kind: 'word' })
+  })
+
+  it('loads the recorded signs into the store', async () => {
+    api.getTemplates.mockResolvedValue({ version: 1, templates: [tpl('YES', 1)] })
+    await c.loadTemplates()
+    expect(getApp().templates).toEqual([tpl('YES', 1)])
+  })
+
+  it('reloaded signs (a tray import) update an open teach page', async () => {
+    c.setView({ kind: 'settings', settings: { page: 'teachPick', offset: 4, recorded: {} } })
+    api.getTemplates.mockResolvedValue({ version: 1, templates: [tpl('YES', 1), tpl('HELLO', 2), tpl('S', 3)] })
+    await c.loadTemplates()
+    expect(viewAs('settings').settings).toEqual({ page: 'teachPick', offset: 4, recorded: { YES: 1, HELLO: 1, S: 1 } })
+    c.setView({ kind: 'settings', settings: { page: 'teachSpell', letters: 'K', canSpell: false } })
+    await c.loadTemplates()
+    expect(viewAs('settings').settings).toEqual(spelling('K'))
+  })
+})
+
+describe('listening', () => {
   it('signStart in ready shows listening', () => {
     c.signStart()
     expect(getApp().view).toEqual({ kind: 'recognizing', token: null, isWord: false })
   })
+
+  it('returns to ready when the movement was no sign; a recognized sign stays', () => {
+    c.signStart()
+    c.signRejected()
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    c.signStart()
+    c.token(word('hello'))
+    c.signRejected()
+    expect(viewAs('recognizing').token).toBe('hello')
+  })
+
+  it('keeps a quick-menu pick waiting for its details', () => {
+    c.setView({ kind: 'quickMenu', options: QUICK_MENU })
+    fingers(2)
+    c.signStart()
+    c.signRejected()
+    expect(getApp().view).toEqual({ kind: 'ready', hint: `${QUICK_MENU[1]}: sign the details` })
+  })
+
+  it("keeps Ready's gestures: a fist raised into view collapses, a thumbs-up opens the quick menu", () => {
+    c.signStart()
+    expect(activeGestures(getApp().view)).toEqual(activeGestures({ kind: 'ready' }))
+    g('fist')
+    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    c.expand()
+    c.signStart()
+    g('thumbsUp')
+    expect(viewAs('quickMenu').options).toEqual(QUICK_MENU)
+  })
+
+  it('counts as Ready when a new screen needs a fresh gesture', () => {
+    expect(gestureScreen({ kind: 'recognizing', token: null, isWord: false })).toBe('ready')
+    expect(gestureScreen({ kind: 'recognizing', token: 'A', isWord: false })).toBe('recognizing')
+    expect(gestureScreen({ kind: 'settings', settings: { page: 'root' } })).toBe('settings')
+  })
+
+  it('feeds recognition only in views that take signs', () => {
+    const yes: View[] = [
+      { kind: 'ready' },
+      { kind: 'recognizing', token: null, isWord: false },
+      { kind: 'building', tokens: [], current: null, sentence: '' },
+      { kind: 'sentence', sentence: 'Hi', tokens: [] },
+      { kind: 'dictation', text: '' },
+      { kind: 'settings', settings: { page: 'teachSpell', letters: '', canSpell: true } }
+    ]
+    const no: View[] = [
+      { kind: 'collapsed' },
+      { kind: 'working', intent: 'x', steps: [] },
+      { kind: 'toast', title: 't', ok: true, returnTo: 'ready' },
+      { kind: 'quickMenu', options: QUICK_MENU },
+      { kind: 'settings', settings: { page: 'root' } },
+      { kind: 'settings', settings: { page: 'teachRecord', label: 'YES', kind: 'word', done: 0, total: 10 } }
+    ]
+    expect(yes.map(takesSigns)).toEqual(yes.map(() => true))
+    expect(no.map(takesSigns)).toEqual(no.map(() => false))
+  })
+})
+
+describe('phrase building', () => {
 
   it('first token -> recognizing, the next -> building with the assembled sentence', () => {
     c.token(word('meeting'))
@@ -497,7 +692,7 @@ describe('phrase building', () => {
 
   it('ending a phrase with nothing signed returns to ready', () => {
     c.signStart()
-    g('thumbsUp')
+    c.tap('proceed')
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
@@ -1059,6 +1254,14 @@ describe('did you mean', () => {
     expect(viewAs('building')).toMatchObject({ tokens: [word('hello')] })
   })
 
+  it('ambiguous sign on the Sentence card: asks, and the pick continues the phrase', () => {
+    signSentence(word('meeting'), word('tomorrow'))
+    c.ambiguousSign(['at', 'and'])
+    expect(viewAs('didYouMean').options).toEqual(['at', 'and'])
+    fingers(1)
+    expect(viewAs('building')).toMatchObject({ sentence: 'Meeting tomorrow at' })
+  })
+
   it('"Edit" on an ambiguous sign returns to the phrase', () => {
     sign(word('meeting'), word('at'))
     c.ambiguousSign(['three', 'tree'])
@@ -1160,6 +1363,13 @@ describe('dictation mode', () => {
     sign(word('hello'), letter('A'), letter('B'), word('world'), word('again'))
     expect(typeText.mock.calls.map((call) => call[0])).toEqual(['hello ', 'A', 'B', ' world ', 'again '])
     expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello AB world again ' })
+  })
+
+  it('types the best guess of an ambiguous sign instead of asking', () => {
+    const typeText = vi.spyOn(services, 'typeText')
+    c.ambiguousSign(['play', 'game'])
+    expect(typeText).toHaveBeenCalledWith('play ')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'play ' })
   })
 
   it('keeps only the last 120 characters on the card', () => {

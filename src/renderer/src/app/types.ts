@@ -8,9 +8,21 @@ export interface Token {
 
 export type SettingsPage =
   | { page: 'root' }
-  | { page: 'teachPick'; offset: number }
-  | { page: 'teachSpell'; letters: string }
-  | { page: 'teachRecord'; label: string; kind: 'word' | 'letter'; done: number; total: number }
+  /** `recorded`: templates per label, for the list's counts. */
+  | { page: 'teachPick'; offset: number; recorded: Record<string, number> }
+  /** `canSpell`: some letter is taught, so the word can be fingerspelled (else only typed). */
+  | { page: 'teachSpell'; letters: string; canSpell: boolean }
+  | {
+      page: 'teachRecord'
+      label: string
+      kind: 'word' | 'letter'
+      done: number
+      total: number
+      /** A movement is being recorded. */
+      listening?: boolean
+      /** Why the last repetition was not kept. */
+      reason?: string
+    }
   | { page: 'newGesturePick'; tasks: string[] }
   | { page: 'newGestureHold'; task: string; countdown: number; captured: boolean }
   | { page: 'gestures'; gestures: Pick<CustomGesture, 'id' | 'name' | 'task' | 'builtin'>[] }
@@ -47,7 +59,15 @@ export type View =
   | { kind: 'contextActions'; sentence: string; actions: string[] }
   | { kind: 'quickMenu'; options: string[] }
   | { kind: 'dictation'; text: string }
-  | { kind: 'toast'; title: string; subtitle?: string; meta?: string; ok: boolean; returnTo: 'collapsed' | 'ready' }
+  | {
+      kind: 'toast'
+      title: string
+      subtitle?: string
+      meta?: string
+      ok: boolean
+      /** Where the card goes afterwards: the pill, the idle view, or a settings page (after teaching a sign). */
+      returnTo: 'collapsed' | 'ready' | SettingsPage
+    }
   | { kind: 'settings'; settings: SettingsPage }
 
 export type ViewKind = View['kind']

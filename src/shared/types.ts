@@ -203,3 +203,5 @@ export type DevCommand =
   | { type: 'setView'; id: string }
   | { type: 'gesture'; gesture: SimGesture }
   | { type: 'toggleDevPanel' }
+  /** signs.json changed outside the renderer (tray pack import): reload it. */
+  | { type: 'templatesChanged' }

@@ -24,6 +24,7 @@ export default function App(): React.JSX.Element {
     let stopEngines: (() => void) | null = null
     if (window.fastasl?.nativeVibrancy) document.documentElement.dataset.vibrancy = '1'
     void window.fastasl?.getEnvStatus().then((keyStatus) => setApp({ keyStatus }))
+    void controller.loadTemplates()
     void window.fastasl?.getSettings().then((s) => {
       setApp({ mode: s.mode, sensitivity: s.sensitivity, cameraOn: s.cameraEnabled, cameraSource: s.cameraSource })
       if (liveCamera && !disposed) stopEngines = startEngines(controller)

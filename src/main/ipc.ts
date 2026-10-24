@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain, shell } from 'electron'
 import { IPC, type CardSize } from '@shared/ipc'
+import { createTemplatePack } from '@shared/templatePack'
 import type {
   AgentEvent,
   AgentRunRequest,
@@ -55,20 +56,12 @@ export function registerIpc(getOverlay: () => OverlayWindow | null, services: Ma
   ipcMain.handle(IPC.saveSettings, (_e, patch: Partial<Settings>) => store.saveSettings(patch))
   ipcMain.handle(IPC.getTemplates, () => store.getTemplates())
   ipcMain.handle(IPC.saveTemplates, (_e, value: TemplateStore) => store.saveTemplates(value))
-  ipcMain.handle(IPC.importPack, (_e, pack: TemplatePack) => {
-    if (pack?.format !== 'fastasl-template-pack' || !Array.isArray(pack.templates)) return 0
-    const current = store.getTemplates()
-    const ids = new Set(current.templates.map((t) => t.id))
-    const fresh = pack.templates.filter((t) => !ids.has(t.id))
-    store.saveTemplates({ version: 1, templates: [...current.templates, ...fresh] })
-    return fresh.length
+  ipcMain.handle(IPC.importPack, (_e, pack: unknown) => {
+    const result = store.importTemplatePack(pack)
+    if (result instanceof Error) throw result
+    return result.added
   })
-  ipcMain.handle(IPC.exportPack, (): TemplatePack => ({
-    format: 'fastasl-template-pack',
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    templates: store.getTemplates().templates
-  }))
+  ipcMain.handle(IPC.exportPack, (): TemplatePack => createTemplatePack(store.getTemplates().templates))
   ipcMain.handle(IPC.getGestures, () => store.getGestures())
   ipcMain.handle(IPC.saveGestures, (_e, list: CustomGesture[]) => store.saveGestures(list))
   ipcMain.handle(IPC.getRecentTasks, () => store.getRecentTasks())
