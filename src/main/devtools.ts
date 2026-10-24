@@ -33,6 +33,7 @@ export const DEV_VIEWS: { id: string; label: string }[] = [
   { id: 'settingsTeachSpell', label: 'Settings: spell a new word' },
   { id: 'settingsNewGesture', label: 'Settings: new gesture' },
   { id: 'settingsHoldShape', label: 'Settings: hold shape' },
+  { id: 'settingsShapeRefused', label: 'Settings: shape refused' },
   { id: 'settingsGestures', label: 'Settings: my gestures' },
   { id: 'settingsCamera', label: 'Settings: camera source' },
   { id: 'settingsSensitivity', label: 'Settings: sensitivity' },

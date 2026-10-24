@@ -31,6 +31,29 @@
   text-overflow: ellipsis;
 }
 
+/* Page dots (paged lists): one per page, the current one white. */
+.set-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.set-dots__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  transition:
+    width var(--dur) var(--ease-spring),
+    background-color var(--dur) var(--ease-out);
+}
+
+.set-dots__dot--on {
+  width: 12px;
+  border-radius: 2px;
+  background: var(--text);
+}
+
 .set-title__aside {
   display: flex;
   flex: none;

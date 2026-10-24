@@ -420,3 +420,79 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
     - 35-spellPending shows the spinner.
     - 36-dictationNoAccess and 37-dictationNoAutomation show the Accessibility and Automation notices whole, on two lines, with the whole card visible.
     - Nothing is typed anywhere, and the camera light stays off.
+
+## Phase 8 — Custom gestures (shape shortcuts with compiled replay)
+
+**Before you start**
+
+- Run `export FASTASL_DATA_DIR=~/fastasl-test`, then `FASTASL_LOG=1 npm run dev`, from a terminal. Sit about 60 cm from the camera in even light. Recording a shape needs a real hand; the dev hotkeys drive the menus only.
+- For steps 6, 7 and 9 you need `FACTORY_API_KEY` in `.env` and the droid CLI (Phase 6). The other steps need no key. Pick harmless tasks, such as "Open Calculator". Never use a task that sends something to someone else.
+- **Good shapes** are clear, match no control gesture and are none of your taught letters. Examples: Y (thumb and pinky out), "I love you" (thumb, index and pinky out), I (pinky up). Phase 4 taught L, A, B and S in this data folder, so those are refused (step 3).
+- **Shapes that are refused:** a fist, a thumbs up, an open palm, the peace sign, 1–4 fingers held up, a relaxed half-closed hand, and any letter taught in Teach a sign.
+- `gestures.json` in the data folder: a gesture's task and compiled steps are read each time it runs, so edits to them apply on the next trigger. Shapes are read at launch and each time My gestures opens: after adding or editing a shape by hand, open Settings › My gestures (or restart) before holding it.
+- Automated: `npx vitest run src/renderer/src/engine/gestures/customShapes.test.ts src/renderer/src/app/controller.test.ts src/renderer/src/app/engines.test.ts src/main/store.test.ts`. **Expected:** 4 files, 265 tests passed:
+  - 27 for the shapes: the recording check (including taught letters and malformed saved shapes), the matcher, and the calibration on synthetic signers.
+  - 180 for the controller: the countdown, refusals and retry, saving, the timeout, Sign a new task and paging.
+  - 46 for the engines, through the real wiring with synthetic camera frames: a shape recorded and fired, a fist refused, a taught letter refused, and a hand-edited gesture without a shape that breaks nothing.
+  - 12 for the main-process store, including how `gestures.json` entries edited by hand are read.
+
+### The built-in peace sign
+
+1. **No key needed.** Even without any key, in Ready hold a V (peace sign) still for about 0.8 s, or press Ctrl+Opt+V. **Expected:** no Working card, just the toast "Screenshot taken" / "Desktop · fastASL Screenshot … .png" with "compiled · 0.x s", and that file on the Desktop. If Screen Recording is denied, the toast is "Shortcut failed" and names the setting. Delete the screenshot.
+
+### Recording a shape
+
+2. **The countdown.** Press Ctrl+Opt+↑ (Settings), then Ctrl+Opt+2 (New gesture). **Expected:** "New gesture" / "Pick a task", with recent completed tasks (none on a fresh data folder) and "Sign a new task" last. To get a task on the list, write `~/fastasl-test/tasks.json`: `[{ "intent": "Open Calculator", "title": "Opened Calculator", "at": 0, "evidence": [] }]` and reopen New gesture. Hold up 1 finger (or press Ctrl+Opt+1). **Expected:**
+   - "Hold your new shape still", with "Open Calculator" under it and the hint "swipe ← back".
+   - 3, 2 and 1 in the feed's top-right corner, one second each.
+   - Then a dot whose ring fills over one second while the shape is recorded.
+3. **Refusals.** Start a recording as in step 2 for each case below. **Expected,** once the ring fills:
+   - A fist held throughout gives "That reads as a fist, a control gesture. Try another shape." and the hint "thumbs up = try again · fist = back". Keep the fist up for 3 s: nothing happens. Lower your hand and make a thumbs up: the countdown starts again.
+   - An open palm, a V and 2 fingers held together give "an open palm", "the peace sign" and "2 fingers".
+   - A relaxed, half-closed hand gives "That looks like a resting hand. Make a clearer shape."
+   - Changing shape halfway through the ring gives "Your hand moved. Hold the shape still."
+   - An L (a letter taught in Phase 4, step 9) gives "That reads as the letter L. Try another shape." Without taught letters, an L is accepted.
+   - No hand in view gives "No hand seen. Hold one hand up in view."
+   - A fist made during the countdown does nothing. Swipe left during the countdown: back to the task list, and the countdown stops.
+4. **Save.** Record a Y, held still through the countdown and the ring. **Expected:**
+   - The toast "Gesture saved" / "Gesture 2 · Open Calculator", then My gestures listing "Peace sign" (built-in) and "Gesture 2".
+   - In `~/fastasl-test/gestures.json`, the new entry has `"name": "Gesture 2"`, the task, 10 `shape` vectors of 63 numbers, and no `compiled`.
+   - Keep holding the Y through the toast: nothing runs.
+5. **Duplicate.** Record the same Y again for any task. **Expected:** "Too close to “Gesture 2”. Try another shape." Make a fist to go back.
+
+### Running a shape
+
+6. **First run (agent).** This needs the key. Make fists until you are back in Ready, then hold the Y still for about 0.8 s. **Expected:**
+   - Working shows "Thinking", then "Opening Calculator". Calculator opens.
+   - The toast "Opened Calculator" appears without "compiled", and no Done card.
+   - `gestures.json` now has `"compiled": [{ "tool": "open_app", … }]` for Gesture 2.
+7. **Compiled replay.** Quit Calculator, then hold the Y again. **Expected:**
+   - There is no Working card, and the toast comes at once with "compiled · 0.x s".
+   - Keep holding through the toast until Ready is back: it doesn't run again. Lower your hand and make the Y again: it runs again.
+   - Collapse the card (fist) and hold the Y: the toast appears, then the pill again.
+8. **A replay that fails.** In `gestures.json`, change Gesture 2's compiled step to `"args": {}` and hold the Y. **Expected:** Working (the agent takes over), Calculator opens, and the file holds a valid compiled step again.
+9. **Without the key.** Remove `FACTORY_API_KEY` from `.env` and restart. Record a new gesture (an "I love you" shape) for any task, go back to Ready and hold it. **Expected:** a toast with an X, "Shortcut failed" / "Add FACTORY_API_KEY to .env". The peace sign still takes screenshots.
+
+### Other ways in
+
+10. **Sign a new task.** Switch to Dictation (Ctrl+Opt+→), then press Ctrl+Opt+↑, Ctrl+Opt+2, and hold up the number of "Sign a new task". **Expected:** Ready in Command mode ("Command" flashes in the header) with the hint "Sign the task for your gesture". Press Ctrl+Opt+S twice, Ctrl+Opt+H, then Ctrl+Opt+T. **Expected:**
+    - The recording page, with Claude's task as its subtitle (for example "Schedule a meeting tomorrow…"). No Agent ready card, and the agent doesn't run.
+    - Without `ANTHROPIC_API_KEY`, the subtitle is "Meeting tomorrow", with the notice "Add ANTHROPIC_API_KEY to .env".
+
+    Swipe left, then make fists back to Ready. **Expected:** a plain Ready without the hint. Do it again, but make a fist on the Sentence card. **Expected:** the hint is gone, and the next phrase is an ordinary command.
+11. **From Done.** After a completed command (Phase 6, step 6), hold up 3 fingers on the Done card. **Expected:** New gesture, with that command's task first.
+12. **Camera off.** Turn the camera off (camera button on Ready), then open Settings › New gesture › 1. **Expected:** after the countdown and about 2.5 s, "The camera is off. Turn it on first."
+
+### My gestures
+
+13. **Paging, Test it and Delete.** Create gestures until there are at least 5 with the peace sign, or add entries such as `{ "id": "g3", "name": "Gesture 3", "task": "Open Notes", "createdAt": 1 }` to `gestures.json`. An entry with no shape is listed and Test it runs it, but there is nothing to hold; an entry without an `id` or `task` is left out. Open Settings › My gestures (3 fingers). **Expected:**
+    - Four rows, page dots, and the hint "hold 1–4 fingers · swipe = more · fist = back".
+    - Swipe right: the next page. Hold up a number: that gesture's page, where "Test it" runs the gesture (a toast, then Ready).
+    - Open a custom gesture and pick Delete (2 fingers): back to the list without it. Holding its shape in Ready now does nothing.
+    - The peace sign's page offers only Test it.
+    - The saved Y still runs its shortcut in Ready, and a new recording still saves: the hand-added entries break nothing.
+14. **Screenshots.** Run `npm run screens`. **Expected:**
+    - 40 files.
+    - 28 shows the countdown over an OK hand, and 29 shows four gestures with page dots.
+    - New: 38 (recording), 39 (the fist refusal) and 40 ("Gesture saved").
+    - The camera light stays off.

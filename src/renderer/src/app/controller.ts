@@ -4,6 +4,7 @@ import type {
   AgentResult,
   AgentStep,
   CameraSource,
+  CustomGesture,
   EnvKey,
   IntentResult,
   Mode,
@@ -11,10 +12,13 @@ import type {
   ShortcutRunResult,
   SignTemplate
 } from '@shared/types'
+import { CAPTURE_REASONS, type ShapeCapture } from '../engine/gestures/customShapes'
 import { getApp, setApp } from './store'
 import type { Services } from './services'
 import type { SettingsPage, Token, View } from './types'
 import { live } from './live'
+
+type HoldPage = Extract<SettingsPage, { page: 'newGestureHold' }>
 
 /** Hands-only control gestures produced by the gesture engine (Phase 3) or dev hotkeys. */
 export type GestureName =
@@ -69,6 +73,15 @@ const INSERT_TEXT = 'Insert text'
 const MORE_OPTIONS = 'More options'
 /** Claude's app-specific actions shown between Insert text and More options (4 rows, 4 fingers). */
 const MAX_SUGGESTED_ACTIONS = 2
+
+/** New gesture › hold: 3, 2, 1, then app/shapeInput records the shape (CAPTURE_MS). */
+const COUNTDOWN_FROM = 3
+const COUNTDOWN_TICK_MS = 1000
+/** No verdict this long into a recording means no camera frames came (camera off or failed). */
+const CAPTURE_TIMEOUT_MS = 2500
+const SIGN_TASK_HINT = 'Sign the task for your gesture'
+/** Gestures per page of My gestures (two-line rows). */
+export const GESTURE_PAGE = 4
 
 const isInsertAction = (action: string): boolean => /\b(insert|type)\b/i.test(action)
 const isMoreAction = (action: string): boolean => /\bmore\b/i.test(action)
@@ -188,6 +201,10 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
         case 'teachRecord':
           // Letters are held still and S, T, M, N read as a fist: a swipe goes back instead.
           return new Set([view.settings.kind === 'letter' ? 'swipeLeft' : 'fist'])
+        case 'newGestureHold':
+          // The new shape may read as a fist (or a thumbs up) while it is formed: until a recording
+          // is refused, only a swipe goes back.
+          return new Set(view.settings.reason ? ['thumbsUp', 'fist', 'swipeLeft'] : ['swipeLeft'])
         default:
           return new Set(['fingers', 'fist', 'swipeLeft', 'swipeRight'])
       }
@@ -197,10 +214,20 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
 /**
  * The screen a view counts as when a new one must not inherit a gesture already shown
  * (gestureInput spends them). Listening is still Ready, so a fist raised into view, which
- * starts a movement and shows Listening, can still collapse the card.
+ * starts a movement and shows Listening, can still collapse the card. A refused shape is
+ * its own screen: the shape (a thumbs up, a fist) is often still held as the reason appears.
  */
-export function gestureScreen(view: View): View['kind'] {
-  return isListening(view) ? 'ready' : view.kind
+export function gestureScreen(view: View): string {
+  if (isListening(view)) return 'ready'
+  if (view.kind === 'settings' && view.settings.page === 'newGestureHold') {
+    return view.settings.reason ? 'shapeRefused' : 'shapeHold'
+  }
+  return view.kind
+}
+
+/** New gesture › hold is recording the shape (app/shapeInput feeds it the camera frames). */
+export function isCapturingShape(view: View): view is { kind: 'settings'; settings: HoldPage } {
+  return view.kind === 'settings' && view.settings.page === 'newGestureHold' && view.settings.countdown === 0 && !view.settings.reason
 }
 
 /** Views that take signs from recognition. Teach › record feeds its own recorder instead. */
@@ -267,7 +294,7 @@ export function settingsOptions(page: SettingsPage): string[] {
     case 'newGesturePick':
       return [...page.tasks.slice(0, 4), 'Sign a new task']
     case 'gestures':
-      return page.gestures.slice(0, 5).map((g) => g.name)
+      return page.gestures.slice(page.offset, page.offset + GESTURE_PAGE).map((g) => g.name)
     case 'gestureDetail':
       return page.gesture.builtin ? ['Test it'] : ['Test it', 'Delete']
     case 'camera':
@@ -279,10 +306,30 @@ export function settingsOptions(page: SettingsPage): string[] {
   }
 }
 
+/** "Gesture 2", "Gesture 3"…: the first number no saved gesture uses (the peace sign is gesture 1). */
+export function nextGestureName(gestures: readonly Pick<CustomGesture, 'name'>[]): string {
+  const names = new Set(gestures.map((g) => g.name))
+  let n = 2
+  while (names.has(`Gesture ${n}`)) n++
+  return `Gesture ${n}`
+}
+
+/** My gestures, on the page showing `focusId` (the first page without one). */
+function gestureList(gestures: readonly CustomGesture[], focusId?: string): SettingsPage {
+  const index = Math.max(0, gestures.findIndex((g) => g.id === focusId))
+  return {
+    page: 'gestures',
+    gestures: gestures.map(({ id, name, task, builtin }) => ({ id, name, task, builtin })),
+    offset: index - (index % GESTURE_PAGE)
+  }
+}
+
 /** The one place where card states change. */
 export class Controller {
   private tokens: Token[] = []
   private intentPrefix: string | undefined
+  /** New gesture › Sign a new task: the phrase signed next becomes the gesture's task, not an agent run. */
+  private signingTask = false
   private interpretation: Promise<Interpretation> | null = null
   private steps: AgentStep[] = []
   /** From runAgent (or a shortcut's run starting) until done / error / stop. */
@@ -360,13 +407,15 @@ export class Controller {
   private idleView(): View {
     if (getApp().mode === 'dictation') return { kind: 'dictation', text: '' }
     // A quick-menu pick keeps waiting for its details, also after a movement that was no sign.
-    return this.intentPrefix ? { kind: 'ready', hint: `${this.intentPrefix}: sign the details` } : { kind: 'ready' }
+    if (this.intentPrefix) return { kind: 'ready', hint: `${this.intentPrefix}: sign the details` }
+    return this.signingTask ? { kind: 'ready', hint: SIGN_TASK_HINT } : { kind: 'ready' }
   }
 
   private resetPhrase(): void {
     this.tokens = []
     this.interpretation = null
     this.intentPrefix = undefined
+    this.signingTask = false
   }
 
   // ---------------------------------------------------------------- entry points
@@ -488,6 +537,9 @@ export class Controller {
         else if (page.page === 'teachSpell' && g === 'swipeLeft') this.deleteTeachLetter(page.letters)
         else if (page.page === 'teachSpell' && g === 'thumbsUp') this.confirmTeachWord()
         else if (page.page === 'teachRecord' && g === 'swipeLeft') this.settingsBack()
+        else if (page.page === 'gestures' && (g === 'swipeLeft' || g === 'swipeRight')) this.gesturePage(page, g === 'swipeRight' ? 1 : -1)
+        else if (page.page === 'newGestureHold' && g === 'swipeLeft') this.settingsBack()
+        else if (page.page === 'newGestureHold' && g === 'thumbsUp') this.startShapeCapture(page.task)
         return
       }
     }
@@ -706,6 +758,7 @@ export class Controller {
     // Edited, re-signed or cancelled meanwhile: this answer is for an old sentence.
     if (this.view !== thinking) return
     const sentence = view.sentence
+    if (this.signingTask) return this.taskSigned(result, error, sentence)
     if (!result) {
       // Claude unavailable: still let the agent try with the raw sentence and the quick-menu pick.
       if (error) this.notify(error)
@@ -714,6 +767,15 @@ export class Controller {
       return
     }
     this.routeIntent(result, sentence)
+  }
+
+  /** New gesture › Sign a new task: Claude's intent (else the sentence) is the task; then the shape. */
+  private taskSigned(result: IntentResult | null, error: string | null, rawSentence: string): void {
+    if (error) this.notify(error)
+    const sentence = result?.sentence || rawSentence
+    const task = result?.intent || (this.intentPrefix ? `${this.intentPrefix}: ${sentence}` : sentence)
+    this.resetPhrase()
+    this.startShapeCapture(task)
   }
 
   private routeIntent(result: IntentResult, rawSentence: string): void {
@@ -1037,7 +1099,8 @@ export class Controller {
     if (view.kind !== 'settings') return
     const page = view.settings
     if (page.page === 'root') return this.setView(this.idleView())
-    if (page.page === 'gestureDetail') return void this.openGestureList()
+    if (page.page === 'gestureDetail') return void this.openGestureList(page.gesture.id)
+    if (page.page === 'newGestureHold') return this.startNewGesture()
     if (page.page === 'teachRecord') return this.setView({ kind: 'settings', settings: this.teachList(page.label) })
     if (page.page === 'teachSpell') return this.setView({ kind: 'settings', settings: this.teachList() })
     this.openSettings()
@@ -1166,12 +1229,12 @@ export class Controller {
       }
       case 'newGesturePick': {
         const options = settingsOptions(page)
-        const task = index === options.length - 1 ? '' : options[index]
-        this.setView({ kind: 'settings', settings: { page: 'newGestureHold', task, countdown: 3, captured: false } })
+        if (index === options.length - 1) this.signNewTask()
+        else this.startShapeCapture(options[index])
         return
       }
       case 'gestures': {
-        const gesture = page.gestures[index]
+        const gesture = page.gestures[page.offset + index]
         if (gesture) this.setView({ kind: 'settings', settings: { page: 'gestureDetail', gesture } })
         return
       }
@@ -1202,12 +1265,85 @@ export class Controller {
     })()
   }
 
-  private async openGestureList(): Promise<void> {
-    const gestures = (await window.fastasl?.getGestures().catch(() => [])) ?? []
-    this.setView({
-      kind: 'settings',
-      settings: { page: 'gestures', gestures: gestures.map(({ id, name, task, builtin }) => ({ id, name, task, builtin })) }
+  /**
+   * New gesture › Sign a new task: back to Ready (in Command mode, where signs build a
+   * sentence), and the phrase proceeded next becomes the task (taskSigned).
+   */
+  private signNewTask(): void {
+    if (getApp().mode !== 'command') this.switchMode('command')
+    this.resetPhrase()
+    this.signingTask = true
+    this.setView(this.idleView())
+  }
+
+  /**
+   * New gesture › hold: counts 3, 2, 1 down, then records the shape. app/shapeInput sends the
+   * verdict to shapeCaptured; without camera frames none comes, and the timeout says why.
+   */
+  private startShapeCapture(task: string, countdown = COUNTDOWN_FROM): void {
+    this.setView({ kind: 'settings', settings: { page: 'newGestureHold', task, countdown } })
+    if (countdown > 0) return this.later(COUNTDOWN_TICK_MS, () => this.startShapeCapture(task, countdown - 1))
+    this.later(CAPTURE_TIMEOUT_MS, () =>
+      this.shapeCaptured({ ok: false, reason: getApp().cameraOn ? CAPTURE_REASONS.noHand : 'The camera is off. Turn it on first.' })
+    )
+  }
+
+  /** The recorded shape was judged (customShapes.captureShape): save it, or say why not so it can be made again. */
+  shapeCaptured(capture: ShapeCapture): void {
+    const view = this.view
+    if (!isCapturingShape(view)) return
+    if (!capture.ok) return this.setView({ kind: 'settings', settings: { ...view.settings, reason: capture.reason } })
+    void this.saveGesture(view.settings, capture.shape)
+  }
+
+  /** Adds the gesture to gestures.json; the toast leads to My gestures, where it is listed. */
+  private async saveGesture(page: HoldPage, shape: number[][]): Promise<void> {
+    this.clearTimers() // the recording's timeout
+    const from = this.view
+    let saved: { gesture: CustomGesture; all: CustomGesture[] } | null = null
+    let error = ''
+    try {
+      // Added to the file, not the store: a shortcut may have been compiled into it meanwhile.
+      const gestures = (await window.fastasl?.getGestures()) ?? []
+      const gesture: CustomGesture = { id: `gesture-${Date.now()}`, name: nextGestureName(gestures), task: page.task, shape, createdAt: Date.now() }
+      const all = [...gestures, gesture]
+      await window.fastasl?.saveGestures(all)
+      setApp({ gestures: all })
+      saved = { gesture, all }
+    } catch (err) {
+      error = errorText(err)
+    }
+    if (this.view !== from) {
+      if (saved) this.notify(`Gesture saved: ${saved.gesture.name}`)
+      return
+    }
+    if (!saved) return this.setView({ kind: 'settings', settings: { ...page, reason: `Couldn't save it: ${error}` } })
+    const { gesture, all } = saved
+    this.showToast({
+      kind: 'toast',
+      title: 'Gesture saved',
+      subtitle: `${gesture.name} · ${gesture.task}`,
+      ok: true,
+      returnTo: gestureList(all, gesture.id)
     })
+  }
+
+  /** Loads the gesture shortcuts (gestures.json) into the store; the shape matcher follows it. */
+  async loadGestures(): Promise<CustomGesture[]> {
+    const gestures = (await window.fastasl?.getGestures().catch(() => null)) ?? getApp().gestures
+    setApp({ gestures })
+    return gestures
+  }
+
+  private async openGestureList(focusId?: string): Promise<void> {
+    const gestures = await this.loadGestures()
+    this.setView({ kind: 'settings', settings: gestureList(gestures, focusId) })
+  }
+
+  private gesturePage(page: Extract<SettingsPage, { page: 'gestures' }>, dir: 1 | -1): void {
+    const offset = page.offset + dir * GESTURE_PAGE
+    if (offset < 0 || offset >= page.gestures.length) return
+    this.setView({ kind: 'settings', settings: { ...page, offset } })
   }
 
   private async deleteGesture(id: string): Promise<void> {

@@ -3,7 +3,15 @@ import { Keyboard } from 'lucide-react'
 import { controller } from '../../app/context'
 import { LETTERS, settingsOptions, STARTER_WORDS } from '../../app/controller'
 import { Feed, IconButton, OptionList, Panel } from '../../ui'
-import { COMPACT_STRIP_ASPECT, FULL_ASPECT, fingersHint, SettingsFrame, type PageOf, type SettingsState } from './SettingsFrame'
+import {
+  COMPACT_STRIP_ASPECT,
+  FULL_ASPECT,
+  fingersHint,
+  PageDots,
+  SettingsFrame,
+  type PageOf,
+  type SettingsState
+} from './SettingsFrame'
 import './TeachPages.css'
 
 type PageProps<P extends 'teachPick' | 'teachSpell' | 'teachRecord'> = { view: SettingsState; page: PageOf<P> }
@@ -31,16 +39,6 @@ export function TeachPickPage({ view, page }: PageProps<'teachPick'>): React.JSX
     >
       <OptionList options={options} />
     </SettingsFrame>
-  )
-}
-
-function PageDots({ count, current }: { count: number; current: number }): React.JSX.Element {
-  return (
-    <span className="teach-dots" role="img" aria-label={`Page ${current + 1} of ${count}`}>
-      {Array.from({ length: count }, (_, i) => (
-        <span key={i} className={`teach-dots__dot${i === current ? ' teach-dots__dot--on' : ''}`} />
-      ))}
-    </span>
   )
 }
 

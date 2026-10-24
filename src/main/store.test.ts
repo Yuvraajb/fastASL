@@ -4,7 +4,7 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTemplatePack, TEMPLATE_DIMS } from '@shared/templatePack'
 import type { SignTemplate } from '@shared/types'
-import { DEFAULT_SETTINGS, getSettings, getTemplates, importTemplatePack, saveTemplates } from './store'
+import { BUILTIN_PEACE, DEFAULT_SETTINGS, getGestures, getSettings, getTemplates, importTemplatePack, saveTemplates } from './store'
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 
@@ -72,5 +72,41 @@ describe('importTemplatePack', () => {
     expect(importTemplatePack(pack)).toEqual(new Error('templates[0]: frames[0] must have 63 numbers'))
     expect(importTemplatePack({ format: 'zip' })).toBeInstanceOf(Error)
     expect(getTemplates().templates.map((t) => t.id)).toEqual(['a'])
+  })
+})
+
+describe('getGestures', () => {
+  let dir: string
+  const write = (value: unknown): void => writeFileSync(join(dir, 'gestures.json'), JSON.stringify(value))
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'fastasl-gestures-'))
+    vi.stubEnv('FASTASL_DATA_DIR', dir)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('always starts with the built-in peace sign, which the file can override', () => {
+    expect(getGestures()).toEqual([BUILTIN_PEACE])
+    write({ not: 'a list' })
+    expect(getGestures()).toEqual([BUILTIN_PEACE])
+    write([{ id: BUILTIN_PEACE.id, task: 'Text me', builtin: false }])
+    expect(getGestures()).toEqual([{ ...BUILTIN_PEACE, task: 'Text me', builtin: true }])
+  })
+
+  it('drops hand-edited entries that cannot run and fills in the rest', () => {
+    write([
+      null,
+      'g0',
+      { id: 'g1', name: 'Gesture 1' },
+      { id: 'g2', name: 'Gesture 2', task: 'Open Notes', shape: [[0.1, 0.2], null, 'x'], compiled: 'open_app', createdAt: 5 },
+      { id: 'g3', task: 'Open Calculator' }
+    ])
+    expect(getGestures().slice(1)).toEqual([
+      { id: 'g2', name: 'Gesture 2', task: 'Open Notes', shape: [[0.1, 0.2]], createdAt: 5 },
+      { id: 'g3', name: 'g3', task: 'Open Calculator', shape: [], createdAt: 0 }
+    ])
   })
 })

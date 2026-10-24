@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CameraSource, SignTemplate } from '@shared/types'
+import type { CameraSource, CustomGesture, SignTemplate } from '@shared/types'
 import { Timeline, type HandSpec } from '../engine/gestures/synthetic'
 import {
   emptyFrames,
@@ -13,12 +13,13 @@ import {
   type ShapeName,
   type SignSpec
 } from '../engine/recognition/synthetic'
+import { staticFeatures } from '../engine/recognition/features'
 import { TeachSession } from '../engine/recognition/teach'
 import type { FrameSample } from '../engine/types'
 import { Controller, QUICK_MENU } from './controller'
 import { startEngines, subscribeFrames } from './engines'
 import { live } from './live'
-import { mockServices } from './services'
+import { mockServices, type Services } from './services'
 import { getApp, setApp, useApp } from './store'
 import type { View } from './types'
 
@@ -586,5 +587,135 @@ describe('sign recognition', () => {
     expect(teachViews().every((p) => p.page === 'teachRecord' && p.done === 0)).toBe(true)
     play(seeds(3, 921).map((s) => hold('L', 900, s)))
     await vi.waitFor(() => expect(getApp().view).toMatchObject({ kind: 'toast', title: 'Learned L' }))
+  })
+})
+
+/** Synthetic camera frames through the real wiring: New gesture records a shape, then the shape runs its shortcut. */
+describe('custom gestures', () => {
+  const ASPECT = 640 / 480
+  const PEACE = { id: 'builtin-peace', name: 'Peace sign', task: 'Take a screenshot', shape: [], builtin: true, createdAt: 0 }
+  let file: CustomGesture[]
+  let services: Services
+  let clock: number
+
+  /** Sends the frames to every pipeline subscriber, letting the controller's timers run in step. */
+  async function play(frames: FrameSample[]): Promise<void> {
+    const subscribers = camera.subscribe.mock.calls.map(([fn]) => fn)
+    for (const frame of frames) {
+      const shifted = { ...frame, t: frame.t + clock }
+      subscribers.forEach((fn) => fn(shifted))
+      await vi.advanceTimersByTimeAsync(1000 / 30)
+    }
+    clock += frames[frames.length - 1].t + 1000 / 30
+  }
+  const holdShape = (shape: ShapeName, ms: number, seed: number): FrameSample[] =>
+    performHolds([{ shape, holdMs: ms }], { random: rng(seed), aspect: ASPECT })
+  const holdPose = (spec: HandSpec, ms: number): FrameSample[] => new Timeline({ aspect: ASPECT, t0: 0 }).hold(ms, spec).frames
+
+  /** Settings › New gesture › 1 (the recent task): the countdown starts. */
+  async function newGestureForTask(): Promise<void> {
+    controller.openSettings()
+    controller.gesture({ gesture: 'fingers', count: 2 })
+    await vi.advanceTimersByTimeAsync(0)
+    controller.gesture({ gesture: 'fingers', count: 1 })
+    expect(getApp().view).toMatchObject({ kind: 'settings', settings: { page: 'newGestureHold', task: 'Open Calculator' } })
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    file = [PEACE]
+    Object.assign(window.fastasl, {
+      getGestures: vi.fn(async () => file),
+      saveGestures: vi.fn(async (gestures: CustomGesture[]) => void (file = gestures)),
+      getRecentTasks: vi.fn(async () => [{ intent: 'Open Calculator', title: 'Opened Calculator', at: 0, evidence: [] }])
+    })
+    Object.assign(live, { source: {} as CanvasImageSource, sourceWidth: 640, sourceHeight: 480, mock: false })
+    services = mockServices()
+    controller.dispose()
+    controller = new Controller(services)
+    clock = 0
+  })
+
+  afterEach(() => {
+    Object.assign(live, { source: null, sourceWidth: 0, sourceHeight: 0, mock: true })
+    vi.useRealTimers()
+  })
+
+  it('records the shape held through the countdown, then the shape held in Ready runs its shortcut', async () => {
+    const run = vi.spyOn(services, 'runShortcut')
+    stop = startEngines(controller)
+    await newGestureForTask()
+    await play(holdShape('Y', 4400, 31))
+    expect(getApp().view).toMatchObject({ kind: 'toast', title: 'Gesture saved', subtitle: 'Gesture 2 · Open Calculator' })
+    const saved = file[1]
+    expect(saved).toMatchObject({ name: 'Gesture 2', task: 'Open Calculator' })
+    expect(saved.shape).toHaveLength(10)
+    expect(getApp().gestures).toEqual(file)
+
+    // Held on through the toast and My gestures, the shape runs nothing: shapes act in Ready and Collapsed only.
+    await play(holdShape('Y', 3000, 32))
+    expect(getApp().view).toMatchObject({ kind: 'settings', settings: { page: 'gestures' } })
+    expect(run).not.toHaveBeenCalled()
+
+    controller.expand()
+    await play([...emptyFrames(0, 300), ...holdShape('Y', 1200, 33).map((f) => ({ ...f, t: f.t + 300 }))])
+    expect(run).toHaveBeenCalledWith(saved.id)
+    await vi.advanceTimersByTimeAsync(400) // the mock shortcut's run
+    expect(getApp().view).toMatchObject({ kind: 'toast', title: 'Playing Motion Sickness', returnTo: 'ready' })
+  })
+
+  it('a fist is refused with the reason, and the fist still up neither retries nor goes back', async () => {
+    stop = startEngines(controller)
+    await newGestureForTask()
+    await play(holdPose({ pose: 'fist', noise: 0.002 }, 6500))
+    expect(getApp().view).toMatchObject({
+      kind: 'settings',
+      settings: { page: 'newGestureHold', reason: 'That reads as a fist, a control gesture. Try another shape.' }
+    })
+    expect(file).toEqual([PEACE])
+    // A fresh thumbs up records again.
+    await play([...emptyFrames(0, 400), ...holdPose({ pose: 'thumbsUp', noise: 0.002 }, 700).map((f) => ({ ...f, t: f.t + 400 }))])
+    expect(getApp().view).toMatchObject({ kind: 'settings', settings: { page: 'newGestureHold', countdown: 3 } })
+    expect(getApp().view).not.toHaveProperty('settings.reason')
+  })
+
+  it('a hand-edited gesture without a shape breaks neither loading, My gestures nor a recording', async () => {
+    file = [PEACE, { id: 'g3', name: 'Gesture 3', task: 'Open Notes', createdAt: 1 } as unknown as CustomGesture]
+    stop = startEngines(controller)
+    await expect(controller.loadGestures()).resolves.toHaveLength(2)
+    controller.openSettings()
+    controller.gesture({ gesture: 'fingers', count: 3 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(getApp().view).toMatchObject({ kind: 'settings', settings: { page: 'gestures' } })
+    await newGestureForTask()
+    await play(holdShape('Y', 4400, 31))
+    expect(getApp().view).toMatchObject({ kind: 'toast', title: 'Gesture saved', subtitle: 'Gesture 2 · Open Calculator' })
+  })
+
+  it('a shape that reads as a taught letter is refused, so it can never swallow that letter', async () => {
+    const letter = (seed: number, i: number): SignTemplate => ({
+      id: `y${i}`,
+      label: 'Y',
+      kind: 'letter',
+      frames: [staticFeatures(holdShape('Y', 1000, seed)[15].hands[0], ASPECT)!],
+      createdAt: 0
+    })
+    setApp({ templates: [40, 41, 42, 43, 44].map(letter) })
+    stop = startEngines(controller)
+    await newGestureForTask()
+    await play(holdShape('Y', 4400, 31))
+    expect(getApp().view).toMatchObject({
+      kind: 'settings',
+      settings: { page: 'newGestureHold', reason: 'That reads as the letter Y. Try another shape.' }
+    })
+    expect(file).toEqual([PEACE])
+  })
+
+  it('the mock hand is never recorded: the recording times out', async () => {
+    stop = startEngines(controller)
+    await newGestureForTask()
+    live.mock = true
+    await play(holdShape('Y', 6000, 34))
+    expect(getApp().view).toMatchObject({ kind: 'settings', settings: { page: 'newGestureHold', reason: 'No hand seen. Hold one hand up in view.' } })
   })
 })

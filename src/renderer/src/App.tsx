@@ -25,6 +25,7 @@ export default function App(): React.JSX.Element {
     if (window.fastasl?.nativeVibrancy) document.documentElement.dataset.vibrancy = '1'
     void window.fastasl?.getEnvStatus().then((keyStatus) => setApp({ keyStatus }))
     void controller.loadTemplates()
+    void controller.loadGestures()
     void window.fastasl?.getSettings().then((s) => {
       setApp({ sensitivity: s.sensitivity, cameraOn: s.cameraEnabled, cameraSource: s.cameraSource })
       controller.restoreMode(s.mode)

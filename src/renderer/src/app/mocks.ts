@@ -228,8 +228,24 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     pose: 'point'
   },
   settingsHoldShape: {
-    view: { kind: 'settings', settings: { page: 'newGestureHold', task: 'Play Motion Sickness on Spotify', countdown: 2, captured: false } },
-    pose: 'peace'
+    view: { kind: 'settings', settings: { page: 'newGestureHold', task: 'Play Motion Sickness on Spotify', countdown: 2 } },
+    pose: 'ok'
+  },
+  settingsShapeRecording: {
+    view: { kind: 'settings', settings: { page: 'newGestureHold', task: 'Play Motion Sickness on Spotify', countdown: 0 } },
+    pose: 'ok'
+  },
+  settingsShapeRefused: {
+    view: {
+      kind: 'settings',
+      settings: {
+        page: 'newGestureHold',
+        task: 'Play Motion Sickness on Spotify',
+        countdown: 0,
+        reason: 'That reads as a fist, a control gesture. Try another shape.'
+      }
+    },
+    pose: 'fist'
   },
   settingsGestures: {
     view: {
@@ -238,11 +254,25 @@ export const MOCK_SCENES: Record<string, MockScene> = {
         page: 'gestures',
         gestures: [
           { id: 'builtin-peace', name: 'Peace sign', task: 'Take a screenshot', builtin: true },
-          { id: 'g2', name: 'Rock on', task: 'Play Motion Sickness on Spotify' }
-        ]
+          { id: 'g2', name: 'Gesture 2', task: 'Play Motion Sickness on Spotify' },
+          { id: 'g3', name: 'Gesture 3', task: 'Open Notes' },
+          { id: 'g4', name: 'Gesture 4', task: 'Text Sam on my way' },
+          { id: 'g5', name: 'Gesture 5', task: 'Search the web for ASL alphabet' }
+        ],
+        offset: 0
       }
     },
     pose: 'palm'
+  },
+  toastGestureSaved: {
+    view: {
+      kind: 'toast',
+      title: 'Gesture saved',
+      subtitle: 'Gesture 2 · Play Motion Sickness on Spotify',
+      ok: true,
+      returnTo: 'ready'
+    },
+    pose: 'ok'
   },
   settingsCamera: {
     view: { kind: 'settings', settings: { page: 'camera', current: 'builtin', url: 'http://192.168.1.50:81/stream' } },
@@ -328,5 +358,8 @@ export const SCREENSHOT_ORDER: string[] = [
   'settingsTeachRetry',
   'spellPending',
   'dictationNoAccess',
-  'dictationNoAutomation'
+  'dictationNoAutomation',
+  'settingsShapeRecording',
+  'settingsShapeRefused',
+  'toastGestureSaved'
 ]

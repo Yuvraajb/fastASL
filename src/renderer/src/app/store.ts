@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { CameraSource, KeyStatus, Mode, Sensitivity, SignTemplate } from '@shared/types'
+import type { CameraSource, CustomGesture, KeyStatus, Mode, Sensitivity, SignTemplate } from '@shared/types'
 import type { View } from './types'
 
 export interface PickProgress {
@@ -30,6 +30,8 @@ export interface AppState {
   handsVisible: number
   /** Recorded signs (signs.json), loaded by the controller; recognition follows this list. */
   templates: SignTemplate[]
+  /** Gesture shortcuts (gestures.json), loaded by the controller; the shape matcher follows this list. */
+  gestures: CustomGesture[]
 }
 
 export const useApp = create<AppState>(() => ({
@@ -50,7 +52,8 @@ export const useApp = create<AppState>(() => ({
   devPanel: false,
   modeFlashAt: 0,
   handsVisible: 0,
-  templates: []
+  templates: [],
+  gestures: []
 }))
 
 export const getApp = (): AppState => useApp.getState()

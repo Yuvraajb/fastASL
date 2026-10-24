@@ -17,10 +17,13 @@ import {
   assembleSentence,
   dictationChunk,
   gestureScreen,
+  isCapturingShape,
+  nextGestureName,
   optionsFor,
   takesSigns,
   type GestureName
 } from './controller'
+import { CAPTURE_REASONS } from '../engine/gestures/customShapes'
 import { mockServices, type Services } from './services'
 import { getApp, setApp, useApp } from './store'
 import type { SettingsPage, Token, View } from './types'
@@ -383,7 +386,7 @@ describe('settings', () => {
     await settle()
     expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
     fingers(1)
-    expect(viewAs('settings').settings).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 3, captured: false })
+    expect(viewAs('settings').settings).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 3 })
   })
 
   it('my gestures -> detail -> back to the list; built-ins cannot be deleted', async () => {
@@ -420,6 +423,217 @@ describe('settings', () => {
     expect(viewAs('toast')).toMatchObject({ title: 'Screenshot taken', returnTo: 'ready' })
     await settle(TOAST_MS)
     expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+})
+
+describe('new gesture', () => {
+  const SHAPE = [[0.1, 0.2], [0.1, 0.25]]
+  const hold = (): Extract<SettingsPage, { page: 'newGestureHold' }> => {
+    const page = viewAs('settings').settings
+    expect(page.page).toBe('newGestureHold')
+    return page as Extract<SettingsPage, { page: 'newGestureHold' }>
+  }
+  /** Settings › New gesture › 1 (Open Notes): the countdown starts. */
+  async function pickTask(): Promise<void> {
+    c.openSettings()
+    fingers(2)
+    await settle()
+    fingers(1)
+  }
+
+  it('counts 3, 2, 1 down, then records the shape', async () => {
+    await pickTask()
+    expect(hold()).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 3 })
+    expect(isCapturingShape(getApp().view)).toBe(false)
+    await settle(1000)
+    expect(hold().countdown).toBe(2)
+    await settle(1000)
+    expect(hold().countdown).toBe(1)
+    await settle(1000)
+    expect(hold()).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 0 })
+    expect(isCapturingShape(getApp().view)).toBe(true)
+  })
+
+  it('takes a verdict only while recording; a refused shape says why and thumbs up records again', async () => {
+    await pickTask()
+    c.shapeCaptured({ ok: true, shape: SHAPE }) // still counting down
+    await settle(3000)
+    expect(api.saveGestures).not.toHaveBeenCalled()
+    const reason = CAPTURE_REASONS.control('a fist')
+    c.shapeCaptured({ ok: false, reason })
+    expect(hold()).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 0, reason })
+    expect(isCapturingShape(getApp().view)).toBe(false)
+    c.shapeCaptured({ ok: true, shape: SHAPE }) // a late verdict for the refused recording
+    await settle()
+    expect(api.saveGestures).not.toHaveBeenCalled()
+    g('thumbsUp')
+    expect(hold()).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 3 })
+  })
+
+  it('without camera frames the recording times out: no hand seen, or the camera is off', async () => {
+    await pickTask()
+    await settle(3000 + 2499)
+    expect(isCapturingShape(getApp().view)).toBe(true)
+    await settle(1)
+    expect(hold().reason).toBe(CAPTURE_REASONS.noHand)
+    setApp({ cameraOn: false })
+    g('thumbsUp')
+    await settle(3000 + 2500)
+    expect(hold().reason).toBe('The camera is off. Turn it on first.')
+  })
+
+  it('saves the shape as the next "Gesture N", added to the file, and toasts its way to My gestures', async () => {
+    await pickTask()
+    await settle(3000)
+    c.shapeCaptured({ ok: true, shape: SHAPE })
+    await settle()
+    const gesture = { id: expect.stringMatching(/^gesture-/), name: 'Gesture 2', task: 'Open Notes', shape: SHAPE, createdAt: expect.any(Number) }
+    expect(api.saveGestures).toHaveBeenCalledWith([...GESTURES, gesture])
+    expect(getApp().gestures).toEqual([...GESTURES, gesture])
+    expect(viewAs('toast')).toMatchObject({ title: 'Gesture saved', subtitle: 'Gesture 2 · Open Notes', ok: true })
+    // The recording's timeout was cleared: nothing replaces the toast.
+    await settle(TOAST_MS - 1)
+    viewAs('toast')
+    await settle(1)
+    expect(viewAs('settings').settings).toMatchObject({ page: 'gestures', offset: 0 })
+    expect(optionsFor(getApp().view)).toEqual(['Peace sign', 'Rock on', 'Gesture 2'])
+  })
+
+  it('a save that fails keeps the page, with the reason', async () => {
+    api.saveGestures.mockRejectedValueOnce(new Error('disk full'))
+    await pickTask()
+    await settle(3000)
+    c.shapeCaptured({ ok: true, shape: SHAPE })
+    await settle()
+    expect(hold().reason).toBe("Couldn't save it: disk full")
+    expect(getApp().gestures).toEqual([])
+  })
+
+  it('names gestures after the first free number (the peace sign is gesture 1)', () => {
+    expect(nextGestureName([])).toBe('Gesture 2')
+    expect(nextGestureName([{ name: 'Peace sign' }, { name: 'Gesture 2' }, { name: 'Gesture 4' }])).toBe('Gesture 3')
+  })
+
+  it('while the shape is formed only a swipe goes back (the shape may read as a fist); a refusal adds thumbs up and the fist', async () => {
+    await pickTask()
+    expect(activeGestures(getApp().view)).toEqual(new Set(['swipeLeft']))
+    g('fist')
+    hold()
+    g('swipeLeft')
+    await settle()
+    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+    await settle(6000) // the countdown stopped with the page
+    expect(viewAs('settings').settings.page).toBe('newGesturePick')
+
+    fingers(1)
+    await settle(3000)
+    c.shapeCaptured({ ok: false, reason: CAPTURE_REASONS.moved })
+    expect(activeGestures(getApp().view)).toEqual(new Set(['thumbsUp', 'fist', 'swipeLeft']))
+    g('fist')
+    await settle()
+    expect(viewAs('settings').settings.page).toBe('newGesturePick')
+  })
+
+  describe('Sign a new task', () => {
+    /** Settings › New gesture › 2 (Sign a new task, after Open Notes). */
+    async function signNewTask(): Promise<void> {
+      c.openSettings()
+      fingers(2)
+      await settle()
+      fingers(2)
+    }
+
+    it("goes to Ready with a hint; the proceeded phrase's intent becomes the task instead of an agent run", async () => {
+      const agentRun = vi.spyOn(services, 'agentRun')
+      await signNewTask()
+      expect(getApp().view).toEqual({ kind: 'ready', hint: 'Sign the task for your gesture' })
+      signSentence(...MEETING)
+      g('thumbsUp')
+      await settle(500)
+      expect(hold()).toEqual({ page: 'newGestureHold', task: 'Schedule a meeting tomorrow at 3pm with the team', countdown: 3 })
+      expect(agentRun).not.toHaveBeenCalled()
+      // The phrase is used up: backing out of Settings leads to a plain Ready.
+      g('swipeLeft')
+      await settle()
+      g('fist')
+      g('fist')
+      expect(getApp().view).toEqual({ kind: 'ready' })
+    })
+
+    it("takes Claude's sentence when it found no intent, without asking Did you mean", async () => {
+      await signNewTask()
+      signSentence(word('what'), word('time'))
+      g('thumbsUp')
+      await settle(500)
+      expect(hold().task).toBe('What time is my next meeting?')
+    })
+
+    it('takes the signed sentence without Claude, and says why', async () => {
+      vi.spyOn(services, 'interpret').mockResolvedValue({ ok: false, error: 'no key', missingKey: 'ANTHROPIC_API_KEY' })
+      await signNewTask()
+      signSentence(...MEETING)
+      g('thumbsUp')
+      await settle()
+      expect(hold().task).toBe('Meeting tomorrow at 3 pm')
+      expect(getApp().notice).toBe('Add ANTHROPIC_API_KEY to .env')
+    })
+
+    it('keeps a quick-menu pick as the task prefix', async () => {
+      vi.spyOn(services, 'interpret').mockResolvedValue({ ok: false, error: 'offline' })
+      await signNewTask()
+      g('thumbsUp')
+      fingers(4) // Take notes
+      expect(getApp().view).toEqual({ kind: 'ready', hint: 'Take notes: sign the details' })
+      signSentence(...MEETING)
+      g('thumbsUp')
+      await settle()
+      expect(hold().task).toBe('Take notes: Meeting tomorrow at 3 pm')
+    })
+
+    it('signs in Command mode, and ends with the phrase', async () => {
+      setApp({ mode: 'dictation' })
+      c.setView({ kind: 'dictation', text: '' })
+      await signNewTask()
+      expect(getApp().mode).toBe('command')
+      expect(getApp().view).toEqual({ kind: 'ready', hint: 'Sign the task for your gesture' })
+      signSentence(...MEETING)
+      g('fist') // cancel
+      expect(getApp().view).toEqual({ kind: 'ready' })
+    })
+  })
+
+  it('My gestures pages through a long list, four at a time', async () => {
+    const many: CustomGesture[] = [GESTURES[0], ...[2, 3, 4, 5, 6].map((n) => ({ id: `g${n}`, name: `Gesture ${n}`, task: `Task ${n}`, shape: [], createdAt: n }))]
+    api.getGestures.mockResolvedValue(many)
+    c.openSettings()
+    fingers(3)
+    await settle()
+    expect(optionsFor(getApp().view)).toEqual(['Peace sign', 'Gesture 2', 'Gesture 3', 'Gesture 4'])
+    expect(getApp().gestures).toEqual(many)
+    g('swipeLeft') // already on the first page
+    expect(viewAs('settings').settings).toMatchObject({ offset: 0 })
+    g('swipeRight')
+    expect(optionsFor(getApp().view)).toEqual(['Gesture 5', 'Gesture 6'])
+    g('swipeRight') // no third page
+    fingers(2)
+    expect(viewAs('settings').settings).toMatchObject({ page: 'gestureDetail', gesture: { id: 'g6' } })
+    g('fist')
+    await settle()
+    expect(viewAs('settings').settings).toMatchObject({ page: 'gestures', offset: 4 })
+    g('swipeLeft')
+    expect(viewAs('settings').settings).toMatchObject({ offset: 0 })
+  })
+
+  it('deleting a gesture updates the store the shape matcher follows', async () => {
+    let file = [...GESTURES]
+    api.getGestures.mockImplementation(async () => file)
+    api.saveGestures.mockImplementation(async (gestures: CustomGesture[]) => void (file = gestures))
+    await c.loadGestures()
+    expect(getApp().gestures).toEqual(GESTURES)
+    c.setView({ kind: 'settings', settings: { page: 'gestureDetail', gesture: GESTURES[1] } })
+    fingers(2)
+    await settle()
+    expect(getApp().gestures).toEqual([GESTURES[0]])
   })
 })
 
@@ -614,6 +828,10 @@ describe('listening', () => {
     expect(gestureScreen({ kind: 'recognizing', token: null, isWord: false })).toBe('ready')
     expect(gestureScreen({ kind: 'recognizing', token: 'A', isWord: false })).toBe('recognizing')
     expect(gestureScreen({ kind: 'settings', settings: { page: 'root' } })).toBe('settings')
+    // A refused shape (often a fist or thumbs up still held) needs a fresh gesture to retry or go back.
+    const hold: SettingsPage = { page: 'newGestureHold', task: 't', countdown: 0 }
+    expect(gestureScreen({ kind: 'settings', settings: hold })).toBe('shapeHold')
+    expect(gestureScreen({ kind: 'settings', settings: { ...hold, reason: 'r' } })).toBe('shapeRefused')
   })
 
   it('feeds recognition only in views that take signs', () => {

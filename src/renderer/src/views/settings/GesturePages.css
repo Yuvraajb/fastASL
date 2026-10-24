@@ -1,33 +1,16 @@
-/* Shape capture: the countdown sits in the top-right corner so the hand stays visible;
-   the "Saved" badge is centered once the shape is captured. */
+/* Shape capture: the countdown (then the recording ring) sits in the feed's top-right
+   corner, so the hand in the middle stays visible. */
 .shape-feed {
   position: relative;
 }
 
-.shape-feed__overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
-
-.shape-feed__overlay--corner {
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding: 10px;
-}
-
-.shape-feed__count,
-.shape-feed__badge {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .shape-feed__count {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 44px;
   height: 44px;
   border-radius: 50%;
@@ -38,10 +21,12 @@
   letter-spacing: -0.01em;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
   animation: fa-fade-in var(--dur) var(--ease-spring) both;
 }
 
-/* The ring (r = 20, length 2π·20 ≈ 125.7) empties over one second, once per number. */
+/* The ring (r = 20, length 2π·20 ≈ 125.7) empties over one second, once per number
+   (the controller's COUNTDOWN_TICK_MS). While recording it fills instead, over CAPTURE_MS. */
 .shape-feed__ring {
   position: absolute;
   inset: 0;
@@ -58,9 +43,20 @@
   animation: shape-ring 1s linear forwards;
 }
 
+.shape-feed__count--rec .shape-feed__ring circle {
+  stroke-dashoffset: 125.7;
+  animation-name: shape-ring-fill;
+}
+
 @keyframes shape-ring {
   to {
     stroke-dashoffset: 125.7;
+  }
+}
+
+@keyframes shape-ring-fill {
+  to {
+    stroke-dashoffset: 0;
   }
 }
 
@@ -70,16 +66,29 @@
   }
 }
 
-.shape-feed__badge {
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 18px 10px;
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(6px);
+/* Recording: a white dot (red is reserved for Dictation) that breathes. */
+.shape-feed__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text);
+  animation: shape-breathe 1s ease-in-out infinite;
+}
+
+@keyframes shape-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Why the recorded shape was refused, under the title. */
+.shape-reason {
+  margin: 0;
+  padding: 0 2px;
   font-size: var(--fs-small);
-  font-weight: 600;
-  color: var(--text);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-1);
 }
 
 /* Empty state inside a ui Panel. */

@@ -3,13 +3,14 @@ import type { FrameSample } from '../engine/types'
 import type { Controller } from './controller'
 import { connectGestures } from './gestureInput'
 import { connectRecognition } from './recognitionInput'
+import { connectShapeCapture } from './shapeInput'
 import { live } from './live'
 import { getApp, useApp } from './store'
 
 /**
  * The single owner of the camera pipeline and the engines fed by it (gestures, sign
- * recognition). App starts it on launch, except in screenshot / ?mock=1 mode where the feed
- * keeps its mock hand. Camera settings flow in through the store: controller.toggleCamera sets
+ * recognition, the New gesture shape recorder). App starts it on launch, except in
+ * screenshot / ?mock=1 mode where the feed keeps its mock hand. Camera settings flow in through the store: controller.toggleCamera sets
  * cameraOn, controller.setCameraSource sets cameraSource. Engine output goes to the controller.
  */
 const camera = new CameraPipeline()
@@ -31,6 +32,7 @@ export function startEngines(controller: Controller): () => void {
     // and a Spell mode letter is still held when it arrives (S is a fist).
     if (recognition.update(frame)) gestures.spendShown()
   })
+  const stopShapes = connectShapeCapture(controller, subscribeFrames)
   void camera.setEnabled(cameraOn)
   void camera.start(cameraSource)
   const unsubscribe = useApp.subscribe((s, prev) => {
@@ -45,6 +47,7 @@ export function startEngines(controller: Controller): () => void {
     gestures.stop()
     stopRecognition()
     recognition.stop()
+    stopShapes()
   }
 }
 

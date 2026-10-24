@@ -82,7 +82,7 @@ export const takeScreenshotTool = defineTool({
     return {
       ok: true,
       text: `Saved a screenshot to ${path}.`,
-      title: 'Screenshot saved',
+      title: 'Screenshot taken',
       subtitle: `Desktop · ${basename(path)}`,
       view: { kind: 'openFile', path }
     }

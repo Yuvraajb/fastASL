@@ -1,3 +1,4 @@
+import { shapeMatcher } from '../engine/gestures/customShapes'
 import { GestureEngine, gestureKey, type GestureProgress } from '../engine/gestures/engine'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
 import { activeGestures, gestureScreen, type Controller } from './controller'
@@ -16,7 +17,8 @@ export interface GestureConnection {
  * Connects the gesture engine to the app: live camera frames go in, fired gestures go to
  * controller.gesture (which gates them by view again), and hold progress goes to the store
  * (holdProgress: the collapsed pill's ring; pick: the option badges). The engine evaluates
- * only the current view's (and mode's) gestures and follows the sensitivity setting.
+ * only the current view's (and mode's) gestures, follows the sensitivity setting and
+ * matches the saved gesture shapes (store.gestures).
  */
 export function connectGestures(
   controller: Pick<Controller, 'gesture'>,
@@ -28,12 +30,16 @@ export function connectGestures(
   // Each camera session (new source, restart, camera turned back on) has its own element.
   let session: CanvasImageSource | null = null
   let aspect = 0
+  // Shapes are compared in the camera's aspect, as they were recorded (staticFeatures).
+  const matchShapes = (): void => engine.setShapeMatcher(shapeMatcher(getApp().gestures, aspect || 1))
+  matchShapes()
 
   const stopStore = useApp.subscribe((s, prev) => {
     if (s.view !== prev.view || s.mode !== prev.mode) engine.setActive(activeGestures(s.view, s.mode))
     // A new screen needs a fresh gesture: whatever is held as it appears must be released first.
     if (gestureScreen(s.view) !== gestureScreen(prev.view)) engine.spendShown()
     if (s.sensitivity !== prev.sensitivity) engine.setSensitivity(SENSITIVITY[s.sensitivity])
+    if (s.gestures !== prev.gestures) matchShapes()
   })
 
   const stopFrames = subscribeFrames((frame) => {
@@ -50,6 +56,7 @@ export function connectGestures(
       aspect = frameAspect
       engine.setAspect(aspect)
       engine.reset()
+      matchShapes()
     }
     for (const input of engine.update(frame)) {
       if (window.fastasl?.isDev) console.log(`[gesture] ${gestureKey(input)} in ${getApp().view.kind}`)

@@ -24,8 +24,16 @@ export type SettingsPage =
       reason?: string
     }
   | { page: 'newGesturePick'; tasks: string[] }
-  | { page: 'newGestureHold'; task: string; countdown: number; captured: boolean }
-  | { page: 'gestures'; gestures: Pick<CustomGesture, 'id' | 'name' | 'task' | 'builtin'>[] }
+  | {
+      page: 'newGestureHold'
+      task: string
+      /** 3, 2, 1 before the shape is recorded; 0 while recording (and after a refusal). */
+      countdown: number
+      /** Why the recorded shape was refused; thumbs up records again. */
+      reason?: string
+    }
+  /** `offset`: index of the first gesture on the page (swipes page through the list). */
+  | { page: 'gestures'; gestures: Pick<CustomGesture, 'id' | 'name' | 'task' | 'builtin'>[]; offset: number }
   | { page: 'gestureDetail'; gesture: Pick<CustomGesture, 'id' | 'name' | 'task' | 'builtin'> }
   | { page: 'camera'; current: 'builtin' | 'mjpeg'; url: string }
   | { page: 'sensitivity'; current: Sensitivity }

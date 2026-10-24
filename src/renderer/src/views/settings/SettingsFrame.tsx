@@ -23,6 +23,17 @@ export function fingersHint(count: number, ...extra: string[]): HintItems {
   return [`hold ${count === 1 ? '1 finger' : `1–${count} fingers`}`, ...extra, 'fist = back']
 }
 
+/** One dot per page of a paged list (swipes page through it), the current one highlighted. */
+export function PageDots({ count, current }: { count: number; current: number }): React.JSX.Element {
+  return (
+    <span className="set-dots" role="img" aria-label={`Page ${current + 1} of ${count}`}>
+      {Array.from({ length: count }, (_, i) => (
+        <span key={i} className={`set-dots__dot${i === current ? ' set-dots__dot--on' : ''}`} />
+      ))}
+    </span>
+  )
+}
+
 interface SettingsFrameProps {
   view: SettingsState
   /** Omit when the header status already names the page (root) or the body brings its own heading (teach record). */

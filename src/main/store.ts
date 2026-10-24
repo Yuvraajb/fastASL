@@ -85,11 +85,36 @@ export const BUILTIN_PEACE: CustomGesture = {
   createdAt: 0
 }
 
+const isNumberList = (v: unknown): v is number[] => Array.isArray(v) && v.every((x) => typeof x === 'number')
+
+/**
+ * A hand-edited entry may hold anything. One without a string id and task can't run and is
+ * dropped; the rest get a name, a list of number vectors as shape, and a list of compiled steps or none.
+ */
+function toGesture(g: Partial<CustomGesture>): CustomGesture[] {
+  if (typeof g.id !== 'string' || typeof g.task !== 'string') return []
+  return [
+    {
+      ...g,
+      id: g.id,
+      task: g.task,
+      name: typeof g.name === 'string' ? g.name : g.id,
+      shape: Array.isArray(g.shape) ? g.shape.filter(isNumberList) : [],
+      compiled: Array.isArray(g.compiled) ? g.compiled : undefined,
+      createdAt: typeof g.createdAt === 'number' ? g.createdAt : 0
+    }
+  ]
+}
+
 export function getGestures(): CustomGesture[] {
-  const saved = readJson<CustomGesture[]>('gestures.json', [])
-  const list = Array.isArray(saved) ? saved.filter((g) => g.id !== BUILTIN_PEACE.id) : []
-  const builtin = saved.find?.((g) => g.id === BUILTIN_PEACE.id)
-  return [{ ...BUILTIN_PEACE, ...(builtin ?? {}), builtin: true }, ...list]
+  const saved = readJson<unknown>('gestures.json', [])
+  const entries = (Array.isArray(saved) ? saved : []).filter(
+    (g): g is Partial<CustomGesture> => typeof g === 'object' && g !== null
+  )
+  const builtin = entries.find((g) => g.id === BUILTIN_PEACE.id)
+  const peace = toGesture({ ...BUILTIN_PEACE, ...builtin })[0] ?? BUILTIN_PEACE
+  const custom = entries.filter((g) => g.id !== BUILTIN_PEACE.id).flatMap(toGesture)
+  return [{ ...peace, builtin: true }, ...custom]
 }
 
 export function saveGestures(gestures: CustomGesture[]): void {
