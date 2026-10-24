@@ -8,7 +8,7 @@ export interface NoticeProps {
   className?: string
 }
 
-/** One-line notice with an info icon, e.g. "Add ANTHROPIC_API_KEY to .env". */
+/** Notice with an info icon, e.g. "Add ANTHROPIC_API_KEY to .env" (up to two lines). */
 export function Notice({ text, className }: NoticeProps): React.JSX.Element | null {
   const notice = useApp((s) => s.notice)
   const message = text === undefined ? notice : text

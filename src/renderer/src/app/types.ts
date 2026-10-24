@@ -54,6 +54,8 @@ export type View =
       quote?: string
       options: string[]
       purpose: 'sign' | 'intent' | 'spell'
+      /** Spell: Claude's spellings are on their way (the raw letters can be picked meanwhile). */
+      pending?: boolean
     }
   | { kind: 'done'; title: string; subtitle: string; ok: boolean; view?: ViewAction; intent?: string }
   | { kind: 'contextActions'; sentence: string; actions: string[] }

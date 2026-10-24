@@ -54,6 +54,12 @@ const MODES: Mode[] = ['command', 'dictation', 'spell']
 
 const DONE_AUTO_COLLAPSE_MS = 4000
 const TOAST_MS = 2600
+/** Why typing failed (often a permission to grant in System Settings) needs time to read. */
+const TYPING_NOTICE_MS = 8000
+/** The dictation card keeps this much of the typed text (it shows the last two lines). */
+const DICTATION_KEEP = 120
+/** Typed text continues a run (spaced from it) this long after the last typing, card or not. */
+const TYPED_RUN_MS = 2 * 60_000
 
 /** Below this Claude is guessing, so the card always asks (Did you mean). */
 const LOW_CONFIDENCE = 0.6
@@ -124,21 +130,33 @@ export function assembleSentence(tokens: Token[]): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
 }
 
+/**
+ * What Dictation types for a sign, given the kind of sign typed before it (null for the first).
+ * Words are separated by a space and a run of letters is one word. The space goes before a
+ * word, never after it, so punctuation typed by hand lands right after the last word.
+ */
+export function dictationChunk(previous: Token['kind'] | null, token: Token): string {
+  const joined = previous === null || (previous === 'letter' && token.kind === 'letter')
+  return joined ? token.text : ` ${token.text}`
+}
+
 /** Listening: a movement started in Ready and nothing is recognized yet. */
 function isListening(view: View): boolean {
   return view.kind === 'recognizing' && view.token === null
 }
 
-/** Which gestures make sense in each view. The gesture engine ignores the rest. */
-export function activeGestures(view: View): Set<GestureName> {
+/** Which gestures make sense in each view (and mode). The gesture engine ignores the rest. */
+export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureName> {
   switch (view.kind) {
     case 'collapsed':
       return new Set(['palmHold', 'shape'])
     case 'ready':
+      // The quick menu prefixes commands: Spell mode has none (and an ASL A is close to a thumbs up).
+      if (mode === 'spell') return new Set(['fist', 'swipeLeft', 'swipeRight', 'swipeUp', 'shape'])
       return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'swipeUp', 'shape'])
     case 'recognizing':
       // Raising a hand to make a control gesture is a movement too: Listening keeps Ready's gestures.
-      if (isListening(view)) return activeGestures({ kind: 'ready' })
+      if (isListening(view)) return activeGestures({ kind: 'ready' }, mode)
       return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
     case 'building':
       return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
@@ -152,8 +170,8 @@ export function activeGestures(view: View): Set<GestureName> {
       return new Set(['thumbsUp', 'fist'])
     case 'didYouMean':
       if (view.variant === 'quote') return new Set(['thumbsUp', 'fist', 'swipeLeft'])
-      // Swipe left edits the sentence an intent list was read from.
-      return new Set(view.purpose === 'intent' ? ['fingers', 'fist', 'thumbsUp', 'swipeLeft'] : ['fingers', 'fist', 'thumbsUp'])
+      // Swipe left edits what the list was made from: the sentence, or the spelled letters.
+      return new Set(view.purpose === 'sign' ? ['fingers', 'fist', 'thumbsUp'] : ['fingers', 'fist', 'thumbsUp', 'swipeLeft'])
     case 'done':
       return new Set(['thumbsUp', 'fist', 'fingers', 'swipeUp'])
     case 'contextActions':
@@ -275,6 +293,13 @@ export class Controller {
   private stopped: { runId: string; toast: View } | null = null
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private lastCompleted: { intent: string; title: string } | null = null
+  /**
+   * What fastASL typed last, for spacing what it types next. It outlives the dictation card
+   * (Settings, a collapse, Spell mode and back), since none of those moves the cursor.
+   */
+  private lastTyped: { kind: Token['kind']; at: number } | null = null
+  /** An Insert text / spelling paste is on its way: a second pick would type it twice. */
+  private inserting = false
   private unsubscribe: (() => void) | null = null
 
   constructor(private services: Services) {
@@ -369,11 +394,22 @@ export class Controller {
 
   cycleMode(dir: 1 | -1): void {
     const { mode } = getApp()
-    const next = MODES[(MODES.indexOf(mode) + dir + MODES.length) % MODES.length]
-    setApp({ mode: next, modeFlashAt: performance.now() })
-    void window.fastasl?.saveSettings({ mode: next })
+    this.switchMode(MODES[(MODES.indexOf(mode) + dir + MODES.length) % MODES.length])
+  }
+
+  /** Swipes and the dictation fist: the header flashes the new mode, which is saved for the next launch. */
+  private switchMode(mode: Mode): void {
+    setApp({ mode, modeFlashAt: performance.now() })
+    void window.fastasl?.saveSettings({ mode })
     this.resetPhrase()
-    this.setView(next === 'dictation' ? { kind: 'dictation', text: '' } : { kind: 'ready' })
+    this.setView(this.idleView())
+  }
+
+  /** The mode saved last time, applied at launch: an idle card shows that mode's idle view. */
+  restoreMode(mode: Mode): void {
+    setApp({ mode })
+    const kind = this.view.kind
+    if (kind === 'ready' || kind === 'dictation') this.setView(this.idleView())
   }
 
   openSettings(): void {
@@ -385,7 +421,7 @@ export class Controller {
   /** Gesture from the engine or a dev hotkey. Gated by the current view. */
   gesture(input: GestureInput): void {
     const view = this.view
-    if (!activeGestures(view).has(input.gesture)) return
+    if (!activeGestures(view, getApp().mode).has(input.gesture)) return
     const g = input.gesture
     switch (view.kind) {
       case 'collapsed':
@@ -439,11 +475,7 @@ export class Controller {
         if (g === 'swipeLeft') this.cycleMode(-1)
         else if (g === 'swipeRight') this.cycleMode(1)
         else if (g === 'swipeUp') this.openSettings()
-        else if (g === 'fist') {
-          setApp({ mode: 'command', modeFlashAt: performance.now() })
-          void window.fastasl?.saveSettings({ mode: 'command' })
-          this.setView({ kind: 'ready' })
-        }
+        else if (g === 'fist') this.switchMode('command')
         return
       case 'toast':
         if (g === 'fist') this.leaveToast(view.returnTo)
@@ -484,7 +516,11 @@ export class Controller {
       else if (view.kind === 'confirm') void this.respondConfirm(false)
       else if (view.kind === 'settings') this.settingsBack()
       else if (view.kind === 'toast') this.leaveToast(view.returnTo)
-      else this.cancel()
+      else {
+        // The X on the dictation card starts a new run of text: no space before the next sign.
+        if (view.kind === 'dictation') this.lastTyped = null
+        this.cancel()
+      }
       return
     }
     if (target === 'proceed') {
@@ -544,15 +580,7 @@ export class Controller {
       return
     }
     if (mode === 'dictation' && (view.kind === 'dictation' || view.kind === 'ready')) {
-      const text = token.kind === 'letter' ? token.text : `${token.text} `
-      const current = view.kind === 'dictation' ? view.text : ''
-      const joined = (current + (token.kind === 'word' && current && !current.endsWith(' ') ? ' ' : '') + text)
-      this.setView({ kind: 'dictation', text: joined.slice(-120) })
-      const typed = token.kind === 'word' && current && !current.endsWith(' ') ? ` ${text}` : text
-      void settled(this.services.typeText(typed)).then((res) => {
-        if (!res.ok) this.notify(failureText(res))
-      })
-      return
+      return this.dictate(token, view.kind === 'dictation' ? view.text : '')
     }
     if (view.kind === 'didYouMean' && view.purpose === 'sign') return
     if (!['ready', 'recognizing', 'building', 'sentence'].includes(view.kind)) return
@@ -567,6 +595,25 @@ export class Controller {
       tokens: [...this.tokens],
       current: token.text,
       sentence: assembleSentence(this.tokens)
+    })
+  }
+
+  /** Whether new text continues what fastASL typed last (and so needs a space before it). */
+  private continuesRun(): boolean {
+    return this.lastTyped !== null && Date.now() - this.lastTyped.at < TYPED_RUN_MS
+  }
+
+  /**
+   * Dictation types each sign at the cursor of the focused app as it is recognized. Letters
+   * join only on the card that typed them; an empty card continues a recent run as a new word.
+   */
+  private dictate(token: Token, cardText: string): void {
+    const previous = cardText ? (this.lastTyped?.kind ?? 'word') : this.continuesRun() ? 'word' : null
+    const chunk = dictationChunk(previous, token)
+    this.lastTyped = { kind: token.kind, at: Date.now() }
+    this.setView({ kind: 'dictation', text: (cardText + chunk).slice(-DICTATION_KEEP) })
+    void settled(this.services.typeText(chunk)).then((res) => {
+      if (!res.ok) this.notify(failureText(res), TYPING_NOTICE_MS)
     })
   }
 
@@ -593,9 +640,10 @@ export class Controller {
 
   private deleteLastToken(): void {
     if (!this.tokens.length) return this.cancel()
-    // Delete a whole word: trailing run of letters counts as one word.
+    // Delete a whole word: trailing run of letters counts as one word. Spell mode spells one
+    // word, so there a swipe takes back a letter.
     const last = this.tokens[this.tokens.length - 1]
-    if (last.kind === 'letter') {
+    if (last.kind === 'letter' && getApp().mode !== 'spell') {
       while (this.tokens.length && this.tokens[this.tokens.length - 1].kind === 'letter') this.tokens.pop()
     } else {
       this.tokens.pop()
@@ -618,13 +666,8 @@ export class Controller {
 
   private endPhrase(): void {
     if (!this.tokens.length) return this.cancel()
-    const mode = getApp().mode
-    const sentence = assembleSentence(this.tokens)
-    if (mode === 'spell') {
-      void this.spellSuggestions()
-      return
-    }
-    this.setView({ kind: 'sentence', sentence, tokens: [...this.tokens] })
+    if (getApp().mode === 'spell') return void this.spellSuggestions()
+    this.setView({ kind: 'sentence', sentence: assembleSentence(this.tokens), tokens: [...this.tokens] })
     this.prefetchInterpretation()
   }
 
@@ -735,7 +778,9 @@ export class Controller {
             sentence: assembleSentence(this.tokens)
           })
         } else if (view.purpose === 'spell') {
-          void this.typeSpelled(choice)
+          // Spellings still on their way would bring back the list being picked from.
+          if (view.pending && !this.inserting) this.setView({ ...view, pending: false })
+          void this.insert(choice, 'Typed')
         } else if (choice === INSERT_TEXT) {
           void this.contextAction(choice, view.quote ?? assembleSentence(this.tokens))
         } else {
@@ -769,11 +814,7 @@ export class Controller {
   }
 
   private async contextAction(action: string, sentence: string): Promise<void> {
-    if (isInsertAction(action)) {
-      const res = await settled(this.services.typeText(sentence))
-      this.toast(res.ok ? 'Text inserted' : 'Could not insert text', res.ok ? sentence : res.error, res.ok)
-      return
-    }
+    if (isInsertAction(action)) return this.insert(sentence, 'Text inserted')
     if (isMoreAction(action)) {
       this.setView({ kind: 'quickMenu', options: QUICK_MENU, fromSentence: true })
       return
@@ -781,21 +822,36 @@ export class Controller {
     this.setView({ kind: 'agentReady', intent: `${action}: "${sentence}"`, variant: 'default', sentence })
   }
 
+  /** The raw letters can be picked at once; Claude's spellings join them when they arrive. */
   private async spellSuggestions(): Promise<void> {
-    const view = this.view
     const letters = this.tokens.map((t) => t.text).join('')
+    const list: View = { kind: 'didYouMean', variant: 'list', options: [letters], purpose: 'spell', quote: letters }
+    const pending: View = { ...list, pending: true }
+    this.setView(pending)
     const frontmost = await this.services.frontmostApp().catch(() => null)
     const res = await settled(this.services.spellSuggest({ letters, frontmost }))
-    if (this.view !== view) return // cancelled or kept spelling meanwhile
-    const options = res.ok ? [letters, ...res.value.filter((s) => s !== letters)].slice(0, 3) : [letters]
+    if (this.view !== pending) return // picked, edited or cancelled meanwhile
     if (!res.ok) this.notify(failureText(res))
-    this.setView({ kind: 'didYouMean', variant: 'list', options, purpose: 'spell', quote: letters })
+    const options = res.ok ? [letters, ...res.value.filter((s) => s !== letters)].slice(0, 3) : [letters]
+    this.setView({ ...list, options })
   }
 
-  private async typeSpelled(text: string): Promise<void> {
-    const res = await settled(this.services.typeText(text))
-    this.resetPhrase()
-    this.toast(res.ok ? 'Typed' : 'Could not type', res.ok ? text : res.error, res.ok)
+  /**
+   * Types into the focused app (spaced from text typed just before), then toasts. A failure (no
+   * Accessibility, say) keeps the card where it was, with the reason, so the pick can be made
+   * again once it is fixed. The first paste can wait long on a permission prompt: a card that
+   * moved on meanwhile only gets a notice, so a phrase started since is kept.
+   */
+  private async insert(text: string, title: string): Promise<void> {
+    if (this.inserting) return this.notify('Still typing the last pick')
+    this.inserting = true
+    const from = this.view
+    const res = await settled(this.services.typeText(this.continuesRun() ? ` ${text}` : text))
+    this.inserting = false
+    if (!res.ok) return this.notify(failureText(res), TYPING_NOTICE_MS)
+    this.lastTyped = { kind: 'word', at: Date.now() }
+    if (this.view === from) this.toast(title, text, true)
+    else this.notify(`${title}: “${text}”`)
   }
 
   // ---------------------------------------------------------------- agent
@@ -804,6 +860,8 @@ export class Controller {
     this.subscribe() // dispose() may have run (React StrictMode re-mounts App)
     // The run uses up the phrase, however it ends: Done, Settings and Ready start a new one.
     this.resetPhrase()
+    // The agent may switch apps or type itself: what fastASL types next starts a new run.
+    this.lastTyped = null
     this.steps = []
     // One run at a time: the main process stops whatever ran before, a pending shortcut included.
     this.shortcut = null
@@ -942,6 +1000,7 @@ export class Controller {
     this.subscribe() // its runs can show Working and Confirm
     // The main process stops any run on the card for the shortcut.
     this.clearRun()
+    this.lastTyped = null // as for an agent run
     const pending = this.services.runShortcut(gestureId).catch(
       (err: unknown): ShortcutRunResult => ({
         ok: false,

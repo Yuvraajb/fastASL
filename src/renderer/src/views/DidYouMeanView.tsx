@@ -1,7 +1,20 @@
 import { Check, X } from 'lucide-react'
 import type { View } from '../app/types'
 import { controller } from '../app/context'
-import { ActivityBars, Button, ButtonRow, Feed, Header, Hint, Notice, OptionList, QuoteBox, SectionTitle, Stack } from '../ui'
+import {
+  ActivityBars,
+  Button,
+  ButtonRow,
+  Feed,
+  Header,
+  Hint,
+  Notice,
+  OptionList,
+  QuoteBox,
+  SectionTitle,
+  Spinner,
+  Stack
+} from '../ui'
 import './DidYouMeanView.css'
 
 type DidYouMean = Extract<View, { kind: 'didYouMean' }>
@@ -13,7 +26,7 @@ export function DidYouMeanView({ view }: Props): React.JSX.Element {
 
 const fingersHint = (count: number): string => (count > 1 ? `hold up 1–${count} fingers` : 'hold up 1 finger')
 
-/** Reference image 1, panel 12: numbered alternatives, picked by finger count. */
+/** Reference image 1, panel 12: numbered alternatives, picked by finger count. Swipe left edits what they came from. */
 function ListVariant({ view }: Props): React.JSX.Element {
   return (
     <Stack>
@@ -25,9 +38,15 @@ function ListVariant({ view }: Props): React.JSX.Element {
           {view.quote ? <p className="dym__quote">“{view.quote}”</p> : null}
         </div>
         <OptionList options={view.options} />
+        {view.pending ? (
+          <p className="dym__pending">
+            <Spinner size={12} />
+            Finding spellings...
+          </p>
+        ) : null}
       </Stack>
       <Notice />
-      {view.purpose === 'intent' ? <Hint items={[fingersHint(view.options.length), 'swipe ← edit']} /> : null}
+      {view.purpose !== 'sign' ? <Hint items={[fingersHint(view.options.length), 'swipe ← edit']} /> : null}
     </Stack>
   )
 }

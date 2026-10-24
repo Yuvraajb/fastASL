@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { jsString, runJxa } from './osascript'
+import { MacError, jsString, runJxa } from './osascript'
 import { clipboardSwapScript, pasteScript, typeText } from './typeText'
 
 vi.mock('./osascript', async (importOriginal) => ({
@@ -16,9 +16,9 @@ describe('pasteScript', () => {
     expect(pasteScript(text)).toContain(`pb.setStringForType(${jsString(text)}, $.NSPasteboardTypeString)`)
   })
 
-  it('checks System Events before touching the clipboard, then pastes and restores', () => {
+  it('checks System Events and waits for held modifiers before touching the clipboard, then pastes and restores', () => {
     const script = pasteScript('x')
-    const order = ['uiElementsEnabled()', 'pasteboardItems', 'clearContents', "keystroke('v', { using: 'command down' })", 'delay(0.3)', 'finally', 'writeObjects']
+    const order = ['uiElementsEnabled()', 'modifierFlags', 'pasteboardItems', 'clearContents', "keystroke('v', { using: 'command down' })", 'delay(0.3)', 'finally', 'writeObjects']
     const positions = order.map((needle) => script.indexOf(needle))
     expect(positions.every((p) => p >= 0)).toBe(true)
     expect([...positions].sort((a, b) => a - b)).toEqual(positions)
@@ -60,6 +60,14 @@ describe('typeText', () => {
       error: 'Allow fastASL in System Settings › Privacy & Security › Accessibility'
     })
     expect(await typeText('b')).toEqual({ ok: true, value: undefined })
+  })
+
+  it('words a denied System Events Automation prompt short enough for the two-line notice', async () => {
+    const long = 'Allow fastASL to control System Events in System Settings › Privacy & Security › Automation'
+    runJxaMock.mockRejectedValueOnce(new MacError(long, 'automation', -1743))
+    const res = await typeText('a')
+    expect(res).toEqual({ ok: false, error: 'Turn on System Events for fastASL in Privacy & Security › Automation' })
+    expect(!res.ok && res.error.length).toBeLessThanOrEqual(70)
   })
 })
 

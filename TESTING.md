@@ -89,7 +89,7 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
 
 ### Screenshots
 
-44. Run `npm run screens`. **Expected:** it finishes in about 30s and writes 32 files, from `docs/screens/01-collapsed.png` to `32-missingKey.png`. Each is 1280×880 and shows the card at the top-right of a fake desktop. No window stays open, and `out-screens/` is gone afterwards.
+44. Run `npm run screens`. **Expected:** it finishes in about 30s and writes 32 files, from `docs/screens/01-collapsed.png` to `32-missingKey.png`. Each is 1280×960 (1280×880 before Phase 7) and shows the card at the top-right of a fake desktop. No window stays open, and `out-screens/` is gone afterwards.
 45. Open a few screenshots next to `docs/reference/crops/`. **Expected:** the layout, spacing, type sizes and gray levels match the references.
 
 ## Phase 2 — Camera and hand tracking
@@ -327,3 +327,96 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
 26. **Quit.** Quit from the tray (ASL › Quit). **Expected:** the app is gone within about 3 s, and `pgrep droid` prints nothing. Start `npm run dev` again and, as soon as the card appears, press Option+5 and Ctrl+Opt+T, then quit from the tray at once, while Working still shows "Starting agent..." or "Thinking". **Expected:** the app is gone within about 3 s, no Confirm card or event appears, and a few seconds later `pgrep droid` still prints nothing.
 27. **Mock services.** Run `FASTASL_MOCK=1 npm run dev`. **Expected:** no `[agent] session not started` line and no droid process. Press Option+5 (Agent ready), then Ctrl+Opt+T. **Expected:** Working, then the Confirm card "Team Sync". Make a fist. **Expected:** Done with an X, "Nothing was done" / "You cancelled it". Quit.
 28. **Screenshots.** Run `npm run screens`. **Expected:** the 34 screenshots still show the mock states (12-working, 13-confirm, 15-done "Meeting created"), no droid process starts, and the camera light stays off.
+
+## Phase 7 — Modes (Dictation and Spell, typing that keeps the clipboard)
+
+**Before you start**
+
+- Run `export FASTASL_DATA_DIR=~/fastasl-test`, then `FASTASL_LOG=1 npm run dev`, from a terminal. In dev, every paste prints one line: `[mac] typeText "<text>" -> ok`, or `-> {"error":…}`.
+- Open TextEdit with a new, empty document and click into it before the first step that types. Nothing in this phase sends or creates anything: it only types into the app in front.
+- In dev, macOS asks for permissions on behalf of your terminal app. The first paste asks whether it may control "System Events" (Automation): allow it, unless you are doing step 16. Typing also needs Accessibility for the terminal app (System Settings › Privacy & Security › Accessibility).
+- Typing steps use Ctrl+Opt hotkeys. A paste waits up to 1 s for Control and Option to go up, so let go after each press. If you hold them longer, the word may be lost (DECISIONS 98).
+- fastASL puts a space before what it types if it typed something in the last 2 minutes, across Settings and mode switches (DECISIONS 92). The X on the Dictation card starts over without a space.
+- Steps 10, 11 and 12 need `ANTHROPIC_API_KEY` in `.env`, which is read at launch. The other steps need no key.
+- Automated: `npx vitest run src/renderer/src/app src/main/mac src/renderer/src/views`. **Expected:** 9 files, 269 tests passed:
+  - 166 for the controller: Dictation spacing (also across Settings, a collapse and Spell mode), the Spell flow, Insert text, a paste that finishes after the card moved on, switching and restoring modes, and typing failures.
+  - 41 for the engines: synthetic camera frames typed as signs in Dictation, and hands down offering the spelling in Spell mode.
+  - 59 for `mac/`: the paste script (waiting for modifier keys first), the queue, the short Automation message, and a real snapshot and restore on a private pasteboard.
+  - 3 for the views.
+
+### Modes
+
+1. **Swipe through the modes.** In Ready (Command), press Ctrl+Opt+→. **Expected:**
+   - The Dictation card: a red dot on the feed, "Dictating..." top right and "Sign to type..." in the text box.
+   - "Dictation" is highlighted next to "fastASL" for about 1.5 s, then stays there dimmed.
+
+   Press Ctrl+Opt+→ again. **Expected:** Ready, with "Spell" in the header. Press it once more. **Expected:** Ready, and "Command" flashes in the header, then disappears. Ctrl+Opt+← goes the other way (Spell, Dictation, Command). After each switch, `cat ~/fastasl-test/settings.json` shows the current `"mode"`.
+2. **Launch in the saved mode.** Switch to Dictation, quit from the tray (ASL › Quit) and run `FASTASL_LOG=1 npm run dev` again. **Expected:** the card opens on Dictation. Click into TextEdit and press Ctrl+Opt+S. **Expected:** "better" appears in TextEdit and on the card. No Listening or Sentence card appears.
+
+### Dictation
+
+3. **Spacing.** Clear the TextEdit document and click the X next to the activity bars, so a new run starts. Press Ctrl+Opt+S four times. **Expected:**
+   - TextEdit shows exactly "better human computer interaction": no space before "better", one between words, none after.
+   - The terminal shows `[mac] typeText "better" -> ok`, then `[mac] typeText " human" -> ok`, and so on.
+   - The card shows the same words with the caret after the last one.
+
+   Type a period by hand. **Expected:** "interaction." with no space before the period.
+4. **The clipboard is kept.** Before step 3, copy a word in TextEdit, or two files in Finder. After dictating, press Cmd+V in TextEdit, or in a Finder folder for the files. **Expected:** what you copied is pasted, not a dictated word.
+5. **Clear.** Click the X. **Expected:** the card shows "Sign to type...". Press Ctrl+Opt+S. **Expected:** `[mac] typeText "better"`, with no space before it. The X starts a new run of text.
+6. **What acts in Dictation.** Press Ctrl+Opt+H, then Ctrl+Opt+T. **Expected:** nothing changes and nothing is typed. Press Ctrl+Opt+↑. **Expected:** Settings. Press Ctrl+Opt+F. **Expected:** an empty Dictation card. Press Ctrl+Opt+F again. **Expected:** Ready in Command mode, "Command" flashes, and `settings.json` has `"mode": "command"`.
+7. **The run goes on across Settings and Spell mode.** Clear the TextEdit document. Switch to Dictation, click the X and press Ctrl+Opt+S. **Expected:** "better".
+   1. Press Ctrl+Opt+↑, then Ctrl+Opt+F, then Ctrl+Opt+S. **Expected:** the card restarts at "better", and TextEdit shows "better better", with a space.
+   2. Click the chevron at the bottom right (collapse), press Ctrl+Opt+P (expand), then Ctrl+Opt+S. **Expected:** "better better better".
+   3. Press Ctrl+Opt+→ (Spell), Ctrl+Opt+S twice, Ctrl+Opt+H, then Ctrl+Opt+1. **Expected:** "better better better KR" and the toast "Typed" / "KR", without a leading space in the toast.
+   4. When the card is back on Ready, press Ctrl+Opt+← (Dictation), then Ctrl+Opt+S. **Expected:** "better better better KR better".
+8. **With the camera (optional).** This needs signs taught in Phase 4. In Dictation, click the X, sign HELLO, fingerspell two taught letters, then sign another word. **Expected:** one space before each word and before the run of letters, and the letters joined (for example "hello KC play"). Hold a fist for about 1 s. **Expected:** back to Command. A fist-shaped letter held that long counts as the fist.
+
+### Spell mode
+
+9. **Without a key.** Make sure `.env` has no `ANTHROPIC_API_KEY`, then restart. From Command, press Ctrl+Opt+← to switch to Spell.
+   1. Press Ctrl+Opt+T. **Expected:** nothing happens; there is no quick menu in Spell mode.
+   2. Press Ctrl+Opt+S three times. **Expected:** "Building..." with the letter strip K R I.
+   3. Press Ctrl+Opt+←. **Expected:** only the I is removed (K R). Press Ctrl+Opt+S. **Expected:** K R S.
+   4. Press Ctrl+Opt+H. **Expected:** "Pick a spelling", “KRS”, a single option "1 KRS", the notice "Add ANTHROPIC_API_KEY to .env" and the hint "hold up 1 finger · swipe ← edit".
+   5. Press Ctrl+Opt+←. **Expected:** back to the letters K R S. Press Ctrl+Opt+T. **Expected:** the list again (thumbs up also ends the spelling).
+   6. With TextEdit in front, press Ctrl+Opt+1. **Expected:** "KRS" at the cursor (after a space if fastASL typed in the last 2 minutes), the toast "Typed" / "KRS", then Ready, still in Spell mode.
+10. **With a key: spellings.** Put your key in `.env` and restart. In Spell mode, press Ctrl+Opt+S five times (K R I S H), then Ctrl+Opt+H. **Expected:**
+    - At once: "Pick a spelling" with 1 "KRISH" and a spinner, "Finding spellings...".
+    - Within about 1–2 s the spinner goes, and up to two spellings appear as 2 and 3 (for example "Krish", "Krishna"). None contains "@".
+    - The terminal shows `[claude] spellSuggest {"letters":"KRISH",…}`.
+
+    Press Ctrl+Opt+2. **Expected:** that spelling is typed in TextEdit, and the toast "Typed" shows it.
+11. **Pick before the spellings arrive.** Repeat step 10, but press Ctrl+Opt+1 as soon as the list appears. **Expected:** "KRISH" is typed and the "Typed" toast shows. The spellings never replace the toast, and the list never comes back.
+
+### Insert text and the keyboard
+
+12. **The card gives the keyboard back.** This needs the key. Click into TextEdit, then switch to Command mode.
+    1. Press Ctrl+Opt+S, then Ctrl+Opt+H. Click the pencil, press Cmd+A, type `thank you for the update` and press Return. **Expected:** the sentence updates.
+    2. Without clicking anything, press Ctrl+Opt+T. **Expected:** Context actions, or "Did you mean..." with "Insert text" as the last row.
+    3. Hold up the number of "Insert text" (Ctrl+Opt+1 on Context actions). **Expected:** Claude's sentence (for example "Thank you for the update!") is typed at the TextEdit cursor, and the toast "Text inserted" shows it. The card gave the keyboard back when the edit ended (DECISIONS 97). The clipboard is unchanged.
+    4. Press Ctrl+Opt+↑ (Settings), Ctrl+Opt+1 (Teach a sign), Ctrl+Opt+5 (Spell a new word). Click the keyboard button, type `test` and press Esc. Press Ctrl+Opt+F three times (back to Ready), then Ctrl+Opt+→ (Dictation) and Ctrl+Opt+S. **Expected:** "better" lands in TextEdit, not only on the card.
+    5. From the tray, choose ASL › Import template pack… and cancel the dialog. Without clicking anything, press Ctrl+Opt+S. **Expected:** the word lands in TextEdit, or, if the dialog left fastASL as the active app, the notice "Click the app to type into first" and the terminal shows that error. A word never goes missing behind an `-> ok`. Click into TextEdit and press Ctrl+Opt+S. **Expected:** typed.
+13. **Typing order.** In Dictation, hold Control+Option, tap S four times quickly, and let go within a second of the first tap. **Expected:** nothing is pasted while the keys are down. Then the four words appear in order, none lost or doubled, and the terminal shows four `-> ok` lines.
+
+### When typing fails
+
+14. **No Accessibility.** In System Settings › Privacy & Security › Accessibility, turn off your terminal app, then restart `npm run dev`. Copy a word. In Dictation, press Ctrl+Opt+S. **Expected:**
+    - The word appears on the card but not in TextEdit.
+    - The notice reads "Allow fastASL in System Settings › Privacy & Security › Accessibility" on two lines and stays about 8 s.
+    - The terminal shows `-> {"error":"Allow fastASL in System Settings › Privacy & Security › Accessibility"}`.
+    - Cmd+V still pastes the word you copied.
+
+    Leave Accessibility off for step 15.
+15. **A spelling that can't be typed.** With Accessibility still off, switch to Spell mode, press Ctrl+Opt+S twice, Ctrl+Opt+H, then Ctrl+Opt+1. **Expected:** the list stays, with the Accessibility notice, and nothing is typed. Turn Accessibility back on for the terminal and press Ctrl+Opt+1 again. **Expected:** the text is typed and the toast shows. If macOS keeps refusing until the terminal restarts, restart and repeat the step.
+16. **Automation refused, and a pick that waits (optional).** Run `tccutil reset AppleEvents com.apple.Terminal`, or your terminal's bundle id (iTerm2: `com.googlecode.iterm2`). This forgets every Automation permission of that terminal, not just System Events. Restart `npm run dev` and switch to Spell mode.
+    1. Press Ctrl+Opt+S twice, Ctrl+Opt+H, then Ctrl+Opt+1. **Expected:** macOS asks whether the terminal may control "System Events". Nothing is typed yet, and the card stays on the list. Answer within 30 s from here on.
+    2. Without answering, press Ctrl+Opt+F (Ready), Ctrl+Opt+S three times, Ctrl+Opt+H, then Ctrl+Opt+1. **Expected:** the notice "Still typing the last pick". The KRI list stays.
+    3. Click "Don't Allow". **Expected:** the notice "Turn on System Events for fastASL in Privacy & Security › Automation", whole, on two lines, for about 8 s. Nothing is typed, and the card stays on the KRI list.
+    4. In System Settings › Privacy & Security › Automation, turn on System Events under your terminal app. Press Ctrl+Opt+1. **Expected:** "KRI" is typed, and the "Typed" toast shows.
+    5. Reset again and repeat 1 and 2, then click "Allow". **Expected:** "KR" is typed, and the notice reads `Typed: “KR”`. The KRI list stays, with no toast, and picking from it still works.
+17. **Screenshots.** Run `npm run screens`. **Expected:**
+    - 37 files, each 1280×960.
+    - 21-spellMode shows "KRISNA", "Krishna" and "Krisna", with the hint "hold up 1–3 fingers · swipe ← edit".
+    - 35-spellPending shows the spinner.
+    - 36-dictationNoAccess and 37-dictationNoAutomation show the Accessibility and Automation notices whole, on two lines, with the whole card visible.
+    - Nothing is typed anywhere, and the camera light stays off.

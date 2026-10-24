@@ -26,7 +26,8 @@ export default function App(): React.JSX.Element {
     void window.fastasl?.getEnvStatus().then((keyStatus) => setApp({ keyStatus }))
     void controller.loadTemplates()
     void window.fastasl?.getSettings().then((s) => {
-      setApp({ mode: s.mode, sensitivity: s.sensitivity, cameraOn: s.cameraEnabled, cameraSource: s.cameraSource })
+      setApp({ sensitivity: s.sensitivity, cameraOn: s.cameraEnabled, cameraSource: s.cameraSource })
+      controller.restoreMode(s.mode)
       if (liveCamera && !disposed) stopEngines = startEngines(controller)
     })
     return () => {

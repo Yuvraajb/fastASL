@@ -260,15 +260,33 @@ export const MOCK_SCENES: Record<string, MockScene> = {
   },
   palmHold: { view: { kind: 'collapsed' }, holdProgress: 0.65, pose: 'palm' },
   spellMode: {
+    // The raw letters first, then Claude's fixes (which never add what wasn't spelled).
     view: {
       kind: 'didYouMean',
       variant: 'list',
-      quote: 'KRISHNA',
-      options: ['Krishna', 'krishna@calhacks.io', 'Krishna Chandra'],
+      quote: 'KRISNA',
+      options: ['KRISNA', 'Krishna', 'Krisna'],
       purpose: 'spell'
     },
     mode: 'spell',
     pose: 'c'
+  },
+  spellPending: {
+    view: { kind: 'didYouMean', variant: 'list', quote: 'KRISNA', options: ['KRISNA'], purpose: 'spell', pending: true },
+    mode: 'spell',
+    pose: 'c'
+  },
+  dictationNoAccess: {
+    view: { kind: 'dictation', text: 'see you at' },
+    mode: 'dictation',
+    notice: 'Allow fastASL in System Settings › Privacy & Security › Accessibility',
+    pose: 'twoHands'
+  },
+  dictationNoAutomation: {
+    view: { kind: 'dictation', text: 'see you at' },
+    mode: 'dictation',
+    notice: 'Turn on System Events for fastASL in Privacy & Security › Automation',
+    pose: 'twoHands'
   }
 }
 
@@ -307,5 +325,8 @@ export const SCREENSHOT_ORDER: string[] = [
   'settingsSensitivity',
   'missingKey',
   'settingsTeachSpell',
-  'settingsTeachRetry'
+  'settingsTeachRetry',
+  'spellPending',
+  'dictationNoAccess',
+  'dictationNoAutomation'
 ]

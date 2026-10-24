@@ -13,6 +13,7 @@ import { createClaudeService } from './claude'
 import { createAgentServices } from './agent'
 import { TOOLS } from './tools'
 import { getFrontmostApp } from './mac/frontmost'
+import { typeText } from './mac/typeText'
 
 const screenshots = process.env.FASTASL_SCREENSHOTS === '1'
 const dev = !app.isPackaged || process.env.FASTASL_DEV === '1'
@@ -39,12 +40,20 @@ function loadRenderer(win: BrowserWindow, query: Record<string, string> = {}): v
   }
 }
 
-/** Dev: one terminal line per Claude call (request -> answer), to check the card's routing against it. */
-function devLogged<Req, T>(name: string, call: (req: Req) => Promise<Result<T>>): (req: Req) => Promise<Result<T>> {
+/**
+ * Dev: one terminal line per call (request -> answer), to check the card's routing against
+ * Claude's answer, or Dictation's spacing against what was typed.
+ */
+function devLogged<Req, T>(
+  tag: string,
+  name: string,
+  call: (req: Req) => Promise<Result<T>>
+): (req: Req) => Promise<Result<T>> {
   if (!dev) return call
   return async (req) => {
     const res = await call(req)
-    console.log(`[claude] ${name} ${JSON.stringify(req)} -> ${JSON.stringify(res.ok ? res.value : { error: res.error })}`)
+    const answer = res.ok ? (res.value === undefined ? 'ok' : JSON.stringify(res.value)) : JSON.stringify({ error: res.error })
+    console.log(`[${tag}] ${name} ${JSON.stringify(req)} -> ${answer}`)
     return res
   }
 }
@@ -58,13 +67,30 @@ function devLoggedEmit(emit: (e: AgentEvent) => void): (e: AgentEvent) => void {
   }
 }
 
+/** fastASL itself is the active app (after a tray dialog, say): Cmd+V would land on it. */
+let appActive = false
+app.on('did-become-active', () => (appActive = true))
+app.on('did-resign-active', () => (appActive = false))
+
+/**
+ * Dictation, Spell mode and Insert text paste at the cursor; the clipboard is restored. A card
+ * still holding the keyboard after a keyboard edit gives it back first, so the paste never lands
+ * on the card while the card reports it typed.
+ */
+function typeAtCursor(text: string): Promise<Result<void>> {
+  overlay?.releaseFocus()
+  if (appActive) return Promise.resolve({ ok: false, error: 'Click the app to type into first' })
+  return typeText(text)
+}
+
 // Claude phrases intents in terms of the agent's real tools.
 const claude = createClaudeService({ tools: () => TOOLS.map(({ name, description }) => ({ name, description })) })
 
 const services: MainServices = {
-  interpret: devLogged('interpret', claude.interpret),
-  spellSuggest: devLogged('spellSuggest', claude.spellSuggest),
+  interpret: devLogged('claude', 'interpret', claude.interpret),
+  spellSuggest: devLogged('claude', 'spellSuggest', claude.spellSuggest),
   frontmostApp: getFrontmostApp,
+  typeText: devLogged('mac', 'typeText', typeAtCursor),
   capture: async (name: string) => {
     if (!stage) return ''
     const dir = join(process.cwd(), 'docs', 'screens')

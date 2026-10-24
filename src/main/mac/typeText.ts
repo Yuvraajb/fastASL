@@ -1,5 +1,5 @@
 import type { Result } from '@shared/types'
-import { jsString, runJxa } from './osascript'
+import { MacError, jsString, runJxa } from './osascript'
 
 export interface SwapOptions {
   /** JXA expression for the pasteboard to use. */
@@ -15,6 +15,14 @@ const GENERAL_PASTEBOARD = '$.NSPasteboard.generalPasteboard'
 // Sends an Apple event to System Events first, so a pending Automation prompt
 // blocks (or times out) before the clipboard has been changed.
 const SYSTEM_EVENTS_PREFLIGHT = "Application('System Events').uiElementsEnabled();"
+
+// Modifiers still held (Ctrl+Opt of a hotkey that triggered the typing) would turn the paste
+// into Cmd+Ctrl+Opt+V, which pastes nothing: wait up to 1 s for Shift, Ctrl, Opt and Cmd to go up.
+const AWAIT_MODIFIERS_UP =
+  'for (let i = 0; i < 20 && (Number($.NSEvent.modifierFlags) & 0x1e0000); i++) delay(0.05);'
+
+/** The notice has two lines: the generic Automation message (osaError) runs past them. */
+const AUTOMATION_DENIED = 'Turn on System Events for fastASL in Privacy & Security › Automation'
 
 const KEYSTROKE_PASTE = "Application('System Events').keystroke('v', { using: 'command down' });\ndelay(0.3);"
 
@@ -65,7 +73,10 @@ export function clipboardSwapScript(
 
 /** Pastes `text` into the focused app with Cmd+V via System Events. */
 export function pasteScript(text: string): string {
-  return clipboardSwapScript(text, { prepare: SYSTEM_EVENTS_PREFLIGHT, whileSet: KEYSTROKE_PASTE })
+  return clipboardSwapScript(text, {
+    prepare: `${SYSTEM_EVENTS_PREFLIGHT}\n  ${AWAIT_MODIFIERS_UP}`,
+    whileSet: KEYSTROKE_PASTE
+  })
 }
 
 let queue: Promise<unknown> = Promise.resolve()
@@ -87,6 +98,8 @@ async function pasteOnce(text: string): Promise<Result<void>> {
     await runJxa(pasteScript(text), { timeoutMs: 30_000, app: 'System Events' })
     return { ok: true, value: undefined }
   } catch (err) {
+    // The paste sends Apple events to System Events only, so that is what Automation must allow.
+    if (err instanceof MacError && err.kind === 'automation') return { ok: false, error: AUTOMATION_DENIED }
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }

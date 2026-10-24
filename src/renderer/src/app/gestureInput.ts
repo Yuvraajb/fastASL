@@ -16,21 +16,21 @@ export interface GestureConnection {
  * Connects the gesture engine to the app: live camera frames go in, fired gestures go to
  * controller.gesture (which gates them by view again), and hold progress goes to the store
  * (holdProgress: the collapsed pill's ring; pick: the option badges). The engine evaluates
- * only the current view's gestures and follows the sensitivity setting.
+ * only the current view's (and mode's) gestures and follows the sensitivity setting.
  */
 export function connectGestures(
   controller: Pick<Controller, 'gesture'>,
   subscribeFrames: (fn: (frame: FrameSample) => void) => () => void
 ): GestureConnection {
-  const { view, sensitivity } = getApp()
+  const { view, mode, sensitivity } = getApp()
   const engine = new GestureEngine({ sensitivity: SENSITIVITY[sensitivity] })
-  engine.setActive(activeGestures(view))
+  engine.setActive(activeGestures(view, mode))
   // Each camera session (new source, restart, camera turned back on) has its own element.
   let session: CanvasImageSource | null = null
   let aspect = 0
 
   const stopStore = useApp.subscribe((s, prev) => {
-    if (s.view !== prev.view) engine.setActive(activeGestures(s.view))
+    if (s.view !== prev.view || s.mode !== prev.mode) engine.setActive(activeGestures(s.view, s.mode))
     // A new screen needs a fresh gesture: whatever is held as it appears must be released first.
     if (gestureScreen(s.view) !== gestureScreen(prev.view)) engine.spendShown()
     if (s.sensitivity !== prev.sensitivity) engine.setSensitivity(SENSITIVITY[s.sensitivity])

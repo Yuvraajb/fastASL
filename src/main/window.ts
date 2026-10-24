@@ -115,6 +115,8 @@ export interface OverlayWindow {
   win: BrowserWindow
   setCardSize(size: CardSize): void
   setFocusable(focusable: boolean): void
+  /** Gives the keyboard back to the app in front if the card still has it. */
+  releaseFocus(): void
 }
 
 export function createOverlayWindow(opts: { dev: boolean; screenshots: boolean; mockServices: boolean }): OverlayWindow {
@@ -188,6 +190,21 @@ export function createOverlayWindow(opts: { dev: boolean; screenshots: boolean; 
 
   win.once('ready-to-show', () => win.showInactive())
 
+  // win.isFocused() reads false for this non-activating panel even while it has the keyboard
+  // (macOS 26), so its key status comes from the focus / blur events.
+  let hasKeyboard = false
+  win.on('focus', () => (hasKeyboard = true))
+  win.on('blur', () => (hasKeyboard = false))
+
+  // On macOS setFocusable(false) leaves a key window key, so after a keyboard edit Cmd+V would
+  // still reach the card. Ordering the panel out hands the keyboard back to the active app (the
+  // non-activating panel never took activation from it); it is shown again at once, unfocusable.
+  const releaseFocus = (): void => {
+    if (win.isDestroyed() || !hasKeyboard) return
+    win.blur()
+    win.showInactive()
+  }
+
   return {
     win,
     setCardSize(size) {
@@ -199,7 +216,9 @@ export function createOverlayWindow(opts: { dev: boolean; screenshots: boolean; 
     setFocusable(focusable) {
       win.setFocusable(focusable)
       if (focusable) win.focus()
-    }
+      else releaseFocus()
+    },
+    releaseFocus
   }
 }
 
@@ -207,7 +226,8 @@ export function createOverlayWindow(opts: { dev: boolean; screenshots: boolean; 
 export function createStageWindow(): BrowserWindow {
   return new BrowserWindow({
     width: 640,
-    height: 440,
+    // Tall enough for the tallest card: Dictation with a two-line notice.
+    height: 480,
     x: 40,
     y: 60,
     show: true,

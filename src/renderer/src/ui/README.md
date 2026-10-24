@@ -30,7 +30,7 @@ Every view's root is a `<Stack>` (flex column, **10px gap**). Order, top to bott
 | `Header` | 20px | Always first (except collapsed / toast). |
 | `Feed` | by aspect | Full width, radius 14. |
 | body | - | Token, strip, sentence, steps, options, buttons... |
-| `Notice` | 30px | Renders nothing when `store.notice` is empty. Put it just above the footer / buttons. |
+| `Notice` | 30px (46px when it wraps) | Renders nothing when `store.notice` is empty. Put it just above the footer / buttons. |
 | `Footer` or `ButtonRow` | 32px / 38px | Last row. |
 
 - Gap between rows: **10px** (Stack default). Inside a group (e.g. token + bars, letter + divider) use a nested `<Stack gap={8}>`.
@@ -376,7 +376,7 @@ Green circle with a dark check (ref3-08), pops in. `ok={false}` = gray circle wi
 
 ### `Notice`
 
-One line, 30px, info icon, `--surface` panel, ellipsis. Reads `store.notice` unless `text` is given; renders nothing when empty.
+30px for one line, info icon, `--surface` panel. A long message (a permission's System Settings path) wraps to a second line, then ellipsis. Reads `store.notice` unless `text` is given; renders nothing when empty.
 
 ```tsx
 <Notice />
@@ -442,7 +442,7 @@ These are compositions, not components. Match the crop listed.
 - **Confirm** (ref3-07, 340px): `Header` · row: `Panel` (lucide icon + 13px lines, title `--fs-title`/600 white, rest `--text-2`) + `Feed variant="thumb"` (~104px wide, stretch to panel height) · `ButtonRow` secondary Cancel + primary "Confirm ✓".
 - **Done** (ref3-08, 340px): `Header` (status "Done") · row: `Feed variant="thumb" width={110} height={124}` + column (`CheckBadge`, title `--fs-result` 17px/600, subtitle 13px `--text-2`) · `ButtonRow` secondary "View" + secondary "New command >".
 - **Toast** (ref2-07 / ref1-09, 320px, no header): row: `CheckBadge size={32}` + title `--fs-title` 15px/600 + subtitle 13px `--text-2` + `Feed variant="thumb" width={64} height={64}` on the right; `ProgressLine` under the text.
-- **Did you mean** list (ref1-12): `Header view={view} close` · `SectionTitle` "Did you mean..." · `OptionList`. Quote variant (ref2-06): `QuoteBox` with a thumb `aside`, `ButtonRow` primary "Yes, send" (leading Check) + secondary "Edit" (leading X), `ActivityBars` centered.
+- **Did you mean** list (ref1-12): `Header view={view} close` · `SectionTitle` "Did you mean..." ("Pick a spelling" in Spell mode) · `OptionList` · `Hint` "hold up 1–N fingers · swipe ← edit". A spelling list that is still waiting for Claude shows a `Spinner` line "Finding spellings..." under the options. Quote variant (ref2-06): `QuoteBox` with a thumb `aside`, `ButtonRow` primary "Yes, send" (leading Check) + secondary "Edit" (leading X), `ActivityBars` centered.
 - **Context actions** (ref1-11): `Feed` 16:10 · `OptionList iconStyle="circle"` (last item `muted`; badges trail).
 - **Quick menu** (ref2-09): `Header` · `SectionTitle` "What would you like to do?" · `OptionList` with icons (badges trail) · `ActivityBars` centered · `Hint`.
 - **Dictation** (ref1-10): `Header` · `Feed recording` · `ActivityBars` · dictated text `--fs-title`/500 in a `Panel` with a 2px white caret.

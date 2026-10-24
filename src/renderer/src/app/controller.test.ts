@@ -15,6 +15,7 @@ import {
   SETTINGS_ROOT,
   activeGestures,
   assembleSentence,
+  dictationChunk,
   gestureScreen,
   optionsFor,
   takesSigns,
@@ -27,6 +28,7 @@ import type { SettingsPage, Token, View } from './types'
 // Mirrors the controller's private timings.
 const TOAST_MS = 2600
 const DONE_AUTO_COLLAPSE_MS = 4000
+const TYPED_RUN_MS = 2 * 60_000
 
 const word = (text: string): Token => ({ text, kind: 'word' })
 const letter = (text: string): Token => ({ text, kind: 'letter' })
@@ -1130,12 +1132,34 @@ describe('intent routing', () => {
     expect([...activeGestures(getApp().view)].sort()).toEqual(['fingers', 'fist'])
   })
 
-  it('a failed insert shows why on the toast', async () => {
-    vi.spyOn(services, 'typeText').mockResolvedValue({ ok: false, error: 'Typing is not available yet' })
-    c.setView({ kind: 'contextActions', sentence: 'Thanks!', actions: ['Insert text', 'More options'] })
+  it('a failed insert says why and stays, so it can be picked again once fixed', async () => {
+    const error = 'Allow fastASL in System Settings › Privacy & Security › Accessibility'
+    const typeText = vi.spyOn(services, 'typeText').mockResolvedValueOnce({ ok: false, error })
+    const actions: View = { kind: 'contextActions', sentence: 'Thanks!', actions: ['Insert text', 'More options'] }
+    c.setView(actions)
     fingers(1)
     await settle()
-    expect(viewAs('toast')).toMatchObject({ title: 'Could not insert text', subtitle: 'Typing is not available yet', ok: false })
+    expect(getApp().view).toBe(actions)
+    expect(getApp().notice).toBe(error)
+    fingers(1)
+    await settle()
+    expect(typeText).toHaveBeenCalledTimes(2)
+    expect(viewAs('toast')).toMatchObject({ title: 'Text inserted', subtitle: 'Thanks!', ok: true })
+  })
+
+  it('a second pick while the text is still being typed does not type it twice', async () => {
+    let finish: (res: { ok: true; value: undefined }) => void = () => {}
+    const typeText = vi
+      .spyOn(services, 'typeText')
+      .mockReturnValueOnce(new Promise((resolve) => (finish = resolve)))
+    c.setView({ kind: 'contextActions', sentence: 'Thanks!', actions: ['Insert text', 'More options'] })
+    fingers(1)
+    fingers(1)
+    expect(typeText).toHaveBeenCalledTimes(1)
+    expect(getApp().notice).toBe('Still typing the last pick')
+    finish({ ok: true, value: undefined })
+    await settle()
+    expect(viewAs('toast').title).toBe('Text inserted')
   })
 
   it('More options › a quick-menu pick interprets the signed sentence with that prefix', async () => {
@@ -1672,11 +1696,19 @@ describe('did you mean', () => {
 describe('spell mode', () => {
   beforeEach(() => setApp({ mode: 'spell' }))
 
-  it('end of phrase offers spellings; picking one types it, then toasts', async () => {
+  it('end of phrase offers the letters at once, then the spellings; picking one types it, then toasts', async () => {
     const typeText = vi.spyOn(services, 'typeText')
     sign(letter('K'), letter('C'))
     expect(viewAs('building').sentence).toBe('KC')
     g('handsDown')
+    expect(getApp().view).toEqual({
+      kind: 'didYouMean',
+      variant: 'list',
+      options: ['KC'],
+      purpose: 'spell',
+      quote: 'KC',
+      pending: true
+    })
     await settle(300)
     expect(getApp().view).toEqual({
       kind: 'didYouMean',
@@ -1696,12 +1728,38 @@ describe('spell mode', () => {
     expect(viewAs('recognizing').token).toBe('A')
   })
 
+  it.each(['thumbsUp', 'swipeRight'] as const)('%s also ends the spelling', async (gesture) => {
+    const spellSuggest = vi.spyOn(services, 'spellSuggest')
+    sign(letter('K'), letter('C'))
+    g(gesture)
+    expect(viewAs('didYouMean')).toMatchObject({ purpose: 'spell', options: ['KC'] })
+    await settle()
+    expect(spellSuggest).toHaveBeenCalledWith({ letters: 'KC', frontmost: { name: 'Mail', windowTitle: 'New Message' } })
+  })
+
+  it('the raw letters can be typed before the spellings arrive, which are then dropped', async () => {
+    let typed: (res: { ok: true; value: undefined }) => void = () => {}
+    const typeText = vi.spyOn(services, 'typeText').mockReturnValueOnce(new Promise((resolve) => (typed = resolve)))
+    sign(letter('K'), letter('C'))
+    g('handsDown')
+    fingers(2) // nothing to pick yet
+    expect(viewAs('didYouMean').pending).toBe(true)
+    g('thumbsUp')
+    expect(typeText).toHaveBeenCalledWith('KC')
+    expect(viewAs('didYouMean')).toMatchObject({ options: ['KC'], pending: false })
+    await settle(300) // the spellings arrive while the letters are still being pasted
+    expect(viewAs('didYouMean').options).toEqual(['KC'])
+    typed({ ok: true, value: undefined })
+    await settle()
+    expect(viewAs('toast').subtitle).toBe('KC')
+  })
+
   it('falls back to the raw letters when suggestions fail', async () => {
     vi.spyOn(services, 'spellSuggest').mockResolvedValue({ ok: false, error: 'x', missingKey: 'ANTHROPIC_API_KEY' })
     sign(letter('K'), letter('C'))
     g('thumbsUp')
     await settle()
-    expect(viewAs('didYouMean').options).toEqual(['KC'])
+    expect(getApp().view).toEqual({ kind: 'didYouMean', variant: 'list', options: ['KC'], purpose: 'spell', quote: 'KC' })
     expect(getApp().notice).toBe('Add ANTHROPIC_API_KEY to .env')
   })
 
@@ -1713,14 +1771,76 @@ describe('spell mode', () => {
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
-  it('"Edit" on the spelling list goes back to the letters, not to the agent', async () => {
+  it('swipe left takes back one letter, not the whole word', () => {
+    sign(letter('K'), letter('C'), letter('X'))
+    g('swipeLeft')
+    expect(viewAs('building')).toMatchObject({ tokens: [letter('K'), letter('C')], sentence: 'KC' })
+    g('swipeLeft')
+    expect(viewAs('building').sentence).toBe('K')
+    g('swipeLeft')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('"Edit" (swipe left or the button) on the spelling list goes back to the letters, not to the agent', async () => {
     const interpret = vi.spyOn(services, 'interpret')
     sign(letter('K'), letter('C'))
     g('handsDown')
     await settle(300)
-    c.tap('secondary')
+    g('swipeLeft')
     expect(viewAs('building')).toMatchObject({ tokens: [letter('K'), letter('C')], sentence: 'KC' })
+    g('handsDown')
+    await settle(300)
+    c.tap('secondary')
+    expect(viewAs('building').sentence).toBe('KC')
     expect(interpret).not.toHaveBeenCalled()
+  })
+
+  it('a spelling that cannot be typed stays on the list with the reason', async () => {
+    const error = 'Allow fastASL in System Settings › Privacy & Security › Accessibility'
+    vi.spyOn(services, 'typeText').mockResolvedValue({ ok: false, error })
+    sign(letter('K'), letter('C'))
+    g('handsDown')
+    await settle(300)
+    const list = viewAs('didYouMean')
+    fingers(2)
+    await settle()
+    expect(getApp().view).toBe(list)
+    expect(getApp().notice).toBe(error)
+  })
+
+  it('a paste that finishes after the card moved on only says so, keeping the new spelling', async () => {
+    let typed: (res: { ok: true; value: undefined }) => void = () => {}
+    const typeText = vi.spyOn(services, 'typeText').mockReturnValueOnce(new Promise((resolve) => (typed = resolve)))
+    sign(letter('K'), letter('C'))
+    g('handsDown')
+    await settle(300)
+    fingers(1) // waits on the Automation prompt
+    g('fist')
+    sign(letter('A'), letter('B'))
+    g('handsDown')
+    fingers(1)
+    expect(getApp().notice).toBe('Still typing the last pick')
+    expect(typeText).toHaveBeenCalledTimes(1)
+    await settle(300) // the new list still gets its spellings
+    const list = viewAs('didYouMean')
+    expect(list.options).toEqual(['AB', 'ab', 'ab@calhacks.io'])
+    typed({ ok: true, value: undefined })
+    await settle()
+    expect(getApp().view).toBe(list)
+    expect(getApp().notice).toBe('Typed: “KC”')
+    await settle(TOAST_MS)
+    expect(getApp().view).toBe(list)
+    fingers(1)
+    await settle()
+    expect(typeText).toHaveBeenLastCalledWith(' AB') // right after KC
+    expect(viewAs('toast').subtitle).toBe('AB')
+  })
+
+  it('a thumbs-up in Ready opens no quick menu (Spell mode has no commands to prefix)', () => {
+    expect(activeGestures({ kind: 'ready' }, 'spell').has('thumbsUp')).toBe(false)
+    expect(activeGestures({ kind: 'recognizing', token: null, isWord: false }, 'spell').has('thumbsUp')).toBe(false)
+    g('thumbsUp')
+    expect(getApp().view).toEqual({ kind: 'ready' })
   })
 })
 
@@ -1730,33 +1850,178 @@ describe('dictation mode', () => {
     c.setView({ kind: 'dictation', text: '' })
   })
 
-  it('types each token with natural spacing', () => {
+  it('types each sign at the cursor: no space before the first, words spaced, letter runs joined', () => {
     const typeText = vi.spyOn(services, 'typeText')
     sign(word('hello'), letter('A'), letter('B'), word('world'), word('again'))
-    expect(typeText.mock.calls.map((call) => call[0])).toEqual(['hello ', 'A', 'B', ' world ', 'again '])
-    expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello AB world again ' })
+    expect(typeText.mock.calls.map((call) => call[0])).toEqual(['hello', ' A', 'B', ' world', ' again'])
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello AB world again' })
+  })
+
+  it('a spelled word first starts without a space too', () => {
+    const typeText = vi.spyOn(services, 'typeText')
+    sign(letter('K'), letter('C'), word('here'))
+    expect(typeText.mock.calls.map((call) => call[0])).toEqual(['K', 'C', ' here'])
+  })
+
+  it('a cleared card starts a new run without a space', () => {
+    const typeText = vi.spyOn(services, 'typeText')
+    sign(word('hello'))
+    c.tap('close') // the X next to the dictated text
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+    sign(word('world'))
+    expect(typeText.mock.calls.map((call) => call[0])).toEqual(['hello', 'world'])
+  })
+
+  it('Settings, a collapse or a mode switch keep the run going: the next word is spaced', () => {
+    const typeText = vi.spyOn(services, 'typeText')
+    sign(word('hello'))
+    g('swipeUp')
+    g('fist')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+    sign(word('world'))
+    c.collapse()
+    c.expand()
+    sign(letter('K'), letter('C'))
+    g('swipeRight') // Spell
+    g('swipeLeft') // and back
+    sign(letter('X'))
+    expect(typeText.mock.calls.map((call) => call[0])).toEqual(['hello', ' world', ' K', 'C', ' X'])
+  })
+
+  it('a spelling picked in Spell mode is spaced from the dictated words around it', async () => {
+    const typeText = vi.spyOn(services, 'typeText')
+    sign(word('my'), word('name'), word('is'))
+    g('swipeRight')
+    expect(getApp().mode).toBe('spell')
+    sign(letter('K'), letter('C'))
+    g('handsDown')
+    await settle(300)
+    fingers(1)
+    await settle(TOAST_MS)
+    g('swipeLeft')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+    sign(word('hello'))
+    expect(typeText.mock.calls.map((call) => call[0])).toEqual(['my', ' name', ' is', ' KC', ' hello'])
+  })
+
+  it('inserted text right after dictated words is spaced too', async () => {
+    const typeText = vi.spyOn(services, 'typeText')
+    sign(word('hello'))
+    c.setView({ kind: 'contextActions', sentence: 'Thanks!', actions: ['Insert text', 'More options'] })
+    fingers(1)
+    await settle()
+    expect(typeText).toHaveBeenLastCalledWith(' Thanks!')
+    expect(viewAs('toast').subtitle).toBe('Thanks!')
+  })
+
+  it('a long pause off the card, or an agent run, starts a new run without a space', async () => {
+    const typeText = vi.spyOn(services, 'typeText')
+    sign(word('hello'))
+    g('swipeUp')
+    await settle(TYPED_RUN_MS)
+    g('fist')
+    sign(word('world'))
+    await settle(TYPED_RUN_MS) // the card still shows the run, so it goes on
+    sign(word('again'))
+    void c.runAgent('Open Notes', 'Open Notes')
+    c.setView({ kind: 'dictation', text: '' })
+    sign(word('new'))
+    expect(typeText.mock.calls.map((call) => call[0])).toEqual(['hello', 'world', ' again', 'new'])
+  })
+
+  it('never builds a phrase: no Listening, no Sentence, and hands down does nothing', () => {
+    const interpret = vi.spyOn(services, 'interpret')
+    c.signStart()
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+    sign(word('hello'))
+    g('handsDown')
+    g('thumbsUp')
+    c.phraseEnd()
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello' })
+    expect(interpret).not.toHaveBeenCalled()
   })
 
   it('types the best guess of an ambiguous sign instead of asking', () => {
     const typeText = vi.spyOn(services, 'typeText')
     c.ambiguousSign(['play', 'game'])
-    expect(typeText).toHaveBeenCalledWith('play ')
-    expect(getApp().view).toEqual({ kind: 'dictation', text: 'play ' })
+    expect(typeText).toHaveBeenCalledWith('play')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'play' })
   })
 
   it('keeps only the last 120 characters on the card', () => {
     for (let i = 0; i < 40; i++) c.token(word('word'))
     const text = viewAs('dictation').text
     expect(text).toHaveLength(120)
-    expect(text.endsWith('word ')).toBe(true)
+    expect(text.endsWith(' word')).toBe(true)
   })
 
-  it('says why when typing fails, and keeps dictating', async () => {
-    vi.spyOn(services, 'typeText').mockResolvedValue({ ok: false, error: 'Typing is not available yet' })
+  it('says why when typing fails (Accessibility), and keeps dictating', async () => {
+    const error = 'Allow fastASL in System Settings › Privacy & Security › Accessibility'
+    vi.spyOn(services, 'typeText').mockResolvedValue({ ok: false, error })
     sign(word('hello'))
     await settle()
-    expect(getApp().notice).toBe('Typing is not available yet')
-    expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello ' })
+    expect(getApp().notice).toBe(error)
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello' })
+    await settle(5000)
+    expect(getApp().notice).toBe(error) // up long enough to read the path
+    sign(word('world'))
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello world' })
+  })
+
+  it('swipes switch modes, swipe up opens Settings and a fist goes back to Command', () => {
+    g('swipeRight')
+    expect(getApp().mode).toBe('spell')
+    g('swipeLeft')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+    g('swipeUp')
+    expect(viewAs('settings').settings).toEqual({ page: 'root' })
+    g('fist')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+    vi.advanceTimersByTime(1000)
+    g('fist')
+    expect(getApp().mode).toBe('command')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(getApp().modeFlashAt).toBe(performance.now()) // the header flashes "Command"
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ mode: 'command' })
+  })
+})
+
+describe('dictationChunk', () => {
+  it('spaces words and joins letters, never adding a trailing space', () => {
+    expect(dictationChunk(null, word('hi'))).toBe('hi')
+    expect(dictationChunk(null, letter('K'))).toBe('K')
+    expect(dictationChunk('word', word('there'))).toBe(' there')
+    expect(dictationChunk('word', letter('K'))).toBe(' K')
+    expect(dictationChunk('letter', letter('C'))).toBe('C')
+    expect(dictationChunk('letter', word('here'))).toBe(' here')
+  })
+})
+
+describe('restoreMode (launch)', () => {
+  it('shows the saved mode’s idle view without flashing it', () => {
+    c.restoreMode('dictation')
+    expect(getApp().mode).toBe('dictation')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+    expect(getApp().modeFlashAt).toBe(0)
+    expect(api.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('a sign right after launch in Dictation is typed, not added to a phrase', () => {
+    const typeText = vi.spyOn(services, 'typeText')
+    c.restoreMode('dictation')
+    c.signStart()
+    c.token(word('hello'))
+    expect(typeText).toHaveBeenCalledWith('hello')
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello' })
+  })
+
+  it('leaves a card that is not idle alone', () => {
+    c.collapse()
+    c.restoreMode('spell')
+    expect(getApp().mode).toBe('spell')
+    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    c.expand()
+    expect(getApp().view).toEqual({ kind: 'ready' })
   })
 })
 

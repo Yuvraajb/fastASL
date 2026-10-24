@@ -26,3 +26,16 @@
   justify-content: center;
   padding-bottom: 2px;
 }
+
+/* Spell: Claude's spellings are on their way. Inset like the option rows' text. */
+.dym__pending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 2px;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-2);
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}

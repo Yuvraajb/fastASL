@@ -484,7 +484,20 @@ describe('sign recognition', () => {
     controller.setView({ kind: 'dictation', text: '' })
     stop = startEngines(controller)
     play([sign(WORDS.PLAY, 962)])
-    expect(getApp().view).toEqual({ kind: 'dictation', text: expect.stringMatching(/^(play|game) $/) })
+    expect(getApp().view).toEqual({ kind: 'dictation', text: expect.stringMatching(/^(play|game)$/) })
+  })
+
+  it('Dictation: signs are typed at the cursor as they are recognized, and lowering the hands ends nothing', () => {
+    const typeText = vi.fn(async (_text: string) => ({ ok: true as const, value: undefined }))
+    controller.setServices({ ...mockServices(), typeText })
+    setApp({ mode: 'dictation' })
+    controller.setView({ kind: 'dictation', text: '' })
+    stop = startEngines(controller)
+    play([sign(WORDS.HELLO, 990), sign(WORDS.PLAY, 991)], 1500)
+    play([rest, hold('L', 2500, 992)])
+    expect(typeText.mock.calls.map(([text]) => text)).toEqual(['hello', ' play', ' L'])
+    expect(getApp().view).toEqual({ kind: 'dictation', text: 'hello play L' })
+    expect(views.every((v) => v.kind === 'dictation')).toBe(true)
   })
 
   it('ignores signs in views that take none', () => {
@@ -521,6 +534,21 @@ describe('sign recognition', () => {
     stop = startEngines(controller)
     play([rest, spell('LSLS', 700, 2500, 971)])
     expect(getApp().view).toMatchObject({ kind: 'building', sentence: 'LSLS' })
+  })
+
+  it('Spell mode: lowering the hands offers the letters at once, then the spellings', async () => {
+    setApp({ mode: 'spell' })
+    stop = startEngines(controller)
+    play([rest, spell('LSLS', 700, 700, 972)], 1500)
+    expect(getApp().view).toEqual({
+      kind: 'didYouMean',
+      variant: 'list',
+      options: ['LSLS'],
+      purpose: 'spell',
+      quote: 'LSLS',
+      pending: true
+    })
+    await vi.waitFor(() => expect(getApp().view).toMatchObject({ options: ['LSLS', 'lsls', 'lsls@calhacks.io'] }))
   })
 
   it('Teach › record a word: listening and progress on the card, then the sign is saved and recognized', async () => {
