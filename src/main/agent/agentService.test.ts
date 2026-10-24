@@ -13,6 +13,7 @@ import {
   reply,
   request,
   resultMessage,
+  scriptUse,
   toolUse,
   type TurnScript
 } from './testing/fakes'
@@ -106,6 +107,53 @@ describe('AgentService', () => {
     expect(ofType(ctx.events, 'done')[0]).toMatchObject({ complete: false, result: { title: 'Nothing was done', subtitle: 'You cancelled it' } })
     expect(ctx.recent).toEqual([])
     expect(ctx.agent.lastRunCalls()).toEqual([])
+  })
+
+  describe('tools called from a Script (how droid calls MCP tools)', () => {
+    it('allows a script of fastasl reads and ToolSearch without asking', async () => {
+      const seen: unknown[] = []
+      const turn: TurnScript = async function* (session) {
+        seen.push(await session.requestPermission([scriptUse([['ToolSearch', { query: 'select:fastasl___take_screenshot' }], ['take_screenshot', {}]])]))
+        seen.push(await session.runHandler('take_screenshot', {}))
+        yield resultMessage('success', 'Done')
+      }
+      const ctx = makeAgent([turn])
+      const { completion } = await startRun(ctx)
+      await completion
+      expect(seen[0]).toBe('proceed')
+      expect(ofType(ctx.events, 'confirm')).toHaveLength(0)
+      expect(ctx.runs).toEqual(['take_screenshot'])
+    })
+
+    it('confirms a write inside a script before it runs', async () => {
+      const seen: unknown[] = []
+      const turn: TurnScript = async function* (session) {
+        seen.push(await session.requestPermission([scriptUse([['send_message', { to: 'Mom', text: 'hi' }]])]))
+        seen.push(await session.runHandler('send_message', { to: 'Mom', text: 'hi' }))
+        yield resultMessage('success', 'Sent')
+      }
+      const ctx = makeAgent([turn])
+      const { completion } = await startRun(ctx)
+      await ctx.agent.respond((await waitForConfirm(ctx.events)).requestId, true)
+      await completion
+      expect(seen[0]).toBe('proceed')
+      expect(ctx.runs).toEqual(['send_message'])
+    })
+
+    it('cancels a declined write inside a script, and a script that calls anything else', async () => {
+      const seen: unknown[] = []
+      const turn: TurnScript = async function* (session) {
+        seen.push(await session.requestPermission([scriptUse([['send_message', { to: 'Mom', text: 'hi' }]])]))
+        seen.push(await session.requestPermission([scriptUse([['Execute', { command: 'rm -rf ~' }]])]))
+        yield resultMessage('interrupted')
+      }
+      const ctx = makeAgent([turn])
+      const { completion } = await startRun(ctx)
+      await ctx.agent.respond((await waitForConfirm(ctx.events)).requestId, false)
+      await completion
+      expect(seen).toEqual(['cancelled', 'cancelled'])
+      expect(ctx.runs).toEqual([])
+    })
   })
 
   it('leaves no approval behind when only part of a permission request is confirmed', async () => {

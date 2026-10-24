@@ -70,6 +70,28 @@ export function toolUse(name: string, input: Record<string, unknown>, serverName
   }
 }
 
+/**
+ * What droid asks for when the model calls MCP tools from a Script (the live behaviour): one
+ * permission request for the Script, listing each call inside it as "<server>___<tool>".
+ */
+export function scriptUse(calls: [string, Record<string, unknown>][]): ToolConfirmationInfo {
+  const script = calls.map(([name, input]) => `await tools.fastasl.${name}(${JSON.stringify(input)})`).join('\n')
+  return {
+    toolUse: { type: 'tool_use' as ToolConfirmationInfo['toolUse']['type'], id: 'use-script', name: 'Script', input: { script } },
+    confirmationType: ToolConfirmationType.Script,
+    details: {
+      type: ToolConfirmationType.Script,
+      impactLevel: 'low',
+      calls: calls.map(([name, input], i) => ({
+        toolName: name.includes('___') || name === 'ToolSearch' ? name : `fastasl___${name}`,
+        line: i + 1,
+        column: 1,
+        toolInput: input
+      }))
+    }
+  } as unknown as ToolConfirmationInfo
+}
+
 type ResultSubtype = 'success' | 'interrupted' | 'error_during_execution'
 
 export function resultMessage(subtype: ResultSubtype, text = ''): DroidResultMessage {

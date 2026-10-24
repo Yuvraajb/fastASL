@@ -51,6 +51,21 @@ export function foreignToolIds(
 ): { ids: string[]; sure: boolean } {
   const recognised = new Set(listed.map((t) => findFastaslTool(t.id, ours)).filter((t) => t !== undefined))
   const sure = recognised.size === ours.length
-  const ids = listed.filter((t) => !findFastaslTool(t.id, ours) && (sure || t.source === 'native')).map((t) => t.id)
+  const ids = listed
+    .filter((t) => !findFastaslTool(t.id, ours) && !KEPT_BUILTINS.has(t.id) && (sure || t.source === 'native'))
+    .map((t) => t.id)
   return { ids, sure }
 }
+
+/**
+ * Built-ins that stay on. Droid calls MCP tools (ours) from a Script: it first loads their schemas
+ * with ToolSearch, then runs `tools.fastasl.<name>(...)` in a Script. With both disabled, live runs
+ * never reached a fastasl tool ("I couldn't access your calendar"), and setting
+ * toolExecutionMode "direct_only" after the session started changed nothing. A Script's
+ * permission request lists every call inside it, so the permission handler still allows only
+ * fastasl tools and ToolSearch, and confirms writes (agentService.onPermission).
+ */
+export const KEPT_BUILTINS: ReadonlySet<string> = new Set(['ToolSearch', 'Script'])
+
+/** Tools a Script may call besides ours: loading tool schemas only. */
+export const SCRIPT_HELPERS: ReadonlySet<string> = new Set(['ToolSearch'])

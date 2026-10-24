@@ -1,6 +1,7 @@
 import {
   DroidMessageType,
   ToolConfirmationOutcome,
+  ToolConfirmationType,
   type DroidResultMessage,
   type DroidTool,
   type RequestPermissionHandlerResult,
@@ -12,7 +13,7 @@ import { callsComplete, confirmDetailsFor, errorText, parseArgs, performCall, su
 import { buildDroidTools } from './droidTools'
 import { SYSTEM_PROMPT, turnPrompt } from './prompt'
 import { Run } from './run'
-import { matchPermissionTool } from './toolNames'
+import { findFastaslTool, matchPermissionTool, SCRIPT_HELPERS } from './toolNames'
 import type { DroidSessionLike, RunOutcome, SessionFactory, ToolRunner } from './types'
 
 /** How long a stopped turn may take to wind down before the session is replaced. */
@@ -298,6 +299,19 @@ export class AgentService {
 
     const matched: [ToolDef, ToolArgs][] = []
     for (const use of toolUses) {
+      // Droid calls MCP tools from a Script: allowed when every call inside is ours (or loads tool schemas).
+      if (use.details.type === ToolConfirmationType.Script) {
+        for (const call of use.details.calls) {
+          if (SCRIPT_HELPERS.has(call.toolName)) continue
+          const def = findFastaslTool(call.toolName, this.deps.tools)
+          if (!def) {
+            console.warn('[agent] cancelled a script calling a non-fastasl tool:', call.toolName)
+            return cancel
+          }
+          matched.push([def, call.toolInput as ToolArgs])
+        }
+        continue
+      }
       const def = matchPermissionTool(use, this.deps.tools)
       if (!def) {
         console.warn('[agent] cancelled a non-fastasl tool:', use.toolUse.name, use.details)
