@@ -332,6 +332,14 @@ describe('settings', () => {
     expect(viewAs('settings').settings).toMatchObject({ page: 'camera', current: 'builtin' })
   })
 
+  it('camera page: choosing the stream saves it and updates the live source', () => {
+    c.setView({ kind: 'settings', settings: { page: 'camera', current: 'builtin', url: 'http://cam' } })
+    fingers(2)
+    expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: 'http://cam' })
+    expect(api.saveSettings).toHaveBeenCalledWith({ cameraSource: { kind: 'mjpeg', url: 'http://cam' } })
+    expect(viewAs('settings').settings).toMatchObject({ page: 'camera', current: 'mjpeg' })
+  })
+
   it('camera page: the stream needs a URL first', async () => {
     c.setView({ kind: 'settings', settings: { page: 'camera', current: 'builtin', url: '' } })
     fingers(2)

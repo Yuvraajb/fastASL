@@ -132,7 +132,9 @@ it directly only for ref2-style rows like "● Did you mean?".
 Live camera: grayscale, mirrored, cover-fit, MediaPipe landmarks (1.5px white lines,
 3px dots). Without a camera (`live.mock`) it draws a mock grayscale hand for
 `live.mockPose` (the controller sets the pose per view). Shows a CameraOff placeholder
-when `cameraOn` is false and `live.error` as small gray text.
+when `cameraOn` is false and `live.error` as small gray text. With the live camera it
+draws `live.source` (a `<video>` or the MJPEG canvas) and `live.hands`, mirroring both at
+draw time; in dev the full feed adds a tiny gray FPS readout top-right (`.feed__fps`).
 
 | Prop | Type | Default | |
 | --- | --- | --- | --- |
@@ -154,7 +156,7 @@ when `cameraOn` is false and `live.error` as small gray text.
 <Feed aspect={16 / 10} recording />                        // dictation (ref1-10)
 ```
 
-Drawing lives in pure functions so Phase 2 can reuse them with real landmarks:
+Drawing lives in pure functions shared by the mock hand and the real landmarks:
 `ui/feedDraw.ts` exports `coverRect`, `projectLandmark`, `drawFrame(ctx, source, srcW, srcH, w, h, { mirrored, grayscale })`
 (returns the frame rect), `drawLandmarks(ctx, hands, w, h, { mirrored, rect, lineWidth, dotRadius })`,
 `drawBrackets`, `drawMockFrame`. `ui/handConnections.ts` exports `HAND_CONNECTIONS`, `FINGERS`.

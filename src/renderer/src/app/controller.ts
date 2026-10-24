@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentStep, EnvKey, IntentResult, Mode, Result } from '@shared/types'
+import type { AgentEvent, AgentStep, CameraSource, EnvKey, IntentResult, Mode, Result } from '@shared/types'
 import { getApp, setApp } from './store'
 import type { Services } from './services'
 import type { SettingsPage, Token, View } from './types'
@@ -259,6 +259,11 @@ export class Controller {
     const cameraOn = !getApp().cameraOn
     setApp({ cameraOn })
     void window.fastasl?.saveSettings({ cameraEnabled: cameraOn })
+  }
+
+  setCameraSource(cameraSource: CameraSource): void {
+    setApp({ cameraSource })
+    void window.fastasl?.saveSettings({ cameraSource })
   }
 
   cycleMode(dir: 1 | -1): void {
@@ -833,7 +838,7 @@ export class Controller {
         else if (index === 1 && !page.gesture.builtin) void this.deleteGesture(page.gesture.id)
         return
       case 'camera':
-        void this.chooseCamera(index, page)
+        this.chooseCamera(index, page)
         return
       case 'sensitivity': {
         const sensitivity = (['low', 'medium', 'high'] as const)[index]
@@ -882,16 +887,16 @@ export class Controller {
     })
   }
 
-  private async chooseCamera(index: number, page: Extract<SettingsPage, { page: 'camera' }>): Promise<void> {
+  private chooseCamera(index: number, page: Extract<SettingsPage, { page: 'camera' }>): void {
     if (index === 0) {
-      await window.fastasl?.saveSettings({ cameraSource: { kind: 'builtin' } })
+      this.setCameraSource({ kind: 'builtin' })
       this.setView({ kind: 'settings', settings: { ...page, current: 'builtin' } })
     } else if (index === 1) {
       if (!page.url) {
         this.notify('Set a stream URL first (option 3)')
         return
       }
-      await window.fastasl?.saveSettings({ cameraSource: { kind: 'mjpeg', url: page.url } })
+      this.setCameraSource({ kind: 'mjpeg', url: page.url })
       this.setView({ kind: 'settings', settings: { ...page, current: 'mjpeg' } })
     } else {
       // Editing a URL needs the keyboard: handled by the camera settings view (focusable input).

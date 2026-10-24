@@ -85,7 +85,7 @@ function UrlField({ page, onDone }: { page: PageOf<'camera'>; onDone: () => void
       controller.notify('Enter a URL starting with http://')
       return
     }
-    void window.fastasl?.saveSettings({ cameraSource: { kind: 'mjpeg', url } })
+    controller.setCameraSource({ kind: 'mjpeg', url })
     controller.notify(null)
     controller.setView({ kind: 'settings', settings: { page: 'camera', current: 'mjpeg', url } })
     onDone()

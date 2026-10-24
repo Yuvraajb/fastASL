@@ -1,11 +1,11 @@
 import { app } from 'electron'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { CompletedTask, CustomGesture, Settings, TemplateStore } from '@shared/types'
+import type { CameraSource, CompletedTask, CustomGesture, Settings, TemplateStore } from '@shared/types'
 
-/** ~/Library/Application Support/fastASL */
+/** ~/Library/Application Support/fastASL, or FASTASL_DATA_DIR (dev / smoke tests). */
 export function dataDir(): string {
-  const dir = join(app.getPath('appData'), 'fastASL')
+  const dir = process.env.FASTASL_DATA_DIR || join(app.getPath('appData'), 'fastASL')
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -33,8 +33,18 @@ export const DEFAULT_SETTINGS: Settings = {
   mode: 'command'
 }
 
+function isCameraSource(value: unknown): value is CameraSource {
+  const v = value as { kind?: unknown; deviceId?: unknown; url?: unknown } | null
+  if (typeof v !== 'object' || v === null) return false
+  if (v.kind === 'builtin') return v.deviceId === undefined || typeof v.deviceId === 'string'
+  return v.kind === 'mjpeg' && typeof v.url === 'string'
+}
+
+/** Main and renderer both read settings here, so a hand-edited or broken camera source can't crash boot. */
 export function getSettings(): Settings {
-  return { ...DEFAULT_SETTINGS, ...readJson<Partial<Settings>>('settings.json', {}) }
+  const settings = { ...DEFAULT_SETTINGS, ...readJson<Partial<Settings>>('settings.json', {}) }
+  if (!isCameraSource(settings.cameraSource)) settings.cameraSource = DEFAULT_SETTINGS.cameraSource
+  return settings
 }
 
 export function saveSettings(patch: Partial<Settings>): Settings {

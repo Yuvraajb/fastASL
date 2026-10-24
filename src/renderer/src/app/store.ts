@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { KeyStatus, Mode, Sensitivity } from '@shared/types'
+import type { CameraSource, KeyStatus, Mode, Sensitivity } from '@shared/types'
 import type { View } from './types'
 
 export interface PickProgress {
@@ -14,6 +14,8 @@ export interface AppState {
   mode: Mode
   sensitivity: Sensitivity
   cameraOn: boolean
+  /** Saved camera source; app/engines.ts applies changes to the running camera. */
+  cameraSource: CameraSource
   /** 0..1 progress of the open-palm hold that expands the collapsed pill. */
   holdProgress: number
   /** Finger-count hold in progress (menus). */
@@ -33,6 +35,7 @@ export const useApp = create<AppState>(() => ({
   mode: 'command',
   sensitivity: 'medium',
   cameraOn: true,
+  cameraSource: { kind: 'builtin' },
   holdProgress: 0,
   pick: null,
   notice: null,

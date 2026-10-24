@@ -12,7 +12,10 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "screens": "node scripts/screens.mjs"
+    "screens": "node scripts/screens.mjs",
+    "setup": "node scripts/fetch-assets.mjs",
+    "postinstall": "node scripts/fetch-assets.mjs",
+    "mock:mjpeg": "node scripts/mock-mjpeg.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

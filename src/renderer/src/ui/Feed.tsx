@@ -30,7 +30,8 @@ export interface FeedProps {
 /**
  * Live camera feed: grayscale, mirrored, MediaPipe landmarks on top. Without a
  * camera (live.mock) it renders a mock hand for live.mockPose. Draws in rAF from
- * the mutable `live` object, never through React state.
+ * the mutable `live` object, never through React state. In dev the full feed
+ * also shows the camera FPS while the live camera runs.
  */
 export function Feed({
   variant = 'full',
@@ -47,6 +48,7 @@ export function Feed({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const box = useRef({ w: 0, h: 0 })
   const cache = useRef(createMockCache())
+  const fpsRef = useRef<HTMLSpanElement>(null)
   const [error, setError] = useState<string | null>(live.error)
 
   useEffect(() => {
@@ -61,6 +63,11 @@ export function Feed({
 
   useAnimationFrame((t) => {
     if (live.error !== error) setError(live.error)
+    const fps = fpsRef.current
+    if (fps) {
+      const text = live.mock || !live.fps ? '' : `${Math.round(live.fps)} fps`
+      if (fps.textContent !== text) fps.textContent = text
+    }
     const el = canvasRef.current
     const { w, h } = box.current
     if (!el || !w || !h) return
@@ -110,6 +117,7 @@ export function Feed({
       )}
       {cameraOn && error && variant !== 'round' ? <div className="feed__error">{error}</div> : null}
       {recording ? <span className="feed__rec" aria-label="Recording" /> : null}
+      {cameraOn && variant === 'full' && window.fastasl?.isDev ? <span ref={fpsRef} className="feed__fps" aria-hidden /> : null}
     </div>
   )
 }

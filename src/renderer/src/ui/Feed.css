@@ -75,3 +75,16 @@
   background: var(--red);
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.92);
 }
+
+/* Dev-only camera FPS, top-right inside the viewfinder brackets. */
+.feed__fps {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  font-size: var(--fs-badge);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}

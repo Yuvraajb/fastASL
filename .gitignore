@@ -8,3 +8,4 @@ docs/screens/_tmp/
 out-screens/
 *.tsbuildinfo
 .claude/
+src/renderer/public/mediapipe/

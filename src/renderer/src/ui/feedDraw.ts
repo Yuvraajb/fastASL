@@ -144,7 +144,7 @@ export function drawBrackets(
 
 // ---------------------------------------------------------------------------
 // Mock camera: a grayscale "photo" of a hand in a room, for screenshots and for
-// running without a camera. Phase 2 replaces it with drawFrame(live.source).
+// running without a camera. The live camera uses drawFrame(live.source) instead.
 
 export interface MockHandShape extends HandLandmarks {
   /** Finger thickness as a fraction of the frame width. */

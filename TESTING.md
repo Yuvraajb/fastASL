@@ -90,3 +90,55 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
 
 44. Run `npm run screens`. **Expected:** it finishes in about 30s and writes 32 files, from `docs/screens/01-collapsed.png` to `32-missingKey.png`. Each is 1280×880 and shows the card at the top-right of a fake desktop. No window stays open, and `out-screens/` is gone afterwards.
 45. Open a few screenshots next to `docs/reference/crops/`. **Expected:** the layout, spacing, type sizes and gray levels match the references.
+
+## Phase 2 — Camera and hand tracking
+
+**Before you start**
+
+- `npm install` now runs `postinstall`, which puts the MediaPipe runtime and hand model in `src/renderer/public/mediapipe/` (gitignored, about 21 MB). `npm run setup` does the same by hand.
+- The ESP32 stand-in needs ffmpeg: `brew install ffmpeg`.
+- Screenshots (`npm run screens`) and `?mock=1` never start the camera; they always show the mock hand.
+- Ctrl+Opt = Control+Option. Settings › Camera source is Ctrl+Opt+↑ then Ctrl+Opt+4. On that page, Ctrl+Opt+1 picks the MacBook camera, Ctrl+Opt+2 the ESP32 stream, and Ctrl+Opt+3 (or a click on "Edit stream URL") opens the URL field.
+
+### Assets
+
+1. Run `npm run setup`. **Expected:** "copied" / "saved" lines, then "MediaPipe assets ready". Run it again. **Expected:** "up to date" and "present". Delete `src/renderer/public/mediapipe/hand_landmarker.task` and run it again. **Expected:** it downloads again (7.8 MB).
+2. Turn Wi-Fi off, delete the model, and run `npm run setup`, then `echo $?`. **Expected:** "FAILED: …" and exit code 1. Turn Wi-Fi back on and run `npm run setup` once more.
+
+### Built-in camera
+
+3. With the default settings (built-in camera, camera on), run `npm run dev`. **Expected:** a macOS camera prompt (in dev it may name your terminal app). Allow it. Within about 2s the mock hand is replaced by your camera: grayscale, mirrored like a mirror (raise your right hand and it shows on the right), cover-filling the feed. White landmark lines and dots sit on your fingers and follow them. A tiny gray "30 fps" (about 25–30) shows top-right inside the feed. Option+0 opens the dev panel with the same FPS.
+4. Press Option+2 (Recognizing) and wave a hand. **Expected:** the activity bars rise. Hold still. **Expected:** they fall to near zero within about 0.5s. Move your hands out of frame. **Expected:** the landmarks disappear.
+5. Press Option+1…9 in turn. **Expected:** every state shows the live camera instead of the mock hand. The thumbnails (Confirm, Done) show landmarks; the round thumbnail of the collapsed pill shows the camera without landmarks. Only the full-width feed shows the FPS.
+6. Click the camera icon in the footer. **Expected:** "Camera off", the camera's green light goes off within a second, and no error text. Click it again. **Expected:** the live feed is back within about 2s, with no error flash.
+7. With the camera off, quit from the tray ("Quit fastASL") and relaunch. **Expected:** "Camera off", no camera light and no camera prompt. Turn it back on.
+8. Revoke camera access for the app (or your terminal in dev) in System Settings › Privacy & Security › Camera, then relaunch. **Expected:** the mock hand with "Camera access denied — allow fastASL in System Settings › Privacy & Security › Camera" in small gray text at the bottom of the feed. Restore access and relaunch.
+
+### ESP32-CAM stream (mock server)
+
+9. In a second terminal run `npm run mock:mjpeg -- --test`, then `curl -s --max-time 2 http://127.0.0.1:8081/stream | head -c 200 | xxd | head`. **Expected:** `--frame`, `Content-Type: image/jpeg`, then `ffd8`.
+10. In the app open Settings › Camera source and pick "Edit stream URL". Type `http://127.0.0.1:8081/stream` and press Return. **Expected:** within about 1s the feed shows the test pattern (grayscale, mirrored, so the frame counter digits read backwards). The ESP32 row shows the URL with a check. The mock server logs "client connected (1 watching)" and about 15 fps. The feed's FPS shows about 30, because each 15 fps frame is detected twice (DECISIONS 25).
+11. Stop the mock server with Ctrl+C. **Expected:** within about 6s the mock hand with "Lost the ESP32 stream" or "Can't reach the ESP32 stream". The text stays steady (no flicker) while it retries. Start the server again. **Expected:** the feed comes back by itself within 10s.
+12. Press Ctrl+Opt+F twice to get back to Ready, then click the camera icon. **Expected:** the mock server logs "client left (0 watching)" right away. Click it again. **Expected:** "client connected (1 watching)" and the test pattern returns.
+13. Stop the server and run `npm run mock:mjpeg` (no `--test`; it uses the Mac camera, and macOS may ask about camera access for the terminal). **Expected:** your hands are tracked with landmarks through the stream, as in step 3.
+14. Try bad URLs in the URL field, one at a time:
+    - `http://127.0.0.1:8081/` → "That URL isn't a camera stream — …"
+    - `http://10.255.255.1/stream` → "Can't reach the ESP32 stream" after about 5s, not 8s.
+    - `ftp://x/stream` → the field answers "Enter a URL starting with http://" and nothing is saved.
+15. With the mock server running and the stream selected, press Ctrl+Opt+1 on the Camera source page. **Expected:** the server logs "client left (0 watching)" and the built-in camera appears.
+16. Source-switch check. Set the URL to `http://10.255.255.1/stream` and wait about 30s, until "Can't reach the ESP32 stream" has shown through several retries. Press Ctrl+Opt+1 (MacBook camera). **Expected:** the ESP32 error disappears at once; the mock hand shows with no error until your camera appears. Revoke camera access first (step 8) and repeat. **Expected:** "Camera access denied…" right away, then a retry about 1s later, not 10s.
+17. Relaunch with the ESP32 stream as the saved source. **Expected:** no macOS camera prompt at launch.
+18. With a real ESP32-CAM (CameraWebServer sketch), enter `http://<ip>:81/stream`. **Expected:** it streams. Unplug it. **Expected:** "Lost the ESP32 stream" within about 5s; each reconnect attempt fails within about 5s while it stays unplugged. Plug it back in. **Expected:** it recovers on its own.
+
+### Built app, proxy and screenshots
+
+19. Run `npm run build && npm start`. **Expected:** the camera and hand tracking work as in step 3, with the assets loaded from `out/renderer/mediapipe` over file://.
+20. While the app runs, find its proxy port with `lsof -iTCP -sTCP:LISTEN -P | grep -i electron`, then run `curl -i "http://127.0.0.1:<port>/mjpeg?url=http://127.0.0.1:8081/stream"`. **Expected:** `403 Forbidden` (no token).
+21. Run `npm run screens`. **Expected:** all 32 screenshots show the mock hand, no FPS readout, and the camera light never turns on.
+22. Terminal smoke test. Make a temp dir containing `settings.json` with `{"cameraSource":{"kind":"mjpeg","url":"http://127.0.0.1:8081/stream"},"cameraEnabled":true,"sensitivity":"medium","mode":"command"}`. With `npm run mock:mjpeg -- --test` running, run `npm run build`, then `FASTASL_LOG=1 FASTASL_DATA_DIR=<dir> node_modules/.bin/electron .` and quit after about 15s. **Expected:** stdout shows `[renderer:info] Graph successfully started running.` and then `[camera] live 640x480 · 30 fps · 0 hand(s)` lines (one per change), with no `[renderer:error]` lines.
+
+### Missing files and broken settings
+
+23. Missing MediaPipe files. With `npm run mock:mjpeg -- --test` running and the ESP32 stream selected, run `npm run build`, then `mv out/renderer/mediapipe /tmp/mediapipe-backup` and `FASTASL_LOG=1 node_modules/.bin/electron .`. **Expected:** the mock hand with "Hand tracking files are missing — run npm run setup" at the bottom of the feed, one `[camera] mock hand (Hand tracking files are missing — run npm run setup)` line in stdout, and the mock server logs no "client connected" while you wait 30s (the camera is never opened, nothing retries). Click the camera icon off and on. **Expected:** the same message comes back, still with no camera connection. Quit, `mv /tmp/mediapipe-backup out/renderer/mediapipe`, relaunch. **Expected:** the stream and landmarks work as in step 10.
+24. The same in dev: move `src/renderer/public/mediapipe` away and run `npm run dev`. **Expected:** the same message, and with the built-in camera selected the camera light never turns on. Run `npm run setup` (or move the folder back), then click the camera icon off and on. **Expected:** the camera and tracking start.
+25. Broken settings. Quit the app, then write `{"cameraEnabled":true,"cameraSource":null}` to `~/Library/Application Support/fastASL/settings.json` (or `FASTASL_DATA_DIR/settings.json`) and relaunch. **Expected:** the card and tray icon appear as usual and the built-in camera is used (Settings › Camera source shows "MacBook camera" checked). Repeat with `"cameraSource":{"kind":"mjpeg"}` (no URL). **Expected:** the same.
