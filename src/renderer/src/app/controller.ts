@@ -44,6 +44,24 @@ const MODES: Mode[] = ['command', 'dictation', 'spell']
 const DONE_AUTO_COLLAPSE_MS = 4000
 const TOAST_MS = 2600
 
+/** Below this Claude is guessing, so the card always asks (Did you mean). */
+const LOW_CONFIDENCE = 0.6
+/** Below this, listed alternatives are close enough to the intent to ask too. */
+const CLOSE_CALL = 0.75
+const INSERT_TEXT = 'Insert text'
+const MORE_OPTIONS = 'More options'
+/** Claude's app-specific actions shown between Insert text and More options (4 rows, 4 fingers). */
+const MAX_SUGGESTED_ACTIONS = 2
+
+const isInsertAction = (action: string): boolean => /\b(insert|type)\b/i.test(action)
+const isMoreAction = (action: string): boolean => /\bmore\b/i.test(action)
+
+/** Insert text and More options are always offered, whatever Claude suggested for the app. */
+function contextActionsFor(suggested: string[]): string[] {
+  const own = suggested.filter((a) => !isInsertAction(a) && !isMoreAction(a)).slice(0, MAX_SUGGESTED_ACTIONS)
+  return [INSERT_TEXT, ...own, MORE_OPTIONS]
+}
+
 /** Outcome of one Claude interpretation. Errors are carried per request, never shared. */
 interface Interpretation {
   result: IntentResult | null
@@ -109,9 +127,9 @@ export function activeGestures(view: View): Set<GestureName> {
     case 'confirm':
       return new Set(['thumbsUp', 'fist'])
     case 'didYouMean':
-      return view.variant === 'quote'
-        ? new Set(['thumbsUp', 'fist', 'swipeLeft'])
-        : new Set(['fingers', 'fist', 'thumbsUp'])
+      if (view.variant === 'quote') return new Set(['thumbsUp', 'fist', 'swipeLeft'])
+      // Swipe left edits the sentence an intent list was read from.
+      return new Set(view.purpose === 'intent' ? ['fingers', 'fist', 'thumbsUp', 'swipeLeft'] : ['fingers', 'fist', 'thumbsUp'])
     case 'done':
       return new Set(['thumbsUp', 'fist', 'fingers', 'swipeUp'])
     case 'contextActions':
@@ -331,6 +349,8 @@ export class Controller {
   }
 
   openSettings(): void {
+    // Settings leads back to a fresh Ready, where a phrase left behind would resurface.
+    this.resetPhrase()
     this.setView({ kind: 'settings', settings: { page: 'root' } })
   }
 
@@ -500,7 +520,10 @@ export class Controller {
       const current = view.kind === 'dictation' ? view.text : ''
       const joined = (current + (token.kind === 'word' && current && !current.endsWith(' ') ? ' ' : '') + text)
       this.setView({ kind: 'dictation', text: joined.slice(-120) })
-      void this.services.typeText(token.kind === 'word' && current && !current.endsWith(' ') ? ` ${text}` : text)
+      const typed = token.kind === 'word' && current && !current.endsWith(' ') ? ` ${text}` : text
+      void settled(this.services.typeText(typed)).then((res) => {
+        if (!res.ok) this.notify(failureText(res))
+      })
       return
     }
     if (view.kind === 'didYouMean' && view.purpose === 'sign') return
@@ -613,9 +636,10 @@ export class Controller {
     if (this.view !== thinking) return
     const sentence = view.sentence
     if (!result) {
-      // Claude unavailable: still let the agent try with the raw sentence.
+      // Claude unavailable: still let the agent try with the raw sentence and the quick-menu pick.
       if (error) this.notify(error)
-      this.setView({ kind: 'agentReady', intent: sentence, variant: 'default', sentence })
+      const intent = this.intentPrefix ? `${this.intentPrefix}: ${sentence}` : sentence
+      this.setView({ kind: 'agentReady', intent, variant: 'default', sentence })
       return
     }
     this.routeIntent(result, sentence)
@@ -623,25 +647,25 @@ export class Controller {
 
   private routeIntent(result: IntentResult, rawSentence: string): void {
     const sentence = result.sentence || rawSentence
-    const alternatives = result.alternatives.filter((a) => a && a !== result.intent)
-    if (result.confidence < 0.6 && (alternatives.length || result.intent)) {
-      const options = [result.intent, ...alternatives].filter((o): o is string => Boolean(o)).slice(0, 3)
+    const { intent } = result
+    const alternatives = result.alternatives.filter((a) => a && a !== intent)
+    const guessing = result.confidence < LOW_CONFIDENCE && (intent !== null || alternatives.length > 0)
+    const closeCall = intent !== null && alternatives.length > 0 && result.confidence < CLOSE_CALL
+    if (guessing || closeCall) {
+      // Numbered, so whatever will run is on screen: the intent first, then the alternatives.
+      // Without an intent the sentence may be text to type, so Insert text is offered too.
+      const options = intent ? [intent, ...alternatives].slice(0, 3) : [...alternatives.slice(0, 3), INSERT_TEXT]
       this.setView({ kind: 'didYouMean', variant: 'list', options, purpose: 'intent', quote: sentence })
       return
     }
-    if (!result.intent) {
-      if (result.context_actions.length) {
-        this.setView({ kind: 'contextActions', sentence, actions: result.context_actions.slice(0, 3) })
-      } else {
-        this.setView({ kind: 'sentence', sentence, tokens: [...this.tokens] })
-        this.notify('No action found. Swipe left to edit or fist to cancel.')
-      }
+    if (!intent) {
+      this.setView({ kind: 'contextActions', sentence, actions: contextActionsFor(result.context_actions) })
       return
     }
-    const email = result.intent.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)
+    const email = intent.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)
     this.setView({
       kind: 'agentReady',
-      intent: result.intent,
+      intent,
       variant: email ? 'email' : 'default',
       target: email?.[0],
       sentence
@@ -684,9 +708,10 @@ export class Controller {
           })
         } else if (view.purpose === 'spell') {
           void this.typeSpelled(choice)
-        } else if (view.variant === 'quote') {
-          void this.runAgent(choice, view.quote ?? choice)
+        } else if (choice === INSERT_TEXT) {
+          void this.contextAction(choice, view.quote ?? assembleSentence(this.tokens))
         } else {
+          // Either variant: Agent ready shows the intent before anything runs.
           this.setView({ kind: 'agentReady', intent: choice, variant: 'default', sentence: view.quote ?? choice })
         }
         return
@@ -695,7 +720,13 @@ export class Controller {
         return
       case 'quickMenu':
         this.intentPrefix = choice
-        this.tokens = []
+        // From Context actions › More options: the signed sentence is the details, so interpret it now.
+        if (view.fromSentence) {
+          this.interpretation = null
+          this.setView({ kind: 'sentence', sentence: assembleSentence(this.tokens), tokens: [...this.tokens] })
+          void this.proceed()
+          return
+        }
         this.setView(this.idleView())
         return
       case 'done':
@@ -710,14 +741,13 @@ export class Controller {
   }
 
   private async contextAction(action: string, sentence: string): Promise<void> {
-    const a = action.toLowerCase()
-    if (a.includes('insert') || a.includes('type')) {
-      const res = await this.services.typeText(sentence)
+    if (isInsertAction(action)) {
+      const res = await settled(this.services.typeText(sentence))
       this.toast(res.ok ? 'Text inserted' : 'Could not insert text', res.ok ? sentence : res.error, res.ok)
       return
     }
-    if (a.includes('more')) {
-      this.setView({ kind: 'quickMenu', options: QUICK_MENU })
+    if (isMoreAction(action)) {
+      this.setView({ kind: 'quickMenu', options: QUICK_MENU, fromSentence: true })
       return
     }
     this.setView({ kind: 'agentReady', intent: `${action}: "${sentence}"`, variant: 'default', sentence })
@@ -735,7 +765,7 @@ export class Controller {
   }
 
   private async typeSpelled(text: string): Promise<void> {
-    const res = await this.services.typeText(text)
+    const res = await settled(this.services.typeText(text))
     this.resetPhrase()
     this.toast(res.ok ? 'Typed' : 'Could not type', res.ok ? text : res.error, res.ok)
   }
@@ -744,6 +774,8 @@ export class Controller {
 
   async runAgent(intent: string, sentence: string): Promise<void> {
     this.subscribe() // dispose() may have run (React StrictMode re-mounts App)
+    // The run uses up the phrase, however it ends: Done, Settings and Ready start a new one.
+    this.resetPhrase()
     this.steps = []
     this.runIntent = intent
     this.agentActive = true
@@ -764,7 +796,6 @@ export class Controller {
   }
 
   private agentStopped(): void {
-    this.resetPhrase()
     this.toast('Stopped', 'The agent was interrupted', false)
   }
 
@@ -800,7 +831,6 @@ export class Controller {
         this.agentActive = false
         const ok = e.result.evidence.some((ev) => ev.ok) || e.result.title.toLowerCase() !== 'cancelled'
         this.lastCompleted = { intent: this.runIntent, title: e.result.title }
-        this.resetPhrase()
         const success = ok && e.result.evidence.every((ev) => ev.ok)
         this.setView({
           kind: 'done',

@@ -2,17 +2,23 @@ import { app, BrowserWindow, ipcMain, session, systemPreferences } from 'electro
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
+import type { Result } from '@shared/types'
 import { loadEnv } from './env'
 import { registerIpc, type MainServices } from './ipc'
 import { getSettings } from './store'
 import { createOverlayWindow, createStageWindow, type OverlayWindow } from './window'
 import { registerDevShortcuts, setupTray } from './devtools'
 import { startMjpegProxy, type MjpegProxy } from './camera/mjpegProxy'
+import { createClaudeService } from './claude'
+import { TOOL_CATALOG } from './claude/toolCatalog'
+import { getFrontmostApp } from './mac/frontmost'
 
 const screenshots = process.env.FASTASL_SCREENSHOTS === '1'
 const dev = !app.isPackaged || process.env.FASTASL_DEV === '1'
 /** FASTASL_LOG=1 prints the renderer's console to stdout (smoke tests, debugging). */
 const logRenderer = process.env.FASTASL_LOG === '1'
+/** FASTASL_MOCK=1 runs the overlay on mock services (Claude, agent, typing); the camera stays live. */
+const mockServices = process.env.FASTASL_MOCK === '1'
 
 app.setName('fastASL')
 loadEnv()
@@ -32,7 +38,22 @@ function loadRenderer(win: BrowserWindow, query: Record<string, string> = {}): v
   }
 }
 
+/** Dev: one terminal line per Claude call (request -> answer), to check the card's routing against it. */
+function devLogged<Req, T>(name: string, call: (req: Req) => Promise<Result<T>>): (req: Req) => Promise<Result<T>> {
+  if (!dev) return call
+  return async (req) => {
+    const res = await call(req)
+    console.log(`[claude] ${name} ${JSON.stringify(req)} -> ${JSON.stringify(res.ok ? res.value : { error: res.error })}`)
+    return res
+  }
+}
+
+const claude = createClaudeService({ tools: () => TOOL_CATALOG })
+
 const services: MainServices = {
+  interpret: devLogged('interpret', claude.interpret),
+  spellSuggest: devLogged('spellSuggest', claude.spellSuggest),
+  frontmostApp: getFrontmostApp,
   capture: async (name: string) => {
     if (!stage) return ''
     const dir = join(process.cwd(), 'docs', 'screens')
@@ -92,7 +113,7 @@ async function boot(): Promise<void> {
     }
   }
 
-  overlay = createOverlayWindow({ dev, screenshots })
+  overlay = createOverlayWindow({ dev, screenshots, mockServices })
   if (logRenderer) forwardConsole(overlay.win)
   loadRenderer(overlay.win)
 

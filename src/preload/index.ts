@@ -14,6 +14,7 @@ const api: FastAslApi = {
   isDev: process.argv.includes('--fastasl-dev'),
   isScreenshotMode: process.argv.includes('--fastasl-screenshots'),
   nativeVibrancy: process.argv.includes('--fastasl-vibrancy'),
+  mockServices: process.argv.includes('--fastasl-mock'),
 
   setCardSize: (size) => ipcRenderer.send(IPC.setCardSize, size),
   setFocusable: (focusable) => ipcRenderer.send(IPC.setFocusable, focusable),

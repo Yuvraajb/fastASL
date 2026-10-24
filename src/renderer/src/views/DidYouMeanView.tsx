@@ -1,7 +1,7 @@
 import { Check, X } from 'lucide-react'
 import type { View } from '../app/types'
 import { controller } from '../app/context'
-import { ActivityBars, Button, ButtonRow, Feed, Header, Notice, OptionList, QuoteBox, SectionTitle, Stack } from '../ui'
+import { ActivityBars, Button, ButtonRow, Feed, Header, Hint, Notice, OptionList, QuoteBox, SectionTitle, Stack } from '../ui'
 import './DidYouMeanView.css'
 
 type DidYouMean = Extract<View, { kind: 'didYouMean' }>
@@ -11,7 +11,9 @@ export function DidYouMeanView({ view }: Props): React.JSX.Element {
   return view.variant === 'quote' ? <QuoteVariant view={view} /> : <ListVariant view={view} />
 }
 
-/** Reference image 1, panel 12: numbered alternatives, picked by holding up 1-3 fingers. */
+const fingersHint = (count: number): string => (count > 1 ? `hold up 1–${count} fingers` : 'hold up 1 finger')
+
+/** Reference image 1, panel 12: numbered alternatives, picked by finger count. */
 function ListVariant({ view }: Props): React.JSX.Element {
   return (
     <Stack>
@@ -25,6 +27,7 @@ function ListVariant({ view }: Props): React.JSX.Element {
         <OptionList options={view.options} />
       </Stack>
       <Notice />
+      {view.purpose === 'intent' ? <Hint items={[fingersHint(view.options.length), 'swipe ← edit']} /> : null}
     </Stack>
   )
 }

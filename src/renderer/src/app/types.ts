@@ -57,7 +57,8 @@ export type View =
     }
   | { kind: 'done'; title: string; subtitle: string; ok: boolean; view?: ViewAction; intent?: string }
   | { kind: 'contextActions'; sentence: string; actions: string[] }
-  | { kind: 'quickMenu'; options: string[] }
+  /** `fromSentence`: opened by Context actions › More options, so a pick applies to the signed sentence. */
+  | { kind: 'quickMenu'; options: string[]; fromSentence?: boolean }
   | { kind: 'dictation'; text: string }
   | {
       kind: 'toast'

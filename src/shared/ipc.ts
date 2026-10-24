@@ -66,6 +66,8 @@ export interface FastAslApi {
   isScreenshotMode: boolean
   /** True when the window uses native NSVisualEffectView vibrancy (FASTASL_VIBRANCY=hud). */
   nativeVibrancy: boolean
+  /** FASTASL_MOCK=1: the renderer uses mock services instead of the main process ones. */
+  mockServices: boolean
 
   setCardSize(size: CardSize): void
   setFocusable(focusable: boolean): void

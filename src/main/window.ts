@@ -117,7 +117,7 @@ export interface OverlayWindow {
   setFocusable(focusable: boolean): void
 }
 
-export function createOverlayWindow(opts: { dev: boolean; screenshots: boolean }): OverlayWindow {
+export function createOverlayWindow(opts: { dev: boolean; screenshots: boolean; mockServices: boolean }): OverlayWindow {
   // Native vibrancy is opt-in: Electron masks the vibrancy view with a fixed 9pt
   // corner radius, which can't match the 22px card. See DECISIONS.md.
   const vibrancy = process.env.FASTASL_VIBRANCY?.trim()
@@ -127,6 +127,7 @@ export function createOverlayWindow(opts: { dev: boolean; screenshots: boolean }
   if (opts.dev) additionalArguments.push('--fastasl-dev')
   if (opts.screenshots) additionalArguments.push('--fastasl-screenshots')
   if (useVibrancy) additionalArguments.push('--fastasl-vibrancy')
+  if (opts.mockServices) additionalArguments.push('--fastasl-mock')
 
   const win = new BrowserWindow({
     ...initial,
