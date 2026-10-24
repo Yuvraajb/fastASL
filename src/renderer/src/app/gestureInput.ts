@@ -11,6 +11,8 @@ export interface GestureConnection {
   stop(): void
   /** Whatever a hand shows now must be released before it can fire (e.g. a recognized word's last handshape). */
   spendShown(): void
+  /** A hold gesture (fist, thumbs up, palm, finger count, shape) is timing toward firing. */
+  holding(): boolean
 }
 
 /**
@@ -70,7 +72,8 @@ export function connectGestures(
       stopFrames()
       stopStore()
     },
-    spendShown: () => engine.spendShown()
+    spendShown: () => engine.spendShown(),
+    holding: () => engine.holding()
   }
 }
 

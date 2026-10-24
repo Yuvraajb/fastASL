@@ -961,7 +961,8 @@ export class Controller {
       motion: movement.motion,
       // Show me a sign (Settings) may be opened from Spell mode; a sign is a word either way.
       mode: mode === 'spell' ? 'command' : mode,
-      known: taughtWords(templates)
+      // The pretrained model's words too, so a guess names them as the model does ("THANK YOU").
+      known: [...new Set([...taughtWords(templates), ...getApp().modelWords])]
     }
     let call: Promise<Result<SignGuess>>
     try {
@@ -1593,10 +1594,19 @@ export class Controller {
     this.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', ...(reason ? { reason } : {}) } })
   }
 
-  /** Show me a sign: one clean repetition. The LLM names it; its guesses are offered with the list as a way out. */
-  showSign(movement: UnknownMovement): void {
+  /**
+   * Show me a sign: one clean repetition. The pretrained sign model may already have named it
+   * (`named`, glosses), which is offered at once; otherwise the LLM names it. Either way the
+   * guesses come with the list as a way out.
+   */
+  showSign(movement: UnknownMovement, named: string[] = []): void {
     const page = this.showPage()
     if (page?.phase !== 'waiting' && page?.phase !== 'listening') return
+    if (named.length) {
+      const guess: View = { kind: 'settings', settings: { page: 'teachShow', phase: 'guess', guesses: named.slice(0, 3) } }
+      this.shown = { guess, features: movement.features, hands: new Map() }
+      return this.setView(guess)
+    }
     const unavailable = this.services.signGuessUnavailable()
     if (unavailable) return this.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', reason: unavailable } })
     const identifying: View = { kind: 'settings', settings: { page: 'teachShow', phase: 'identifying' } }

@@ -39,6 +39,11 @@ export interface AppState {
   templates: SignTemplate[]
   /** Gesture shortcuts (gestures.json), loaded by the controller; the shape matcher follows this list. */
   gestures: CustomGesture[]
+  /**
+   * The words the pretrained sign model recognizes (upper case), once it has loaded: a sign
+   * guess tells the LLM about them, so it names them the way the model does.
+   */
+  modelWords: string[]
 }
 
 export const useApp = create<AppState>(() => ({
@@ -63,7 +68,8 @@ export const useApp = create<AppState>(() => ({
   handsVisible: 0,
   signing: false,
   templates: [],
-  gestures: []
+  gestures: [],
+  modelWords: []
 }))
 
 export const getApp = (): AppState => useApp.getState()

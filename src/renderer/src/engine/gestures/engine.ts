@@ -253,6 +253,11 @@ export class GestureEngine {
     return fired.filter((input): input is GestureInput => input !== null)
   }
 
+  /** Whether a hold gesture (active in this view, not spent) is timing toward firing now. */
+  holding(): boolean {
+    return this.holdFraction() > 0
+  }
+
   progress(): GestureProgress {
     const p = this.holdFraction()
     const input = p > 0 ? this.s.hold.input : null

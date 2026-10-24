@@ -752,3 +752,54 @@ Run `FASTASL_LOG=1 npm run dev` with a real camera and at least HELLO taught.
 5. **One-handed learning.** Sign a new one-handed word with your other hand in view, then confirm the guess. **Expected:** "Learned …". Sign it again with the other hand down. **Expected:** recognized.
 6. **Continue.** On the Sentence card, make a quick, wide sweep to the right, or thumbs up. **Expected:** the card moves on to interpretation.
 
+
+## Pretrained sign model
+
+Run `npm install` first (or `npm run setup`), then `FASTASL_LOG=1 npm run dev` with a real camera. Nothing needs to be taught. Steps 9–10 and 17 need ASL Citizen installed (step 2).
+
+### Setup
+
+1. **Assets.** Run `npm run setup`. **Expected:** lines for `public/ort/ort-wasm-simd-threaded.wasm` and `.mjs` (copied), and `face_landmarker.task` (3.8 MB) and `pose_landmarker_lite.task` (5.8 MB) (downloaded once, then "present"). `git status` lists none of them.
+2. **ASL Citizen (optional).** Run `npm run setup:citizen`. **Expected:**
+   - It prints the licence notice and the expected download (about 29.8 MB) before downloading.
+   - It ends with `aslcitizen_stgcn.onnx` (15.2 MB) and `labels.json` in `src/renderer/public/models/asl-citizen/`.
+   - `git status` shows nothing there.
+   - A second run says the files are present.
+3. **Loaded.** Start the app. **Expected:** within a second, `[model] loaded in … ms (worker): 34 words (Kaggle)`, or `44 words (Kaggle + ASL Citizen)` after step 2. Every 10 s there is a `[tracker] … hands … ms · face … ms · pose … ms per call` line, and `[camera]` stays at 25 fps or more. The pose shows "off" without ASL Citizen.
+
+### Recognition, with nothing taught
+
+4. **HELLO.** In Ready, sign HELLO once. **Expected:**
+   - The card shows "hello".
+   - The log shows `[model] hello 0.9x · … (… ms, face, … frames) -> hello 0.9x`.
+   - **Write down whether the line says `hands swapped`** for a one-handed sign made with your right hand. That tells us how HandLandmarker labels your MacBook camera's raw frames (DECISIONS 165).
+5. **More words.** Sign THANK YOU, WATER, YES, NO, PLEASE, CALL (Y hand at the ear), TOMORROW and EAT, with the hands down between them. **Expected:** each becomes its word ("thank you", "call", "eat"), and the Sentence card reads them in order.
+6. **No face.** Cover your face with your other hand, or turn away a little, and sign HELLO. **Expected:** the log says `no face`. The word may still come, less surely, or be rejected.
+7. **Something else.** Scratch your head, reach for the trackpad, or wave both hands about. **Expected:** `-> nothing`, and no word. The header's Listening comes and goes as before.
+8. **Taught signs still work.** Teach a word neither model knows (Show me a sign or the list, for example SPOTIFY), then sign it. **Expected:** `[model] … -> nothing`, then `[sign] spotify (word)` from the taught templates.
+9. **ASL Citizen words.** Sign HELP, MORE, EMAIL and MUSIC. **Expected:** `[model:citizen] … -> more 0.9x` and so on, and the word. Without ASL Citizen these are rejected, and the LLM guess may ask about them (step 11).
+10. **Close call.** If a sign lands between two words, Did you mean lists both. Hold up 1 or 2 fingers. **Expected:** the word is picked.
+11. **LLM guess.** Sign a word no model knows (SEND without ASL Citizen) and hold still. **Expected:** "Identifying...", then "Is this …?" as before. The provider's log line lists the model's words among `known` (`"THANK YOU"`, `"CALL"`, …).
+
+### Control gestures
+
+12. **Swipes.** In Ready, swipe right, then left. **Expected:** the mode switches each time, about half a second after the hand stops. The log may show `[model] left to swipeRight: … is not sure enough` or `-> nothing`.
+13. **Fist.** In Ready, raise a fist and hold it. **Expected:** the card collapses, and no word is added.
+14. **Thumbs up.** Sign two words, then hold a thumbs up. **Expected:** the phrase ends. Then start a phrase with TOMORROW and keep the thumb up a moment. **Expected:** "tomorrow" joins the phrase, and the phrase doesn't end.
+15. **Finger counts.** Open the quick menu and hold up 2 fingers. **Expected:** option 2 is picked.
+16. **Spell mode.** Swipe to Spell and fingerspell K-R-I-S. **Expected:** the letters arrive as before, and there are no `[model]` lines.
+
+### Settings › Teach a sign
+
+17. **Show me a sign.** Settings › Teach a sign › 1 finger, then sign THANK YOU. **Expected:** "Is this THANK YOU?" appears at once, with no "Identifying sign..." and no LLM log line. Thumbs up shows "Learned THANK YOU · 1 recording saved". A sign neither model knows still goes to the LLM as before.
+
+### Missing files
+
+18. **No sign model.** Quit, rename `src/renderer/public/models/islr1st.onnx`, and restart. **Expected:** the notice "Sign model files are missing — run npm run setup" for 10 s. Taught signs and gestures work as before. Rename it back.
+19. **No face model.** Quit, move `src/renderer/public/mediapipe/face_landmarker.task` away, and restart. **Expected:** one warning, `[handTracker] face tracking is off: … face_landmarker.task is missing — run npm run setup`, and `no face` in the `[model]` lines. `npm run setup` downloads it again.
+20. **No ASL Citizen.** Move `src/renderer/public/models/asl-citizen/` out of `public/` and restart. **Expected:** `[model] ASL Citizen model not installed (npm run setup:citizen): using the Kaggle model only`, and pose "off" in `[tracker]`. Move it back.
+
+### Automated
+
+21. **Checks.** Run `npm run typecheck`, `npx vitest run` and `npx electron-vite build`. **Expected:** no type errors, and about 1116 tests pass. The real-data tests skip without `FASTASL_SIGN_DATA`, and one vocabulary check skips without ASL Citizen. The build succeeds.
+22. **Real data.** With ASL Citizen poses converted to `<folder>` (see `src/renderer/src/engine/model/evalData.ts`), run `FASTASL_SIGN_DATA=<folder> npx vitest run src/renderer/src/engine/model/realModel.test.ts`. **Expected:** HELLO, THANK YOU and WATER accepted (at least 80% of 6 clips each). Adding `FASTASL_SIGN_EVAL=1` prints the per-word report in DECISIONS 170.

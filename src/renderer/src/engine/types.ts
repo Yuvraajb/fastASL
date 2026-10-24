@@ -14,6 +14,17 @@ export interface FrameSample {
   /** Monotonic timestamp in milliseconds (performance.now()). */
   t: number
   hands: HandSample[]
+  /**
+   * Face mesh from MediaPipe FaceLandmarker (478 points, raw image coordinates like the hands),
+   * for the pretrained sign model only. Absent when face tracking is off, not loaded, or saw no
+   * face; it may be a frame old (the face can run every other frame).
+   */
+  face?: Landmark[]
+  /**
+   * Body pose from MediaPipe PoseLandmarker (33 points, raw image coordinates), for the
+   * ASL Citizen model only. Absent like `face`.
+   */
+  pose?: Landmark[]
 }
 
 /** Thresholds that the Settings > Sensitivity page scales. */

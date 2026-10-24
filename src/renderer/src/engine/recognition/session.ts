@@ -56,6 +56,11 @@ export class RecognitionSession {
    * Null after every other update.
    */
   rejectedMovement: Movement | null = null
+  /**
+   * The movement behind this update's word outcome (token, ambiguous or rejected), whatever it
+   * was: the pretrained sign model looks at it too. Null after every other update.
+   */
+  lastMovement: Movement | null = null
   private suspendedUntil = -Infinity
   private lastT = 0
   private pending: { event: RecognitionEvent; until: number } | null = null
@@ -103,9 +108,20 @@ export class RecognitionSession {
     this.suspendedUntil = -Infinity
   }
 
+  /**
+   * A word was recognized for the last movement after the fact (the sign model answers a frame
+   * or two later): the hand resting in its last shape is no letter, and a letter held since the
+   * movement ended is dropped.
+   */
+  wordShown(): void {
+    this.segmenter.blockStatic()
+    this.pending = null
+  }
+
   update(frame: FrameSample): RecognitionEvent[] {
     this.lastT = frame.t
     this.rejectedMovement = null
+    this.lastMovement = null
     if (frame.t < this.suspendedUntil) return []
     const segments = this.segmenter.push(frame)
     const events: RecognitionEvent[] = []
@@ -131,6 +147,7 @@ export class RecognitionSession {
         // The hand usually rests in a word's last shape; that is not a letter.
         if (result.status !== 'rejected') this.segmenter.blockStatic()
         const event = outcome(result)
+        this.lastMovement = segment
         if (!event) this.rejectedMovement = segment
         events.push(event ?? { type: 'rejected' })
       }

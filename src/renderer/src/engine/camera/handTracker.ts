@@ -1,12 +1,40 @@
-import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision'
+import {
+  FaceLandmarker,
+  FilesetResolver,
+  HandLandmarker,
+  PoseLandmarker,
+  type HandLandmarkerResult,
+  type NormalizedLandmark
+} from '@mediapipe/tasks-vision'
+import type { Landmark } from '@shared/types'
+import { assetExists } from '../assets'
 import type { FrameSample } from '../types'
 
 export type Delegate = 'GPU' | 'CPU'
 
+/**
+ * What to track besides the hands, for the pretrained sign model: the face (the Kaggle model) and
+ * the body pose (ASL Citizen). Each loads the first time it is asked for.
+ */
+export interface Extras {
+  face: boolean
+  pose: boolean
+}
+
+export const NO_EXTRAS: Extras = { face: false, pose: false }
+
+type Fileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>
+
 export interface HandTracker {
   readonly delegate: Delegate
-  /** Runs MediaPipe on the current frame. Synchronous; timestamps are forced to increase. */
-  detect(element: HTMLVideoElement | HTMLCanvasElement, tMs: number): FrameSample
+  /**
+   * Runs MediaPipe on the current frame: the hands every frame, the face and pose (when asked for
+   * and loaded) on alternating frames, each reusing its last result in between. Synchronous;
+   * timestamps are forced to increase.
+   */
+  detect(element: HTMLVideoElement | HTMLCanvasElement, tMs: number, extras?: Extras): FrameSample
+  /** Mean ms per call of each model since the last call (dev diagnostics); null until one ran. */
+  takeTimings(): { hands: number; face: number | null; pose: number | null; frames: number } | null
   close(): void
 }
 
@@ -37,17 +65,6 @@ export class MissingAssetsError extends Error {
   constructor() {
     super('Hand tracking files are missing — run npm run setup')
     this.name = 'MissingAssetsError'
-  }
-}
-
-/** The dev server answers a missing file with index.html, so HTML counts as missing. */
-async function assetExists(url: string): Promise<boolean> {
-  try {
-    const res = await fetch(url)
-    void res.body?.cancel()
-    return res.ok && !res.headers.get('content-type')?.includes('text/html')
-  } catch {
-    return false
   }
 }
 
@@ -91,14 +108,142 @@ export async function createHandTracker(): Promise<HandTracker> {
     landmarker = await load('CPU')
   }
 
+  const face = extraTracker('face', fileset, delegate)
+  const pose = extraTracker('pose', fileset, delegate)
+  const handTime = new Timing()
+  let frameNo = 0
   let lastT = 0
   return {
     delegate,
-    detect(element, tMs) {
+    detect(element, tMs, extras = NO_EXTRAS) {
       const t = tMs > lastT ? tMs : lastT + 1
       lastT = t
-      return toFrameSample(landmarker.detectForVideo(element, t), t)
+      const sample = handTime.time(() => toFrameSample(landmarker.detectForVideo(element, t), t))
+      // At most one extra model per frame: the face on even frames, the pose on odd ones, each
+      // reusing its last result in between (see EXTRA_MAX_AGE_MS).
+      const faceDue = frameNo++ % 2 === 0
+      if (extras.face && faceDue) face.detect(element, t)
+      if (extras.pose && !faceDue) pose.detect(element, t)
+      const facePoints = extras.face ? face.recent(t) : null
+      const posePoints = extras.pose ? pose.recent(t) : null
+      if (facePoints) sample.face = facePoints
+      if (posePoints) sample.pose = posePoints
+      return sample
     },
-    close: () => landmarker.close()
+    takeTimings() {
+      const hands = handTime.take()
+      if (hands === null) return null
+      return { hands, face: face.timing.take(), pose: pose.timing.take(), frames: handTime.lastCount }
+    },
+    close: () => {
+      landmarker.close()
+      face.close()
+      pose.close()
+    }
+  }
+}
+
+/** Mean duration of the calls timed since the last take(). */
+class Timing {
+  private total = 0
+  private count = 0
+  lastCount = 0
+  time<T>(fn: () => T): T {
+    const t0 = performance.now()
+    try {
+      return fn()
+    } finally {
+      this.total += performance.now() - t0
+      this.count++
+    }
+  }
+  take(): number | null {
+    const mean = this.count ? this.total / this.count : null
+    this.lastCount = this.count
+    this.total = 0
+    this.count = 0
+    return mean
+  }
+}
+
+/** A result older than this is not reused: the face or pose was lost, or tracking paused. */
+const EXTRA_MAX_AGE_MS = 150
+const FACE_MODEL = './mediapipe/face_landmarker.task'
+const POSE_MODEL = './mediapipe/pose_landmarker_lite.task'
+
+interface ExtraTracker {
+  detect(element: HTMLVideoElement | HTMLCanvasElement, t: number): void
+  /** The last result, if it is recent enough to stand for frame time `t`. */
+  recent(t: number): Landmark[] | null
+  timing: Timing
+  close(): void
+}
+
+/**
+ * FaceLandmarker or PoseLandmarker, loaded on first use with the hands' delegate. A missing model
+ * file (scripts/fetch-assets.mjs didn't fetch it) or a failed load leaves it off for the session,
+ * with one console warning: the sign model then runs without it, less accurately.
+ */
+function extraTracker(kind: 'face' | 'pose', fileset: Fileset, delegate: Delegate): ExtraTracker {
+  type Runner = { run(element: HTMLVideoElement | HTMLCanvasElement, t: number): NormalizedLandmark[] | undefined; close(): void }
+  let state: 'unloaded' | 'loading' | 'ready' | 'off' = 'unloaded'
+  let runner: Runner | null = null
+  let last: { t: number; points: Landmark[] } | null = null
+  const timing = new Timing()
+  const load = async (): Promise<void> => {
+    const modelAssetPath = new URL(kind === 'face' ? FACE_MODEL : POSE_MODEL, location.href).href
+    if (!(await assetExists(modelAssetPath))) throw new Error(`${modelAssetPath} is missing — run npm run setup`)
+    const baseOptions = { modelAssetPath, delegate }
+    if (kind === 'face') {
+      const face = await FaceLandmarker.createFromOptions(fileset, { baseOptions, runningMode: 'VIDEO', numFaces: 1 })
+      runner = { run: (el, t) => face.detectForVideo(el, t).faceLandmarks[0], close: () => face.close() }
+    } else {
+      const pose = await PoseLandmarker.createFromOptions(fileset, { baseOptions, runningMode: 'VIDEO', numPoses: 1 })
+      runner = {
+        run: (el, t) => {
+          let points: NormalizedLandmark[] | undefined
+          pose.detectForVideo(el, t, (result) => (points = result.landmarks[0]))
+          return points
+        },
+        close: () => pose.close()
+      }
+    }
+  }
+  return {
+    timing,
+    detect(element, t) {
+      if (state === 'unloaded') {
+        state = 'loading'
+        load().then(
+          () => {
+            if (state === 'loading') state = runner ? 'ready' : 'off'
+            else runner?.close() // closed while loading
+          },
+          (err: unknown) => {
+            state = 'off'
+            console.warn(`[handTracker] ${kind} tracking is off:`, err instanceof Error ? err.message : err)
+          }
+        )
+        return
+      }
+      if (state !== 'ready' || !runner) return
+      const r = runner
+      try {
+        const points = timing.time(() => r.run(element, t))
+        last = points ? { t, points: points.map(({ x, y, z }) => ({ x, y, z })) } : null
+      } catch (err) {
+        // A broken face or pose model must not take the hands down with it.
+        state = 'off'
+        runner = null
+        r.close()
+        console.warn(`[handTracker] ${kind} tracking stopped:`, err)
+      }
+    },
+    recent: (t) => (last && t - last.t <= EXTRA_MAX_AGE_MS ? last.points : null),
+    close() {
+      runner?.close()
+      runner = null
+      state = 'off'
+    }
   }
 }

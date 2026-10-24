@@ -612,3 +612,149 @@ Decisions made while building, in the order they came up. Each entry: what, why,
 160. **Wider per-word radius, and one for single templates.** radiusScale went from 1.4 to 2.4. The real HELLO templates' median nearest distance was ~0.8 (radius ~1.9), and the signer's later HELLOs landed at 0.91-2.2, while other movements landed at 2.5-8.9. A word with one template (one confirmed guess) has no spread to measure, so it gets `singleTemplateRadius` 2.0. A real one-shot THANK YOU then matched at 1.88-1.89. Synthetic words keep the 1.5 floor.
 161. **Swipes need a quick sweep.** A slow sideways fist (1.8 hand lengths over 1.2 s) is not a swipe (≥ 0.22 frame widths within 300 ms), so it went to identifySign as an unknown movement. Thumbs up continues on the Sentence card as well.
 
+
+## Pretrained sign model
+
+162. **Signs are recognized out of the box by a pretrained model; teaching is optional now.** The Kaggle "asl-signs" 1st-place model (hoyso48, 250 signs, MediaPipe landmarks in) runs in the app on every movement. The user's taught signs and the LLM guess still come after it (171).
+    - **Source and licence.** The weights are from https://huggingface.co/sign/kaggle-asl-signs-1st-place (`model.tflite` and `sign_to_prediction_index_map.json`), MIT per that model card. The original solution is https://github.com/hoyso48/Google---Isolated-Sign-Language-Recognition-1st-place-solution, which has no licence file of its own. `src/renderer/public/models/MODEL_LICENSE.md` has the attribution and the MIT text.
+    - **Conversion.** tf2onnx 1.17.0, opset 17; its outputs match the TFLite model's. Every one of its 5,490,414 weights is exactly representable in float16, so `scripts/models/fp16-weights.py` stores them as float16 with a Cast back to float32. The outputs are bit-identical (all 988 held-out inputs in 170 give the same probabilities), the file is 11.2 MB instead of 22.2 MB, and it loads in about 200 ms instead of 355 ms. It is committed as `src/renderer/public/models/islr1st.onnx`, and the label map as `engine/model/islrLabels.json`.
+
+163. **Microsoft's ASL Citizen ST-GCN adds the words the Kaggle model lacks, and is never committed.** It knows 2731 signs, including HELP, MORE, EMAIL, MAIL, SEND, MUSIC, PLAY, MEETING, STOP and WHAT (neither model has SPOTIFY).
+    - **Licence.** The ASL Citizen licence is non-commercial research only, with no redistribution. So neither the weights nor anything derived from them (the ONNX, the label list) is in the repo. `src/renderer/public/models/asl-citizen/` is gitignored.
+    - **`npm run setup:citizen`** (`scripts/setup-asl-citizen.mjs`) downloads only what it needs and prints the expected size first. That is the official weights zip (28.9 MB, https://github.com/microsoft/ASL-citizen-code/releases/tag/checkpoints_v1, SHA-256 pinned), plus `ASL_Citizen/splits/train.csv` out of the 45.9 GB dataset zip by HTTP range requests: its end records, the first 64 KB of the central directory, and the 0.8 MB member. That comes to 29.75 MB in all. The class order is the sorted unique glosses of train.csv (2731).
+    - **The conversion runs in Node, with no PyTorch or Python.** `scripts/asl-citizen/` reads the zip, unpickles the checkpoint (a fixed allowlist of globals, so a tampered file can't run code), and writes the ONNX graph of our own re-implementation of the OpenHands ST-GCN (MIT). It matches a torch export of the same network within 9.2e-5 on the logits (which are about 200 in magnitude), with argmax agreeing 15/15. Conversion takes about 0.4 s. `--weights` and `--labels` take local copies.
+    - **Without it the app works as before plus the Kaggle model.** The log says `[model] ASL Citizen model not installed (npm run setup:citizen): using the Kaggle model only`. Vite copies `public/` into builds, so a build made on a machine with it installed contains it and must not be distributed.
+
+164. **Runtime: onnxruntime-web 1.30.0, wasm, one thread, in a Web Worker.**
+    - One thread needs no SharedArrayBuffer, so the page needs no cross-origin isolation. The CSP already had `'wasm-unsafe-eval'`, `worker-src 'self'` and `connect-src 'self'`; nothing changed there.
+    - `engine/model/model.worker.ts` holds the sessions, so inference never blocks the camera loop or the card. If the worker can't start, the sessions run on the page (`[model] worker unavailable, running on the page`).
+    - The renderer aliases `onnxruntime-web/wasm` to its `ort.wasm.min.mjs` build, which loads `ort-wasm-simd-threaded.{mjs,wasm}` from `ort.env.wasm.wasmPaths`. `scripts/fetch-assets.mjs` copies those two files from node_modules into `public/ort/` (gitignored), as `npm install` / `npm run setup` already did for MediaPipe. The default build names the wasm with `new URL(…, import.meta.url)`, so Vite copied another 14 MB into every build.
+    - **Measured in the built app** (file://, a 640x360 MJPEG stream). Both models load in 435 ms in the worker. A Kaggle answer takes 16–71 ms (two runs plus messaging), and an ASL Citizen one 360–385 ms (both hand assignments in one batch of 2). The camera stays at 30–35 fps throughout. In Node, one Kaggle run on a 40–90-frame movement takes 16–30 ms.
+
+165. **Input and hand slots.**
+    - **Kaggle model.** `[T, 543, 3]`, raw (unmirrored) x, y, z, NaN where missing. FaceLandmarker's first 468 of 478 points fill 0–467. The pose (489–521) stays NaN, because the model doesn't use it. The signer's left hand fills 468–488 and their right hand 522–542 (`engine/model/inputs.ts`).
+    - **Which hand goes where.** HandLandmarker's labels assume a mirrored image, and the camera pipeline feeds raw frames, so the hand labelled 'Left' is the signer's right hand. Two hands with the same label are told apart by position: the one on the image's left is the signer's right.
+    - **Safety net.** Swapped slots drop the Kaggle model to 0.5%. So both assignments run and the more confident answer wins. The research measured no accuracy lost to this on held-out data.
+    - **ASL Citizen.** `[2, 128, 27]`: nose, eyes, shoulders and elbows from PoseLandmarker, and per hand the wrist, thumb tip and each finger's base and tip. Missing points are 0. The input is padded or stepped to 128 frames and normalized by the mean shoulder centre and width over all 128 frames, the zero padding included, exactly as ASL Citizen's dataset code does.
+
+166. **The face and the body pose are tracked only for the model, on alternating frames.**
+    - FaceLandmarker (`face_landmarker.task`, float16, 3.8 MB) and PoseLandmarker lite (`pose_landmarker_lite.task`, 5.8 MB) are downloaded by `fetch-assets.mjs` into `public/mediapipe/`. Each loads the first time it is asked for, with the hands' delegate (GPU).
+    - **Where.** The camera tracks them only once the model has loaded, on cards where it can be asked: views that take signs outside Spell mode, and Show me a sign. Elsewhere (collapsed, menus, the agent) they cost nothing. The pose is tracked only when ASL Citizen is installed.
+    - **Measured in the built app** (640x360): hands 13–17 ms, face 6–11 ms and pose 9–11 ms per call. Running both every frame would take about 35 ms a frame, below 30 fps. So the face runs on even frames and the pose on odd ones, and each reuses its last result (up to 150 ms old) in between; the camera held 30–35 fps.
+    - **Without a face** the Kaggle model still works, at lower accuracy: the research measured about 90% on the restricted list without one. A missing or failing face or pose model turns that one off for the session, with one console warning, and the hands carry on.
+
+167. **The model sees the movement plus context.**
+    - `recognitionInput` keeps the last 6 s of tracked frames. The Kaggle model gets the segmenter's movement plus 5 frames each side.
+    - ASL Citizen was trained on whole clips, hands at rest included, so it gets 15 frames before and 9 after. Nine is about all the camera has seen when the segmenter ends a movement. With that context its top-1 of 2731 on held-out signers rose from 47% to 55% (59% for whole clips).
+
+168. **The decision.**
+    - **Softmax over the ENABLED words only.** Accept at p ≥ 0.7.
+    - **Open-set check (added after calibration).** The model must also rank the word first among ALL its 250 signs (ASL Citizen: within its top 3 of 2731). A sign outside the list still gets a big share of a softmax over a few dozen words, but the model's own top sign is then usually the real one. On held-out signers this cut out-of-vocabulary accepts from 12% to under 1% (Kaggle) and from 26% to 2% (ASL Citizen). It cost 3 points of recall (89% to 86%).
+    - **Close calls.** Below 0.7, two words both at least 0.35 and within 0.25 of each other become the existing "Did you mean".
+    - **The two models together.** A Kaggle accept wins. Otherwise ASL Citizen's top word is accepted if it is one the Kaggle model lacks, or the very word the Kaggle model ranked first without being sure. The two never overrule each other on a word both know.
+    - All of this is in `engine/model/decide.ts`, which is pure and unit-tested.
+
+169. **The vocabulary is one TS constant, `engine/model/vocabulary.ts`.** Each entry has the display word, its Kaggle label and its ASL Citizen glosses, and whether it is enabled.
+    - **Display.** thankyou is "thank you", callonphone "call" and food "eat"; the rest are lower case. ASL Citizen's variants (MAIL1/MAIL2, WHAT1/WHAT2, EAT1/EAT2, CALL1/CALL2/PHONE) map to one word.
+    - **On:** hello, thank you, yes, no, please, call, tomorrow, time, open, where, now, later, bad, water, eat, finish, wait, bye, see, look, listen, home, close, who, why, drink, happy, yesterday, night, sleep, think, like, dad, mom. With ASL Citizen installed, also help, more, email, mail, send, music, play, meeting, stop and what.
+    - **Off:**
+      - go: read as LATER 2 times in 12.
+      - morning: known weak.
+      - fine: with ASL Citizen on, it took 10 of the signs left out of the list.
+      - good: GOOD and THANK YOU are nearly the same sign, and the Kaggle model read all 12 GOODs as THANK YOU.
+    - **Untested extras.** look, night, sleep, think, like, dad and mom have no held-out clips. Enabling them changed the others' accuracy by under 1 point.
+    - **Weak but harmless.** time (Kaggle 1/12) and listen (2/12) are mostly rejected rather than misread, so they stay on, and ASL Citizen rescues some of them.
+
+170. **Accuracy on held-out signers (ASL Citizen test split).** 494 clips from 11 signers the ST-GCN never trained on; the Kaggle model never saw ASL Citizen at all. Each clip is trimmed to its hand frames, as the segmenter would cut it. Out-of-vocabulary is measured by leaving each word out in turn and counting its own clips accepted as another word.
+    - **Kaggle only** (34 words, 314 clips): 85.7% correct, 0% wrong, 0.6% Did you mean, 13.7% rejected. Out of vocabulary: 0.6%.
+    - **Kaggle + ASL Citizen** (44 words, 458 clips): 83.0% correct, 1.5% wrong, 15.1% rejected. Out of vocabulary: 3.3%. The wrong ones are MEETING read as BYE (3/12), HELP as NOW, SEND as MAIL and WHAT as WAIT (2/24).
+    - **Per word** (correct, Kaggle only / combined):
+
+      | Signs | Kaggle only | Combined |
+      | --- | --- | --- |
+      | hello, thank you, please, water, yes, no, now, where, home, later, happy, finish, tomorrow, yesterday, eat | 100% | 100% |
+      | open | 11/12 | 12/12 |
+      | close | 10/11 | 11/11 |
+      | wait, who, why | 11/12 | 11/12 |
+      | bye | 10/12 | 11/12 |
+      | bad | 10/12 | 10/12 |
+      | see | 9/12 | 11/12 |
+      | call | 12/24 (PHONE yes, CALL2 no) | 12/24 |
+      | listen | 2/12 | 7/12 |
+      | time | 1/12 | 7/12 |
+      | more | | 11/12 |
+      | email | | 10/12 |
+      | meeting, music | | 9/12 |
+      | send | | 8/12 |
+      | help | | 7/12 |
+      | mail (MAIL1 + MAIL2) | | 16/24 |
+      | what (WHAT1 + WHAT2) | | 15/24 |
+      | stop | | 6/12 |
+      | play | | 4/12 |
+
+    - **Split by signer** (6 vs 5), the combined system scored 84.3% / 81.4% correct with 2.4% / 4.4% out-of-vocabulary accepts. That is consistent between halves; the thresholds were chosen from a handful of discrete rules.
+    - **The brief's rule alone** (p ≥ 0.7, no rank check) scored 88.9% correct with 12.1% out-of-vocabulary accepts.
+    - **Reproduce.** `FASTASL_SIGN_DATA=<folder> FASTASL_SIGN_EVAL=1 npx vitest run src/renderer/src/engine/model/realModel.test.ts` prints this report through the app's own code. The data is ASL Citizen poses converted to a plain float32 layout (`engine/model/evalData.ts`). It is not redistributable, so it lives outside the repo.
+
+171. **Recognition order for a movement: the model, then the taught signs, then the LLM.**
+    - **The model.** A movement's outcome (the DTW result over the taught templates is computed as before) waits until the model answers, which takes a frame or two. Listening stays up meanwhile. An answer that doesn't come within 1.5 s of frame time (`MODEL_WAIT_MS`) is ignored.
+    - **Combining it with the taught signs** (`withTaught`):
+      - Both accept the same word: that word.
+      - They accept different words: the more confident one wins. A taught match's confidence is `1 − 0.5 × distance / radius`: 1 at distance 0, 0.5 at the edge of the word's accept radius. It is compared with the model's p.
+      - One accepts and the other is unsure or rejects: the one that accepts.
+      - Both are unsure: one "Did you mean" with the model's options first.
+      - The model rejects: the taught outcome as before. A rejection then goes to the guess-confirm-learn LLM path exactly as before (146).
+    - **Letters, fingerspelling and Spell mode are untouched.** The model only sees movements, and Spell mode never asks it. A word the model names afterwards blocks the hand's resting shape as a letter, as a taught word does.
+    - **Dictation** types a close call's best guess, as before.
+
+172. **The model must not swallow control gestures.**
+    - **Swipes.** A swipe made during a movement waits for the verdict, now also when nothing is taught (the model could name it). A model word takes the movement from the swipe only at p ≥ 0.9 (`GESTURE_OVERRIDE_P`). A taught word still always does (MUSIC, 158). Below that, the swipe acts as before.
+    - **Holds.** The same 0.9 bar applies when the movement ends with the hand holding a control gesture's shape that is timing toward firing (fist, thumbs up, palm, finger count, shape; `GestureEngine.holding()`). A close call never takes a movement from a gesture.
+    - **A gesture that fires while the model is still judging** (up to about 0.4 s with ASL Citizen) waits for its answer, like a swipe. A sure word wins, and TOMORROW's thumbs-up doesn't also end the phrase. Otherwise the gesture acts.
+    - On held-out signers, 92% of correct Kaggle accepts are at least 0.9 sure.
+    - **The real model on the synthetic gestures** (modelRecognition.test.ts):
+      - a swipe gave bye 0.30, not the model's top sign (rank 5 of 250), so rejected;
+      - a raised fist gave night 0.17, so rejected.
+
+      The swipe still switched the mode and the fist still collapsed the card. Every existing engines test passes unchanged.
+
+173. **The LLM is told the model's words.** Once the model has loaded, `store.modelWords` holds its enabled words in upper case ("THANK YOU", "CALL", "EAT"; ASL Citizen's only when installed). identifySign's `known` list is the taught words plus these. A guess then names a sign the way the model does, and a confirmed guess learns that label. The LLM path stays for words neither model knows: EMAIL, SEND, MUSIC and PLAY without ASL Citizen, SPOTIFY always.
+
+174. **Settings › Teach a sign › Show me a sign asks the model first.** If the model accepts the movement or has a close call, its words are offered at once as "Is this THANK YOU?", with no LLM call, and a pick saves the repetition as before. Otherwise the LLM is asked as before. Teaching from the list is unchanged. It is optional now, for signs neither model knows.
+
+175. **Missing files.**
+    - The Kaggle model or onnxruntime's wasm missing gives the notice "Sign model files are missing — run npm run setup" for 10 s, and recognition carries on with the taught signs.
+    - A missing face or pose model is one console warning (166).
+    - ASL Citizen missing is one log line (163).
+
+176. **Dev diagnostics** (`FASTASL_LOG=1 npm run dev`):
+    - Per movement: `[model] hello 0.95 · thank you 0.00 · listen 0.00 (40 ms, face, hands swapped, 68 frames) -> hello 0.95`. That is the Kaggle model's top 3 among the enabled words, its round-trip time, whether a face was seen, whether the swapped hand assignment won, and what it decided on its own. When the top word isn't the model's first sign of all, the line adds `#4 of all signs`: the open-set check (168) rejected it.
+    - `[model:citizen] music 1.00 · night 0.00 · stop 0.00 (370 ms, hands swapped) -> music 1.00` appears when ASL Citizen ran.
+    - `[model] left to swipeRight: hello 0.85 is not sure enough` appears when a gesture kept the movement.
+    - Every 10 s: `[tracker] 322 frames · hands 15.4 ms · face 10.3 ms · pose 9.8 ms per call`.
+    - At load: `[model] loaded in 435 ms (worker): 44 words (Kaggle + ASL Citizen)`.
+
+177. **Verified, and not verified.**
+    - **Unit tests:**
+      - the input building, NaN fill, hand slots and padding;
+      - the softmax over the enabled words, the thresholds and the rank check;
+      - the display mapping and the vocabulary;
+      - the merge with the taught signs;
+      - the face and pose tracking cadence and its missing-file path.
+    - **Wiring tests with a fake model** (`app/modelRecognition.test.ts`):
+      - the recognition order and the LLM's known words;
+      - Did you mean, and the time limit;
+      - letters, and Spell mode;
+      - swipes, a raised fist and TOMORROW's thumbs-up, including a thumbs-up that fires mid-judgement;
+      - Show me a sign.
+
+      The gesture rules were each checked by disabling them: the tests then fail.
+    - **The real model in Node:** HELLO, THANK YOU and WATER from real ASL Citizen signers are named by the app's own input building (18/18 accepted), and the synthetic swipe and fist are not swallowed (172).
+    - **End to end, in the built app** (file://, a throwaway `FASTASL_DATA_DIR`, no camera). An MJPEG stream looped signasl.org dictionary clips (whole clips: hands rise, sign, lower).
+      - **Kaggle model only:** the log said `ASL Citizen model not installed …` and `loaded in 408 ms (worker): 34 words (Kaggle)`. It logged `[model] hello 0.96`, `please 0.99`, `yes 0.98`, `water 0.99` and `thank you 0.76`, each becoming the token. MORE, EMAIL and MUSIC were rejected (`#5`–`#8 of all signs -> nothing`), and `[tracker]` showed the pose off.
+      - **With ASL Citizen:** `[model:citizen] more 1.00` and `email 1.00` became tokens in every loop. MUSIC 1.00 became one in one run, and in a later run the open-set check rejected it. HELP and PLAY were rejected and went on to the (mock) LLM guess.
+    - **Not verified:**
+      - **A live webcam.** Above all, the hand-slot mapping on a real MacBook camera. The dictionary clips mostly chose the swapped assignment, and whether those clips are mirrored is unknown. The safety net makes either work, at the cost of a second run.
+      - Accuracy on the user's own signing at a desk.
+      - The GPU cost on other Macs.
+      - How the 0.9 gesture bar feels live.

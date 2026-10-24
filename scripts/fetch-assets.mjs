@@ -1,7 +1,13 @@
 #!/usr/bin/env node
-// Puts the MediaPipe runtime next to the renderer so it works offline in dev (http) and prod (file://):
+// Puts the MediaPipe and onnxruntime runtimes next to the renderer so they work offline in dev
+// (http) and prod (file://). All of it is gitignored:
 //   src/renderer/public/mediapipe/wasm/vision_wasm_internal.{js,wasm}   copied from @mediapipe/tasks-vision
 //   src/renderer/public/mediapipe/hand_landmarker.task                  downloaded once (~7.8 MB)
+//   src/renderer/public/mediapipe/face_landmarker.task                  downloaded once (~3.8 MB, the sign model's face)
+//   src/renderer/public/mediapipe/pose_landmarker_lite.task             downloaded once (~5.8 MB, ASL Citizen's body pose)
+//   src/renderer/public/ort/ort-wasm-simd-threaded.{wasm,mjs}           copied from onnxruntime-web (the sign model's runtime)
+// The Kaggle sign model itself (public/models/islr1st.onnx) is committed; ASL Citizen's is
+// installed separately by `npm run setup:citizen`.
 // Idempotent: unchanged files are skipped. Exits non-zero on any failure.
 
 import { createHash } from 'node:crypto'
@@ -13,9 +19,13 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'src/renderer/public/mediapipe')
 const WASM_FILES = ['vision_wasm_internal.js', 'vision_wasm_internal.wasm']
-const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
-const MODEL_PATH = join(OUT, 'hand_landmarker.task')
+const MODELS = [
+  ['https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', 'hand_landmarker.task'],
+  ['https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', 'face_landmarker.task'],
+  ['https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task', 'pose_landmarker_lite.task']
+].map(([url, name]) => ({ url, path: join(OUT, name) }))
+const ORT_OUT = join(ROOT, 'src/renderer/public/ort')
+const ORT_FILES = ['ort-wasm-simd-threaded.wasm', 'ort-wasm-simd-threaded.mjs']
 const DOWNLOAD_TIMEOUT_MS = 120_000
 
 const require = createRequire(import.meta.url)
@@ -52,13 +62,29 @@ async function copyWasm() {
   }
 }
 
-async function downloadModel() {
-  if ((await sizeOf(MODEL_PATH)) > 0) {
-    log(`present     ${rel(MODEL_PATH)}`)
+/** onnxruntime-web's wasm build, from its dist folder (the wasm files aren't in its export map). */
+async function copyOrt() {
+  await mkdir(ORT_OUT, { recursive: true })
+  const dist = dirname(require.resolve('onnxruntime-web'))
+  for (const name of ORT_FILES) {
+    const src = join(dist, name)
+    const target = join(ORT_OUT, name)
+    if (await sameContent(src, target)) {
+      log(`up to date  ${rel(target)}`)
+      continue
+    }
+    await copyFile(src, target)
+    log(`copied      ${rel(target)}`)
+  }
+}
+
+async function downloadModel({ url, path }) {
+  if ((await sizeOf(path)) > 0) {
+    log(`present     ${rel(path)}`)
     return
   }
-  log(`downloading ${MODEL_URL}`)
-  const res = await fetch(MODEL_URL, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
+  log(`downloading ${url}`)
+  const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
   if (!res.ok) throw new Error(`model download failed: HTTP ${res.status} ${res.statusText}`)
   const bytes = Buffer.from(await res.arrayBuffer())
   const expected = Number(res.headers.get('content-length'))
@@ -71,20 +97,21 @@ async function downloadModel() {
     throw new Error('model download is corrupted (MD5 mismatch)')
   }
   // Write then rename so an interrupted run never leaves a half-written model behind.
-  const part = `${MODEL_PATH}.part`
+  const part = `${path}.part`
   await writeFile(part, bytes)
-  await rename(part, MODEL_PATH)
-  log(`saved       ${rel(MODEL_PATH)} (${(bytes.length / 1e6).toFixed(1)} MB)`)
+  await rename(part, path)
+  log(`saved       ${rel(path)} (${(bytes.length / 1e6).toFixed(1)} MB)`)
 }
 
 try {
   await mkdir(OUT, { recursive: true })
   await copyWasm()
-  await downloadModel()
-  log('MediaPipe assets ready')
+  await copyOrt()
+  for (const model of MODELS) await downloadModel(model)
+  log('MediaPipe and sign model assets ready')
 } catch (err) {
-  await rm(`${MODEL_PATH}.part`, { force: true })
+  for (const { path } of MODELS) await rm(`${path}.part`, { force: true })
   console.error(`[fetch-assets] FAILED: ${err instanceof Error ? err.message : err}`)
-  console.error('[fetch-assets] Hand tracking needs these files. Check your network and run `npm run setup` again.')
+  console.error('[fetch-assets] Hand tracking and the sign model need these files. Check your network and run `npm run setup` again.')
   process.exit(1)
 }

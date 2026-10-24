@@ -47,6 +47,7 @@ function harness() {
     const tracker = {
       delegate: 'GPU' as const,
       detect: vi.fn((_el: unknown, t: number): FrameSample => ({ t, hands: [hand(handX)] })),
+      takeTimings: vi.fn(() => null),
       close: vi.fn()
     }
     trackers.push(tracker)
@@ -370,7 +371,7 @@ describe('CameraPipeline', () => {
     h.deps.createHandTracker.mockImplementationOnce(() => new Promise((r) => (resolveTracker = r)))
     const started = h.pipeline.start(BUILTIN)
     h.pipeline.stop()
-    resolveTracker({ delegate: 'GPU', detect: vi.fn(), close: vi.fn() })
+    resolveTracker({ delegate: 'GPU', detect: vi.fn(), takeTimings: vi.fn(() => null), close: vi.fn() })
     await started
     expect(h.deps.openCamera).not.toHaveBeenCalled()
     expect(h.live.mock).toBe(true)

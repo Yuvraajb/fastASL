@@ -9,3 +9,6 @@ out-screens/
 *.tsbuildinfo
 .claude/
 src/renderer/public/mediapipe/
+src/renderer/public/ort/
+# ASL Citizen (Microsoft Research licence: non-commercial, no redistribution): installed by npm run setup:citizen, never committed.
+src/renderer/public/models/asl-citizen/

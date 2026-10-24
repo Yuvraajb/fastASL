@@ -5,7 +5,10 @@ import { slotPresent } from '../engine/recognition/features'
 import { summarizeMotion } from '../engine/recognition/motionSummary'
 import { Segmenter } from '../engine/recognition/segmenter'
 import { RecognitionSession, type Movement, type RecognitionEvent } from '../engine/recognition/session'
+import type { Classification } from '../engine/recognition/recognizer'
 import { TEACH_REASONS, TeachSession } from '../engine/recognition/teach'
+import { decide, describeTop, ISLR_MAX_RANK, withTaught, yieldToGesture, type FinalDecision, type TaughtDecision } from '../engine/model/decide'
+import type { ModelVerdict, MovementWindow, SignModel } from '../engine/model/signModel'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
 import {
   countSigns,
@@ -47,6 +50,14 @@ export const GUESS_WAIT_MS = Math.max(...Object.values(HOLD_MS)) + 250
  * (a swipe's return stroke, the hand coming down from a pick), never a guess.
  */
 export const GUESS_AFTER_GESTURE_MS = 1500
+/**
+ * The pretrained model answers within a frame or two (~30 ms, ~250 ms with ASL Citizen). One
+ * that hasn't answered after this long (camera-frame time) is ignored: the movement gets the
+ * taught signs' outcome alone.
+ */
+export const MODEL_WAIT_MS = 1500
+/** Camera frames kept for the model's context around a movement: the longest movement and then some. */
+const HISTORY_MS = 6000
 
 /**
  * Whether a movement nothing matched is worth a guess: clean (it neither started with the hands
@@ -76,6 +87,27 @@ type Target = Pick<
   | 'showSign'
 >
 type TeachPage = Extract<SettingsPage, { page: 'teachRecord' }>
+
+export interface RecognitionOptions {
+  /** The pretrained sign model once it has loaded; null before that, or when its files are missing. */
+  model?: () => SignModel | null
+  /**
+   * Whether a hand holds a control gesture's shape that is timing toward firing (the gesture
+   * engine's hold): a model word then needs GESTURE_OVERRIDE_P to take the movement.
+   */
+  holdingGesture?: () => boolean
+}
+
+/** A movement the pretrained model is looking at; its outcome waits for the answer. */
+interface Judging {
+  movement: Movement
+  /** The taught signs' outcome (DTW), and the classification behind it. */
+  local: RecognitionEvent
+  dtw: Classification | null
+  /** Frame time the movement was cut. */
+  since: number
+  verdict: ModelVerdict | 'failed' | null
+}
 
 export interface RecognitionConnection {
   /**
@@ -123,8 +155,10 @@ export const SHOW_SETTLE_MS = 1000
 export function connectRecognition(
   controller: Target,
   /** The camera frames engines.ts keeps for guesses (none unless a guess could use them). */
-  recentFrames: () => readonly CapturedFrame[] = () => []
+  recentFrames: () => readonly CapturedFrame[] = () => [],
+  options: RecognitionOptions = {}
 ): RecognitionConnection {
+  const signModel = options.model ?? (() => null)
   const initial = getApp()
   // Outside Spell mode a letter waits out the longest control hold, so suspend() can drop it.
   const rec = new RecognitionSession({ controlHoldMs: Math.max(...Object.values(HOLD_MS)) })
@@ -151,15 +185,23 @@ export function connectRecognition(
   let aspectNow = 1
   /** A movement got signStart and no outcome yet. */
   let moving = false
-  /** A swipe made by that movement, waiting for its verdict. */
-  let heldSwipe: { input: GestureInput; t: number } | null = null
+  /**
+   * A control gesture waiting for that movement's verdict: a swipe the movement made, or any
+   * gesture that fired while the sign model was still judging it.
+   */
+  let heldGesture: { input: GestureInput; t: number } | null = null
   /** A movement to guess once GUESS_WAIT_MS has passed with no gesture, sign or letter. */
   let pendingGuess: { movement: UnknownMovement; at: number } | null = null
   /** When a control gesture last acted (frame time). */
   let lastGestureT = -Infinity
+  /** The pretrained model is judging the last movement: its outcome is held until the answer. */
+  let judging: Judging | null = null
+  /** Recent tracked frames (hands, face, pose): the model's context around a movement. */
+  const history: FrameSample[] = []
   const forgetMovement = (): void => {
     moving = false
-    heldSwipe = null
+    heldGesture = null
+    judging = null
   }
 
   // "Listening..." on the card, debounced by frame time (LISTEN_DELAY_MS, LISTEN_MIN_MS).
@@ -263,20 +305,21 @@ export function connectRecognition(
     if (s.view !== prev.view) followTeachPage(s.view)
   })
 
-  const route = (e: RecognitionEvent): void => {
+  const route = (e: RecognitionEvent, rejectedMovement: Movement | null = null): void => {
     log(`[sign] ${describe(e)}`)
     if (e.type === 'signStart') {
       moving = true
       return listenStart(lastT)
     }
     if (e.type === 'rejected') {
-      const swipe = heldSwipe
+      const held = heldGesture
       forgetMovement()
-      // A movement that made a swipe is the swipe's (or, judged too late, nobody's): never a guess.
-      if (swipe) return lastT - swipe.t <= SWIPE_VERDICT_MS ? applyGesture(swipe.input) : listenRejected()
+      // A movement that made a swipe (or ended in a held gesture) is the gesture's (or, judged too
+      // late, nobody's): never a guess.
+      if (held) return lastT - held.t <= SWIPE_VERDICT_MS ? applyGesture(held.input) : listenRejected()
       // A whole, clean movement of sign length that nothing taught matched: maybe the LLM knows
       // it, once a control gesture or letter made with its last shape has had time to act.
-      const movement = rec.rejectedMovement
+      const movement = rejectedMovement
       const afterGesture = movement !== null && movement.frames[0].t < lastGestureT + GUESS_AFTER_GESTURE_MS
       if (movement && signLike(movement) === 'yes' && !afterGesture && controller.guessesSigns()) {
         const wait = GUESS_WAIT_MS * SENSITIVITY[getApp().sensitivity].holdScale
@@ -289,7 +332,7 @@ export function connectRecognition(
     if (pendingGuess) log(`[sign] guess dropped: ${e.type === 'token' ? e.text : 'a sign'} came first`)
     pendingGuess = null
     if (e.kind === 'word') {
-      if (heldSwipe) log(`[gesture] ${heldSwipe.input.gesture} dropped: the movement was a sign`)
+      if (heldGesture) log(`[gesture] ${heldGesture.input.gesture} dropped: the movement was a sign`)
       forgetMovement()
       listenForget()
     }
@@ -298,6 +341,66 @@ export function connectRecognition(
     // stall fingerspelling, and the spelling suggestions fix the word at the end.
     if (e.kind === 'letter') return controller.token(tokenFor(e.options[0], 'letter'))
     controller.ambiguousSign(e.options.map((label) => tokenFor(label, 'word').text))
+  }
+
+  /** The movement and the frames around it, from the history (just its own frames if they have left it). */
+  const windowFor = (m: Movement): MovementWindow => {
+    const start = history.indexOf(m.frames[0])
+    const end = history.indexOf(m.frames[m.frames.length - 1])
+    return start >= 0 && end >= start ? { frames: history.slice(), start, end } : { frames: m.frames, start: 0, end: m.frames.length - 1 }
+  }
+
+  /** A movement's taught-sign outcome waits while the model looks at it (see resolveJudging). */
+  const judge = (model: SignModel, movement: Movement, local: RecognitionEvent, dtw: Classification | null): void => {
+    // A movement still waiting (one can only follow another within MODEL_WAIT_MS) gets its own outcome now.
+    if (judging) resolveJudging(judging.verdict === null)
+    const j: Judging = { movement, local, dtw, since: lastT, verdict: null }
+    judging = j
+    model.classify(windowFor(movement)).then(
+      (verdict) => {
+        if (judging === j) j.verdict = verdict
+      },
+      (err: unknown) => {
+        log(`[model] failed: ${err instanceof Error ? err.message : String(err)}`)
+        if (judging === j) j.verdict = 'failed'
+      }
+    )
+  }
+
+  /** The taught signs' outcome for the movement, in the model's terms. */
+  const taughtDecision = (local: RecognitionEvent, dtw: Classification | null): TaughtDecision => {
+    if (local.type === 'token' && dtw?.label) {
+      const radius = rec.recognizer.wordRadius(dtw.label) * SENSITIVITY[getApp().sensitivity].acceptScale
+      return { status: 'accepted', label: dtw.label, distance: dtw.distance, radius }
+    }
+    if (local.type === 'ambiguous') return { status: 'ambiguous', options: local.options }
+    return { status: 'rejected' }
+  }
+
+  /**
+   * The model answered (or ran out of time): the movement's outcome is decided and routed. Model
+   * first, then the taught signs; a swipe the movement made, or a control hold the hand is in,
+   * keeps the movement unless the model is very sure. Returns whether a word came of it.
+   */
+  const resolveJudging = (timedOut = false): boolean => {
+    const j = judging
+    if (!j) return false
+    judging = null
+    const verdict = j.verdict === 'failed' || j.verdict === null ? null : j.verdict
+    if (verdict) logVerdict(verdict)
+    else log(`[model] ${timedOut ? 'no answer in time' : 'failed'}: the taught signs decide`)
+    let model = verdict?.decision ?? { status: 'rejected' as const }
+    const gesture = heldGesture ? heldGesture.input.gesture : options.holdingGesture?.() ? 'a held gesture' : null
+    if (gesture && model.status !== 'rejected') {
+      const kept = yieldToGesture(model)
+      if (kept.status === 'rejected') log(`[model] left to ${gesture}: ${describeDecision(model)} is not sure enough`)
+      model = kept
+    }
+    const final = withTaught(model, taughtDecision(j.local, j.dtw))
+    const event = eventFor(final)
+    if (event.type !== 'rejected') rec.wordShown()
+    route(event, event.type === 'rejected' ? j.movement : null)
+    return event.type !== 'rejected'
   }
 
   /** The recorder starts over (the camera went away or changed): a movement it was hearing ends Listening. */
@@ -330,8 +433,28 @@ export function connectRecognition(
         }
         const verdict = signLike(segment)
         log(`[teach] shown movement ${Math.round(segment.durationMs)} ms: ${verdict}`)
-        if (verdict === 'yes') controller.showSign(unknownMovement(segment, aspect))
-        else controller.showSignEnded(verdict === 'long' ? TEACH_REASONS.tooLong : undefined)
+        if (verdict !== 'yes') {
+          controller.showSignEnded(verdict === 'long' ? TEACH_REASONS.tooLong : undefined)
+          continue
+        }
+        const movement = unknownMovement(segment, aspect)
+        const model = signModel()
+        if (!model) {
+          controller.showSign(movement)
+          continue
+        }
+        // The pretrained model names it at once when it can; otherwise the LLM is asked.
+        model.classify(windowFor(segment)).then(
+          (v) => {
+            logVerdict(v)
+            const d = v.decision
+            const named = d.status === 'accepted' ? [d.word] : d.status === 'ambiguous' ? d.options : []
+            if (showing === sh) controller.showSign(movement, named.map((w) => w.toUpperCase()))
+          },
+          () => {
+            if (showing === sh) controller.showSign(movement)
+          }
+        )
       }
     }
   }
@@ -367,6 +490,10 @@ export function connectRecognition(
   return {
     update(frame) {
       lastT = frame.t
+      if (!live.mock) {
+        history.push(frame)
+        while (history.length && history[0].t < frame.t - HISTORY_MS) history.shift()
+      }
       // The feed shows the mock hand: not a real hand. The pipeline sends one such frame when
       // the camera goes away, which ends a movement in progress.
       if (live.mock) {
@@ -400,29 +527,50 @@ export function connectRecognition(
         dropMovement()
       }
       fed = true
+      // The model's answer about an earlier movement comes first, in frame order.
+      let shown = false
+      if (judging && (judging.verdict !== null || frame.t - judging.since > MODEL_WAIT_MS)) shown = resolveJudging(judging.verdict === null)
       const events = rec.update(frame)
+      const dtw = rec.lastWord
       if (rec.lastWord && window.fastasl?.isDev) {
         const { status, distance, alternatives } = rec.lastWord
         const best = alternatives[0]
         log(`[sign-dbg] ${status}: nearest ${best ?? '(none taught)'} at ${distance.toFixed(2)}${best ? ` (accepts <= ${rec.recognizer.wordRadius(best).toFixed(2)})` : ''}`)
         rec.lastWord = null
       }
-      events.forEach(route)
+      const model = signModel()
+      for (const e of events) {
+        // A movement's outcome (rec.lastMovement is set only then) waits for the model, if loaded.
+        if (model && rec.lastMovement && e.type !== 'signStart' && (e.type === 'rejected' || e.kind === 'word')) {
+          judge(model, rec.lastMovement, e, dtw)
+          continue
+        }
+        route(e, e.type === 'rejected' ? rec.rejectedMovement : null)
+        if ((e.type === 'token' || e.type === 'ambiguous') && (e.kind === 'word' || lettersOnly)) shown = true
+      }
       listenTick(frame.t)
       if (pendingGuess && frame.t >= pendingGuess.at) {
         const { movement } = pendingGuess
         pendingGuess = null
         if (controller.guessesSigns()) controller.unknownSign(movement)
       }
-      return events.some((e) => (e.type === 'token' || e.type === 'ambiguous') && (e.kind === 'word' || lettersOnly))
+      return shown
     },
     gesture(input) {
       // A swipe made while recognition judges a movement waits for the verdict: a recognized
       // word wins (MUSIC sweeps a flat hand sideways); otherwise the swipe acts once the
-      // movement ends. Without word templates there is nothing to wait for.
-      if (moving && hasWords && SWIPES.has(input.gesture)) {
+      // movement ends. Without word templates or the sign model there is nothing to wait for.
+      if (moving && (hasWords || signModel() !== null) && SWIPES.has(input.gesture)) {
         log(`[gesture] ${input.gesture} waits for the sign`)
-        heldSwipe = { input, t: lastT }
+        heldGesture = { input, t: lastT }
+        return
+      }
+      // The movement has ended but the sign model is still looking at it (up to ~0.4 s with ASL
+      // Citizen): a gesture held with its last shape (TOMORROW's thumbs-up) waits for the verdict
+      // too, so a sure word still wins and anything else lets the gesture act.
+      if (judging && input.gesture !== 'handsDown') {
+        log(`[gesture] ${input.gesture} waits for the sign model`)
+        heldGesture = { input, t: lastT }
         return
       }
       applyGesture(input)
@@ -434,6 +582,43 @@ export function connectRecognition(
 /** Dev diagnostics (FASTASL_LOG=1 prints them to stdout), with the view the event arrived in. */
 function log(line: string): void {
   if (window.fastasl?.isDev) console.log(`${line} in ${getApp().view.kind}`)
+}
+
+/** The decided outcome as a recognition event (model words are display words, taught ones glosses). */
+function eventFor(d: FinalDecision): RecognitionEvent {
+  if (d.status === 'accepted') return { type: 'token', text: d.word, kind: 'word' }
+  if (d.status === 'ambiguous') return { type: 'ambiguous', options: d.options, kind: 'word' }
+  return { type: 'rejected' }
+}
+
+function describeDecision(d: { status: string; word?: string; p?: number; options?: string[] }): string {
+  if (d.status === 'accepted') return `${d.word} ${d.p?.toFixed(2)}`
+  if (d.status === 'ambiguous') return `${d.options?.join(' or ')}?`
+  return 'nothing'
+}
+
+/**
+ * Dev: `[model] hello 0.93 · bye 0.04 · yes 0.01 (24 ms, face, 41 frames) -> hello 0.93`, each
+ * model's top 3 among the enabled words and what it decided on its own; ASL Citizen's line
+ * (`[model:citizen]`) only when it ran.
+ */
+function logVerdict(v: ModelVerdict): void {
+  if (!window.fastasl?.isDev) return
+  if (v.islr) {
+    const flags = [`${Math.round(v.islr.ms)} ms`, v.face ? 'face' : 'no face', v.islr.swapped ? 'hands swapped' : null, `${v.frames} frames`, rankOf(v.islr)]
+    log(`[model] ${describeTop(v.islr.ranked)} (${flags.filter(Boolean).join(', ')}) -> ${describeDecision(decide(v.islr.ranked, ISLR_MAX_RANK))}`)
+  }
+  if (v.citizen) {
+    const flags = [`${Math.round(v.citizen.ms)} ms`, v.citizen.swapped ? 'hands swapped' : null, rankOf(v.citizen)]
+    const own = v.decision.source === 'citizen' ? describeDecision(v.decision) : 'nothing'
+    log(`[model:citizen] ${describeTop(v.citizen.ranked)} (${flags.filter(Boolean).join(', ')}) -> ${own}`)
+  }
+}
+
+/** The top word's rank among all the model's signs, when it isn't first (the open-set check, decide.ts). */
+function rankOf(run: { ranked: readonly { rank: number }[] }): string | null {
+  const rank = run.ranked[0]?.rank ?? 0
+  return rank > 0 ? `#${rank + 1} of all signs` : null
 }
 
 function describe(e: RecognitionEvent): string {

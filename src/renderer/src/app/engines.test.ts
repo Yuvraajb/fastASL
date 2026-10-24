@@ -27,6 +27,8 @@ import { getApp, setApp, useApp } from './store'
 import type { View } from './types'
 
 const camera = vi.hoisted(() => ({
+  setExtras: vi.fn(),
+  takeTimings: vi.fn(async () => null),
   start: vi.fn(async () => {}),
   stop: vi.fn(),
   setSource: vi.fn(async () => {}),
@@ -41,6 +43,14 @@ vi.mock('../engine/camera/pipeline', () => ({
   }
 }))
 
+/** The pretrained sign model's loader: never loads unless a test says so (most tests run without the model). */
+const signModel = vi.hoisted(() => ({ load: vi.fn() }))
+
+vi.mock('../engine/model/runtime', () => ({
+  loadSignModel: (...args: unknown[]) => signModel.load(...args),
+  MissingModelError: class MissingModelError extends Error {}
+}))
+
 const ESP32_URL = 'http://192.168.4.1:81/stream'
 const ESP32: CameraSource = { kind: 'mjpeg', url: ESP32_URL }
 
@@ -49,6 +59,7 @@ let stop: (() => void) | null = null
 
 beforeEach(() => {
   vi.clearAllMocks()
+  signModel.load.mockImplementation(() => new Promise(() => {}))
   vi.stubGlobal('window', {
     fastasl: {
       isDev: false,

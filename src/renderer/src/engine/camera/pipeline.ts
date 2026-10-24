@@ -2,7 +2,7 @@ import type { CameraSource } from '@shared/types'
 import { live as sharedLive, type LiveFrame } from '../../app/live'
 import type { FrameSample } from '../types'
 import { openCamera, type CameraHandle } from './cameraSource'
-import { createHandTracker, MissingAssetsError, type HandTracker } from './handTracker'
+import { createHandTracker, MissingAssetsError, NO_EXTRAS, type Extras, type HandTracker } from './handTracker'
 import { INITIAL_MOTION, stepMotion, type MotionState } from './motion'
 
 export interface PipelineDeps {
@@ -73,6 +73,7 @@ export class CameraPipeline {
   private motion: MotionState = INITIAL_MOTION
   private lastDetect: number | null = null
   private intervalEma = 0
+  private extras: Extras = NO_EXTRAS
 
   constructor(deps: Partial<PipelineDeps> = {}) {
     this.deps = { ...DEFAULT_DEPS, ...deps }
@@ -103,6 +104,17 @@ export class CameraPipeline {
       return Promise.resolve()
     }
     return this.running ? this.restart() : Promise.resolve()
+  }
+
+  /** Track the face and / or the body pose too (the pretrained sign model asks once it has loaded). */
+  setExtras(extras: Extras): void {
+    this.extras = extras
+  }
+
+  /** The tracker's mean ms per model since the last call (dev diagnostics), or null. */
+  async takeTimings(): Promise<ReturnType<HandTracker['takeTimings']>> {
+    const tracker = await this.tracker?.catch(() => null)
+    return tracker?.takeTimings() ?? null
   }
 
   subscribe(fn: (frame: FrameSample) => void): () => void {
@@ -176,7 +188,7 @@ export class CameraPipeline {
     if (due && handle.width > 0 && handle.height > 0) {
       let frame: FrameSample
       try {
-        frame = tracker.detect(handle.element, now)
+        frame = tracker.detect(handle.element, now, this.extras)
       } catch (err) {
         // A broken tracker (e.g. lost WebGL context) is rebuilt on retry.
         tracker.close()
