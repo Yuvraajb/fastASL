@@ -1,0 +1,73 @@
+/* Letters: each letter sits over its own underline slot (reference image 3, panel 3). */
+.strip--letters {
+  display: flex;
+  gap: 10px;
+}
+
+.strip__slot {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.strip__letter {
+  height: 16px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--text-1);
+}
+
+.strip__line {
+  width: 100%;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.14);
+  transition: background-color var(--dur) var(--ease-out);
+}
+
+.strip__slot--done .strip__line {
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.strip__slot--current .strip__letter {
+  color: var(--text);
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+.strip__slot--current .strip__line {
+  background: var(--text);
+}
+
+/* Words: a single row of chips; the newest stays visible (reference image 2, panel 3). */
+.strip--words {
+  display: flex;
+  gap: 5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.strip--words[data-overflow='true'] {
+  mask-image: linear-gradient(90deg, transparent 0, #000 24px);
+}
+
+.strip__chip {
+  flex: none;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  line-height: 26px;
+  color: var(--text-1);
+}
+
+.strip__chip--current {
+  background: var(--surface-2);
+  color: var(--text);
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}

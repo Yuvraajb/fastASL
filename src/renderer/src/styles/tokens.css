@@ -1,0 +1,75 @@
+/* fastASL design tokens. Monochrome: the only colors are --green (status / success)
+   and --red (dictation recording dot). See src/renderer/src/ui/README.md. */
+:root {
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', sans-serif;
+
+  /* Text: white -> light gray -> gray -> dim. */
+  --text: #ffffff;
+  --text-1: rgba(255, 255, 255, 0.82);
+  --text-2: rgba(255, 255, 255, 0.6);
+  --text-3: rgba(255, 255, 255, 0.38);
+  --text-inverse: #0b0b0c;
+
+  /* Type scale (px). */
+  --fs-badge: 10px; /* finger-count badges, tag chips */
+  --fs-micro: 11px; /* hints, mode label */
+  --fs-small: 12px; /* status label, meta text, sub lines */
+  --fs-body: 13px; /* title, buttons, rows, steps */
+  --fs-title: 15px; /* section headings, toast / detail titles */
+  --fs-quote: 16px; /* quoted running sentence (QuoteBox) */
+  --fs-result: 17px; /* done title */
+  --fs-sentence: 21px;
+  --fs-token: 22px;
+
+  /* Card. Dark glass; the sheen is a faint top highlight like the references. */
+  --card-bg: rgba(17, 19, 22, 0.9);
+  --card-bg-stage: rgba(12, 14, 17, 0.86);
+  --card-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0) 38%);
+  --card-border: rgba(255, 255, 255, 0.1);
+  --card-radius: 22px;
+  --card-pad: 14px;
+  --card-shadow: 0 18px 40px rgba(0, 0, 0, 0.38), 0 2px 8px rgba(0, 0, 0, 0.28);
+
+  /* Vertical rhythm inside the card. */
+  --gap: 10px;
+  --gap-tight: 6px;
+
+  /* Surfaces layered on the card (white overlays). */
+  --surface: rgba(255, 255, 255, 0.055);
+  --surface-2: rgba(255, 255, 255, 0.1);
+  --surface-3: rgba(255, 255, 255, 0.16);
+  --hairline: rgba(255, 255, 255, 0.08);
+
+  --btn-primary-bg: #ffffff;
+  --btn-primary-hover: #e8e8ea;
+  --btn-primary-fg: #0b0b0c;
+  --btn-secondary-bg: rgba(255, 255, 255, 0.1);
+  --btn-secondary-hover: rgba(255, 255, 255, 0.15);
+  --btn-secondary-fg: #ffffff;
+  --btn-height: 38px;
+
+  --panel-radius: 12px;
+  /* Finger-count badge in option rows, and the 24px box its hold ring draws in. */
+  --badge: 18px;
+  --badge-box: 24px;
+
+  --feed-radius: 14px;
+  --feed-bg: #2b2c2e;
+  --icon-btn: 32px;
+  --icon: 18px;
+  --dot: 6px;
+  --dot-idle: rgba(255, 255, 255, 0.36);
+
+  --green: #5ec27c;
+  --red: #ff453a;
+
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --ease-spring: cubic-bezier(0.2, 0.9, 0.25, 1.05);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Native vibrancy (FASTASL_VIBRANCY=hud): the system blur sits behind the card. */
+:root[data-vibrancy='1'] {
+  --card-bg: rgba(17, 19, 22, 0.42);
+}

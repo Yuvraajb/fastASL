@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>fastASL</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' fastasl-asset: data: blob:; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' fastasl-asset: blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:* fastasl-asset:; media-src 'self' blob: mediastream:; connect-src 'self' fastasl-asset: http://127.0.0.1:* ws://localhost:* http://localhost:* data: blob:; worker-src 'self' blob: fastasl-asset:"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

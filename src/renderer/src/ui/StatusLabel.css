@@ -1,0 +1,29 @@
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.status__dot {
+  flex: none;
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+  background: var(--dot-idle);
+  transition: background-color var(--dur) var(--ease-out);
+}
+
+.status--active .status__dot {
+  background: var(--green);
+}
+
+.status__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

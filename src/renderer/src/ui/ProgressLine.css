@@ -1,0 +1,35 @@
+.progress-line {
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.progress-line__fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text);
+  transform-origin: left center;
+  animation: fa-run-out var(--progress-duration, 2600ms) linear both;
+}
+
+@keyframes fa-run-out {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* Reduced motion: show a static, half-full line instead of a moving one. */
+@media (prefers-reduced-motion: reduce) {
+  .progress-line__fill {
+    animation: none;
+    transform: scaleX(0.5);
+  }
+}

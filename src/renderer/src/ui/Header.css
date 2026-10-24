@@ -1,0 +1,50 @@
+.hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 20px;
+  padding: 0 2px;
+}
+
+.hdr__left,
+.hdr__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hdr__title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.hdr__mode {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  line-height: 14px;
+  color: var(--text-3);
+  white-space: nowrap;
+  transition:
+    color 600ms var(--ease-out),
+    background-color 600ms var(--ease-out);
+}
+
+.hdr__mode--flash {
+  background: var(--surface-2);
+  color: var(--text);
+  transition-duration: var(--dur-fast);
+}
+
+/* Plain 20px X (circle only on hover). Its glyph sits ~5px inside the box, so the
+   negative margin puts the visible X at the same inset as the title on the left. */
+.hdr__close {
+  margin-right: -5px;
+}

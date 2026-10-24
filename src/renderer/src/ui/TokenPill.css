@@ -1,0 +1,40 @@
+.token {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 44px;
+  overflow: hidden;
+  font-size: var(--fs-token);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* Own line box tall enough for descenders (g, p, y): overflow: hidden would
+   otherwise clip them at the pill's line-height: 1. */
+.token__text {
+  line-height: 1.3;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+.token--pill {
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.token--bare {
+  height: 32px;
+}
+
+.token--fit {
+  align-self: center;
+  min-width: 112px;
+  max-width: 100%;
+  padding: 0 22px;
+}

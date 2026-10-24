@@ -1,0 +1,25 @@
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-1);
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+.notice svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+.notice__text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

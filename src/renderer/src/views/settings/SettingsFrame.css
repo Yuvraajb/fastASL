@@ -1,0 +1,40 @@
+.set-page {
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+/* SectionTitle brings its own 2px side inset; the subtitle and aside match it.
+   The aside lines up with the title line. */
+.set-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.set-title__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.set-title__sub {
+  margin: 0;
+  padding: 0 2px;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.set-title__aside {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 20px;
+  padding-right: 2px;
+}

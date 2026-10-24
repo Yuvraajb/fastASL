@@ -1,0 +1,180 @@
+.opts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.opts__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 10px;
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+/* The badge box is 3px wider than the badge on each side; trim the row padding
+   so the visible badge keeps the same inset as an icon. */
+.opts--badge-leading .opts__row {
+  padding-left: 5px;
+}
+
+.opts--badge-trailing .opts__row {
+  padding-right: 5px;
+}
+
+.opts__row--two {
+  min-height: 44px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.opts__row:hover {
+  background: var(--surface);
+}
+
+.opts__row--holding,
+.opts__row--holding:hover {
+  background: var(--surface-2);
+}
+
+.opts__row:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: -2px;
+}
+
+/* Same box with or without the hold ring, so rows never shift. */
+.opts__badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--badge-box);
+  height: var(--badge-box);
+}
+
+.opts__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--badge);
+  height: var(--badge);
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-size: var(--fs-badge);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text-1);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.opts__row--holding .opts__num {
+  background: var(--text);
+  color: var(--text-inverse);
+}
+
+.opts__icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text);
+}
+
+/* Context actions (ref1-11): icon in a dark circle, semibold label. */
+.opts--circle .opts__row {
+  min-height: 40px;
+  padding-left: 4px;
+}
+
+.opts--circle .opts__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.opts__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.opts__label,
+.opts__sub {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.opts__label {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 17px;
+  color: var(--text);
+}
+
+.opts--circle .opts__label {
+  font-weight: 600;
+}
+
+.opts__sub {
+  font-size: var(--fs-small);
+  font-weight: 500;
+  line-height: 15px;
+  color: var(--text-2);
+}
+
+.opts__sub--mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: var(--fs-micro);
+  font-weight: 400;
+}
+
+.opts__row--muted .opts__label,
+.opts__row--muted .opts__icon {
+  color: var(--text-2);
+}
+
+.opts--circle .opts__row--muted .opts__label {
+  font-weight: 500;
+}
+
+.opts__detail {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  color: var(--text-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.opts__tag {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  font-size: var(--fs-badge);
+  font-weight: 500;
+  line-height: 14px;
+  color: var(--text-3);
+}
+
+.opts__check {
+  flex: none;
+  color: var(--text-2);
+}

@@ -1,0 +1,28 @@
+.set-url {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  outline: none;
+  background: var(--surface);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: var(--fs-small);
+  color: var(--text);
+  caret-color: var(--text);
+  user-select: text;
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.set-url::selection {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.set-url::placeholder {
+  color: var(--text-3);
+}
+
+.set-url:focus {
+  border-color: rgba(255, 255, 255, 0.32);
+}

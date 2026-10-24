@@ -1,0 +1,4 @@
+/* Bars + hint close the menu; a touch of extra air above them. */
+.qmenu__footer {
+  padding-top: 2px;
+}

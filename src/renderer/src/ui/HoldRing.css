@@ -1,0 +1,21 @@
+.hold {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.hold__content {
+  display: inline-flex;
+}
+
+.hold__ring {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.hold__ring circle {
+  transition: stroke-dashoffset 90ms linear;
+}

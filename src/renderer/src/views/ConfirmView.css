@@ -1,0 +1,19 @@
+/* Details on the left, the feed thumbnail stretches to the same height. */
+.confirm__row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.detail.confirm__details {
+  flex: 1 1 auto;
+  min-height: 124px;
+}
+
+.feed.confirm__feed {
+  min-height: 112px;
+}
+
+.detail__line--clamp.confirm__message {
+  -webkit-line-clamp: 3;
+}

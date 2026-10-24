@@ -1,0 +1,74 @@
+/* 40px pill: 6px padding around a 28px thumbnail and a 28px chevron circle. */
+.collapsed {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 6px;
+  border-radius: 999px;
+}
+
+.collapsed__thumb {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+/* The hold ring sits just outside the thumbnail. */
+.collapsed__ring {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+}
+
+.collapsed__dot {
+  flex: none;
+  width: var(--dot);
+  height: var(--dot);
+  margin-left: 12px;
+  border-radius: 50%;
+  background: var(--dot-idle);
+}
+
+.collapsed__dot--on {
+  background: var(--green);
+}
+
+.collapsed__name {
+  margin: 0 12px 0 7px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.collapsed__name--notice {
+  max-width: 220px;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-1);
+  text-overflow: ellipsis;
+}
+
+.collapsed__chevron {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.collapsed:hover .collapsed__chevron {
+  background: var(--surface-3);
+}
+
+.collapsed:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: -2px;
+}

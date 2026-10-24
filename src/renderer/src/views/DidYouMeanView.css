@@ -1,0 +1,28 @@
+.dym__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Same 2px inset as the SectionTitle above it. */
+.dym__quote {
+  margin: 0;
+  padding: 0 2px;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Thumbnail sits flush with the panel's right edge, like ref2-06. */
+.quote.dym__panel {
+  padding: 8px 8px 8px 12px;
+}
+
+.dym__bars {
+  display: flex;
+  justify-content: center;
+  padding-bottom: 2px;
+}

@@ -1,0 +1,26 @@
+.footer {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  align-items: center;
+  height: var(--icon-btn);
+}
+
+.footer__side {
+  display: flex;
+}
+
+.footer__side--end {
+  justify-content: flex-end;
+}
+
+.footer__center {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.footer__brand {
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-2);
+}

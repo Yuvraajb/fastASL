@@ -1,0 +1,10 @@
+.ready__hint {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-2);
+  text-align: center;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

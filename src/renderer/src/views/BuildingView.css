@@ -1,0 +1,11 @@
+.building__letters {
+  margin-top: 2px;
+}
+
+/* Bars centered, proceed button on the right. */
+.building__actions {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  align-items: center;
+  justify-items: center;
+}

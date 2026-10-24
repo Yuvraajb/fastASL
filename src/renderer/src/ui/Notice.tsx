@@ -1,0 +1,22 @@
+import { Info } from 'lucide-react'
+import { useApp } from '../app/store'
+import './Notice.css'
+
+export interface NoticeProps {
+  /** Defaults to store.notice. Renders nothing when empty. */
+  text?: string | null
+  className?: string
+}
+
+/** One-line notice with an info icon, e.g. "Add ANTHROPIC_API_KEY to .env". */
+export function Notice({ text, className }: NoticeProps): React.JSX.Element | null {
+  const notice = useApp((s) => s.notice)
+  const message = text === undefined ? notice : text
+  if (!message) return null
+  return (
+    <div className={`notice${className ? ` ${className}` : ''}`} role="status" title={message}>
+      <Info size={14} strokeWidth={2} aria-hidden />
+      <span className="notice__text">{message}</span>
+    </div>
+  )
+}

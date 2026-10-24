@@ -1,0 +1,5 @@
+/* Roomier rows than the default list, like the reference. */
+.steps.working__steps {
+  gap: 6px;
+  margin: 2px 0;
+}

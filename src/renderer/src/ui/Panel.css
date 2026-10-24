@@ -1,0 +1,8 @@
+/* Also used as a class by QuoteBox (panel variant). */
+.panel {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--panel-radius);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}

@@ -1,0 +1,84 @@
+.dictation__status {
+  display: grid;
+  grid-template-columns: 18px 1fr 18px;
+  align-items: center;
+  justify-items: center;
+  height: 22px;
+  padding: 0 2px;
+}
+
+.dictation__clear {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-1);
+  color: var(--text-inverse);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.dictation__clear:hover {
+  background: var(--text);
+}
+
+.dictation__clear:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 1px;
+}
+
+.dictation__text {
+  --line: 21px;
+}
+
+/* Exactly two lines tall; content sits at the bottom so the newest words stay in view. */
+.dictation__window {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: calc(2 * var(--line));
+  overflow: hidden;
+}
+
+.dictation__lines {
+  margin: 0;
+  font-size: var(--fs-title);
+  font-weight: 500;
+  line-height: var(--line);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.dictation__tail {
+  white-space: nowrap;
+}
+
+.dictation__placeholder {
+  color: var(--text-3);
+}
+
+.dictation__caret {
+  display: inline-block;
+  width: 2px;
+  height: 17px;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--text);
+  vertical-align: -3px;
+  /* Solid while signs arrive, blinking once idle (remounted per change). */
+  animation: dictation-blink 1.06s steps(1, end) 1s infinite;
+}
+
+/* No fill mode: with reduced motion the caret ends up simply visible. */
+@keyframes dictation-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}

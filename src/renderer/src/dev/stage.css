@@ -1,0 +1,38 @@
+.stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #1b2130;
+}
+
+/* Dusk mountains, close to the reference wallpaper. */
+.stage__wallpaper {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 70% at 20% 110%, #1a2232 0%, rgba(26, 34, 50, 0) 60%),
+    linear-gradient(160deg, rgba(0, 0, 0, 0) 45%, rgba(10, 14, 22, 0.55) 46%, rgba(10, 14, 22, 0.55) 100%),
+    linear-gradient(200deg, rgba(0, 0, 0, 0) 55%, rgba(30, 38, 56, 0.85) 56%),
+    linear-gradient(180deg, #5b6b8c 0%, #46536f 35%, #2b3448 70%, #1a2030 100%);
+}
+
+.stage__menubar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(20, 24, 34, 0.35);
+  backdrop-filter: blur(20px);
+}
+
+.stage__apple {
+  font-size: 14px;
+}

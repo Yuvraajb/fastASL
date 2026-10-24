@@ -1,0 +1,10 @@
+.spinner {
+  flex: none;
+  animation: fa-spin 0.9s linear infinite;
+}
+
+@keyframes fa-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

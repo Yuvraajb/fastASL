@@ -1,0 +1,48 @@
+.agent__intent {
+  display: -webkit-box;
+  margin: 2px 0;
+  padding: 0 2px;
+  overflow: hidden;
+  font-size: var(--fs-sentence);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* Email variant: recipient box (reference image 2, panel 4). */
+.detail.agent__target {
+  align-items: center;
+}
+
+.agent__lead,
+.agent__recipient {
+  overflow: hidden;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.agent__lead {
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+/* App tile on the right of the recipient box (monochrome stand-in for the app icon). */
+.agent__app {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text);
+}

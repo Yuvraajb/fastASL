@@ -1,0 +1,10 @@
+node_modules/
+out/
+dist/
+.env
+.DS_Store
+*.log
+docs/screens/_tmp/
+out-screens/
+*.tsbuildinfo
+.claude/

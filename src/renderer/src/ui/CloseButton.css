@@ -1,0 +1,26 @@
+.close-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-2);
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.close-btn--circle {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.close-btn:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.close-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 1px;
+}

@@ -1,0 +1,35 @@
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 2px;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--text);
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+.steps__row--pending,
+.steps__row--error {
+  color: var(--text-2);
+}
+
+.steps__icon {
+  flex: none;
+}
+
+.steps__label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

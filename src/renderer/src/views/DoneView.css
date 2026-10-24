@@ -1,0 +1,58 @@
+.done__row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.done__result {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.done__result > :first-child {
+  margin-bottom: 10px;
+}
+
+.done__title {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.done__subtitle {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--text-1);
+  text-wrap: pretty;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.hint.done__hint {
+  margin-top: -2px;
+}
+
+/* Countdown under the result text, like the toast's line. */
+.progress-line.done__timer {
+  margin-top: 6px;
+}
+
+/* Button whose finger count is being held. */
+.btn.done__btn--held {
+  background: var(--surface-3);
+}

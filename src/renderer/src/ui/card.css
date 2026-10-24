@@ -1,0 +1,34 @@
+.card {
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-radius: var(--card-radius);
+  background: var(--card-sheen), var(--card-bg);
+  border: 1px solid var(--card-border);
+  /* Faint inner rim: the glass edge visible in the references. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.card--stage {
+  top: 36px;
+  right: 12px;
+  background: var(--card-sheen), var(--card-bg-stage);
+  backdrop-filter: blur(28px) saturate(120%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--card-shadow);
+}
+
+.card__content {
+  padding: var(--card-pad);
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+.card--collapsed,
+.card--collapsed .card__content {
+  border-radius: 999px;
+}
+
+.card--collapsed .card__content {
+  padding: 0;
+}

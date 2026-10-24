@@ -1,0 +1,11 @@
+.ctx__quote {
+  margin: 0;
+  padding: 2px 4px 0;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

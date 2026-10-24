@@ -1,0 +1,160 @@
+/* Page dots (teach pick): one per page of 4, current one white. */
+.teach-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.teach-dots__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  transition:
+    width var(--dur) var(--ease-spring),
+    background-color var(--dur) var(--ease-out);
+}
+
+.teach-dots__dot--on {
+  width: 12px;
+  border-radius: 2px;
+  background: var(--text);
+}
+
+/* Spell a new word (inside a ui Panel): the letters so far with a blinking caret. */
+.teach-spell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 52px;
+  overflow: hidden;
+}
+
+.teach-spell__letters {
+  overflow: hidden;
+  font-size: var(--fs-token);
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  white-space: nowrap;
+  text-overflow: clip;
+  direction: rtl; /* keep the newest letters in view when the word overflows */
+}
+
+.teach-spell__caret {
+  flex: none;
+  width: 2px;
+  height: 24px;
+  border-radius: 1px;
+  background: var(--text);
+  animation: teach-blink 1.06s steps(1) infinite;
+}
+
+@keyframes teach-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Record samples: prompt, counter, one segment per sample. */
+.teach-rec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.teach-rec__prompt {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.teach-rec__sign {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-token);
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.teach-rec__verb {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.teach-rec__count {
+  flex: none;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.teach-rec__segs {
+  display: flex;
+  gap: 4px;
+}
+
+.teach-rec__seg {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  transition: background-color var(--dur) var(--ease-out);
+}
+
+.teach-rec__seg--done {
+  background: var(--text);
+}
+
+.teach-rec__seg--next {
+  background: rgba(255, 255, 255, 0.3);
+  animation: teach-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes teach-pulse {
+  0%,
+  100% {
+    background: rgba(255, 255, 255, 0.3);
+  }
+  50% {
+    background: rgba(255, 255, 255, 0.6);
+  }
+}
+
+.teach-rec__hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.teach-rec__pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-1);
+  animation: teach-breathe 1.2s ease-in-out infinite;
+}
+
+@keyframes teach-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}

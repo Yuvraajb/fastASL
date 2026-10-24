@@ -1,0 +1,923 @@
+import type { AgentEvent, AgentStep, EnvKey, IntentResult, Mode, Result } from '@shared/types'
+import { getApp, setApp } from './store'
+import type { Services } from './services'
+import type { SettingsPage, Token, View } from './types'
+import { live } from './live'
+
+/** Hands-only control gestures produced by the gesture engine (Phase 3) or dev hotkeys. */
+export type GestureName =
+  | 'palmHold'
+  | 'swipeLeft'
+  | 'swipeRight'
+  | 'swipeUp'
+  | 'thumbsUp'
+  | 'fist'
+  | 'fingers'
+  | 'handsDown'
+  | 'shape'
+
+export interface GestureInput {
+  gesture: GestureName
+  /** For 'fingers': 1..5. */
+  count?: number
+  /** For 'shape': the custom gesture id. */
+  shapeId?: string
+}
+
+/** Mouse / trackpad taps on card controls map onto the same actions as gestures. */
+export type TapTarget =
+  | 'primary'
+  | 'secondary'
+  | 'close'
+  | 'collapse'
+  | 'expand'
+  | 'camera'
+  | 'proceed'
+  | 'option'
+  | 'settings'
+
+export const QUICK_MENU = ['Create event', 'Send message', 'Search web', 'Take notes', 'Open app']
+export const SETTINGS_ROOT = ['Teach a sign', 'New gesture', 'My gestures', 'Camera source', 'Sensitivity']
+const MODES: Mode[] = ['command', 'dictation', 'spell']
+
+const DONE_AUTO_COLLAPSE_MS = 4000
+const TOAST_MS = 2600
+
+/** Outcome of one Claude interpretation. Errors are carried per request, never shared. */
+interface Interpretation {
+  result: IntentResult | null
+  error: string | null
+}
+
+/** One-line message for a soft service failure. */
+function failureText(failure: { error: string; missingKey?: EnvKey }): string {
+  return failure.missingKey ? `Add ${failure.missingKey} to .env` : failure.error
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** IPC calls can also reject (main-process crash); treat that as a soft failure too. */
+function settled<T>(call: Promise<Result<T>>): Promise<Result<T>> {
+  return call.catch((err: unknown) => ({ ok: false as const, error: errorText(err) }))
+}
+
+/** Join recognized tokens into display text. Consecutive letters form one word. */
+export function assembleSentence(tokens: Token[]): string {
+  const words: string[] = []
+  let spelled = ''
+  for (const t of tokens) {
+    if (t.kind === 'letter') {
+      spelled += t.text
+      continue
+    }
+    if (spelled) words.push(spelled)
+    spelled = ''
+    words.push(t.text)
+  }
+  if (spelled) words.push(spelled)
+  const text = words.join(' ').trim()
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
+}
+
+/** Which gestures make sense in each view. The gesture engine ignores the rest. */
+export function activeGestures(view: View): Set<GestureName> {
+  switch (view.kind) {
+    case 'collapsed':
+      return new Set(['palmHold', 'shape'])
+    case 'ready':
+      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'swipeUp', 'shape'])
+    case 'recognizing':
+    case 'building':
+      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
+    case 'sentence':
+      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight'])
+    case 'agentReady':
+      return new Set(['thumbsUp', 'fist', 'swipeLeft'])
+    case 'working':
+      return new Set(['fist'])
+    case 'confirm':
+      return new Set(['thumbsUp', 'fist'])
+    case 'didYouMean':
+      return view.variant === 'quote'
+        ? new Set(['thumbsUp', 'fist', 'swipeLeft'])
+        : new Set(['fingers', 'fist', 'thumbsUp'])
+    case 'done':
+      return new Set(['thumbsUp', 'fist', 'fingers', 'swipeUp'])
+    case 'contextActions':
+    case 'quickMenu':
+      return new Set(['fingers', 'fist'])
+    case 'dictation':
+      return new Set(['fist', 'swipeLeft', 'swipeRight', 'swipeUp'])
+    case 'toast':
+      return new Set(['fist'])
+    case 'settings':
+      return new Set(['fingers', 'fist', 'swipeLeft', 'swipeRight'])
+  }
+}
+
+/** Options listed (and numbered) in the current view, for finger-count picking. */
+export function optionsFor(view: View): string[] {
+  switch (view.kind) {
+    case 'didYouMean':
+      return view.options
+    case 'contextActions':
+      return view.actions
+    case 'quickMenu':
+      return view.options
+    case 'done':
+      return ['View', 'New command', 'Save as gesture']
+    case 'settings':
+      return settingsOptions(view.settings)
+    default:
+      return []
+  }
+}
+
+export const STARTER_WORDS = [
+  'YES', 'NO', 'HELLO', 'MEETING', 'TOMORROW', 'TIME', 'NEXT', 'WHAT',
+  'SEND', 'EMAIL', 'TEXT', 'FRIEND', 'PLAY', 'MUSIC', 'CALENDAR', 'GOOD'
+]
+export const LETTERS = 'ABCDEFGHIKLMNOPQRSTUVWXY'.split('')
+const TEACH_PAGE = 4
+
+export function settingsOptions(page: SettingsPage): string[] {
+  switch (page.page) {
+    case 'root':
+      return SETTINGS_ROOT
+    case 'teachPick': {
+      const all = [...STARTER_WORDS, ...LETTERS]
+      return [...all.slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
+    }
+    case 'newGesturePick':
+      return [...page.tasks.slice(0, 4), 'Sign a new task']
+    case 'gestures':
+      return page.gestures.slice(0, 5).map((g) => g.name)
+    case 'gestureDetail':
+      return page.gesture.builtin ? ['Test it'] : ['Test it', 'Delete']
+    case 'camera':
+      return ['MacBook camera', 'ESP32-CAM stream', 'Edit stream URL']
+    case 'sensitivity':
+      return ['Low', 'Medium', 'High']
+    default:
+      return []
+  }
+}
+
+/** The one place where card states change. */
+export class Controller {
+  private tokens: Token[] = []
+  private intentPrefix: string | undefined
+  private interpretation: Promise<Interpretation> | null = null
+  private steps: AgentStep[] = []
+  private runIntent = ''
+  /** True from runAgent until done / error / stop. Agent events outside a run are stale. */
+  private agentActive = false
+  private timers = new Set<ReturnType<typeof setTimeout>>()
+  private lastCompleted: { intent: string; title: string } | null = null
+  private unsubscribe: (() => void) | null = null
+
+  constructor(private services: Services) {
+    this.subscribe()
+  }
+
+  dispose(): void {
+    this.unsubscribe?.()
+    this.unsubscribe = null
+    this.clearTimers()
+  }
+
+  /** Swap service implementations (mock <-> real) at runtime. */
+  setServices(services: Services): void {
+    this.unsubscribe?.()
+    this.unsubscribe = null
+    this.services = services
+    this.subscribe()
+  }
+
+  private subscribe(): void {
+    if (!this.unsubscribe) this.unsubscribe = this.services.onAgentEvent((e) => this.onAgentEvent(e))
+  }
+
+  get view(): View {
+    return getApp().view
+  }
+
+  // ---------------------------------------------------------------- helpers
+
+  setView(view: View): void {
+    this.clearTimers()
+    setApp({ view, pick: null })
+  }
+
+  private later(ms: number, fn: () => void): void {
+    const t = setTimeout(() => {
+      this.timers.delete(t)
+      fn()
+    }, ms)
+    this.timers.add(t)
+  }
+
+  private clearTimers(): void {
+    this.timers.forEach((t) => clearTimeout(t))
+    this.timers.clear()
+  }
+
+  notify(notice: string | null, ms = 5000): void {
+    setApp({ notice })
+    if (notice) {
+      setTimeout(() => {
+        if (getApp().notice === notice) setApp({ notice: null })
+      }, ms)
+    }
+  }
+
+  private idleView(): View {
+    return getApp().mode === 'dictation' ? { kind: 'dictation', text: '' } : { kind: 'ready' }
+  }
+
+  private resetPhrase(): void {
+    this.tokens = []
+    this.interpretation = null
+    this.intentPrefix = undefined
+  }
+
+  // ---------------------------------------------------------------- entry points
+
+  expand(): void {
+    this.resetPhrase()
+    this.setView(this.idleView())
+  }
+
+  collapse(): void {
+    this.resetPhrase()
+    this.setView({ kind: 'collapsed' })
+  }
+
+  toggleCamera(): void {
+    const cameraOn = !getApp().cameraOn
+    setApp({ cameraOn })
+    void window.fastasl?.saveSettings({ cameraEnabled: cameraOn })
+  }
+
+  cycleMode(dir: 1 | -1): void {
+    const { mode } = getApp()
+    const next = MODES[(MODES.indexOf(mode) + dir + MODES.length) % MODES.length]
+    setApp({ mode: next, modeFlashAt: performance.now() })
+    void window.fastasl?.saveSettings({ mode: next })
+    this.resetPhrase()
+    this.setView(next === 'dictation' ? { kind: 'dictation', text: '' } : { kind: 'ready' })
+  }
+
+  openSettings(): void {
+    this.setView({ kind: 'settings', settings: { page: 'root' } })
+  }
+
+  /** Gesture from the engine or a dev hotkey. Gated by the current view. */
+  gesture(input: GestureInput): void {
+    const view = this.view
+    if (!activeGestures(view).has(input.gesture)) return
+    const g = input.gesture
+    switch (view.kind) {
+      case 'collapsed':
+        if (g === 'palmHold') this.expand()
+        else if (g === 'shape' && input.shapeId) void this.runShortcut(input.shapeId, 'collapsed')
+        return
+      case 'ready':
+        if (g === 'thumbsUp') this.setView({ kind: 'quickMenu', options: QUICK_MENU })
+        else if (g === 'fist') this.collapse()
+        else if (g === 'swipeLeft') this.cycleMode(-1)
+        else if (g === 'swipeRight') this.cycleMode(1)
+        else if (g === 'swipeUp') this.openSettings()
+        else if (g === 'shape' && input.shapeId) void this.runShortcut(input.shapeId, 'ready')
+        return
+      case 'recognizing':
+      case 'building':
+        if (g === 'thumbsUp' || g === 'swipeRight' || g === 'handsDown') this.endPhrase()
+        else if (g === 'swipeLeft') this.deleteLastToken()
+        else if (g === 'fist') this.cancel()
+        return
+      case 'sentence':
+        if (g === 'swipeLeft') this.deleteLastToken()
+        else if (g === 'swipeRight' || g === 'thumbsUp') void this.proceed()
+        else if (g === 'fist') this.cancel()
+        return
+      case 'agentReady':
+        if (g === 'thumbsUp') void this.runAgent(view.intent, view.sentence)
+        else if (g === 'fist') this.cancel()
+        else if (g === 'swipeLeft') this.change()
+        return
+      case 'working':
+        if (g === 'fist') void this.stopAgent()
+        return
+      case 'confirm':
+        if (g === 'thumbsUp') void this.respondConfirm(true)
+        else if (g === 'fist') void this.respondConfirm(false)
+        return
+      case 'didYouMean':
+        if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
+        else if (g === 'thumbsUp') this.pickOption(0)
+        else if (g === 'swipeLeft') this.change()
+        else if (g === 'fist') this.cancel()
+        return
+      case 'done':
+        if (g === 'thumbsUp') this.expand()
+        else if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
+        else if (g === 'swipeUp') this.openSettings()
+        else if (g === 'fist') this.collapse()
+        return
+      case 'contextActions':
+      case 'quickMenu':
+        if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
+        else if (g === 'fist') this.cancel()
+        return
+      case 'dictation':
+        if (g === 'swipeLeft') this.cycleMode(-1)
+        else if (g === 'swipeRight') this.cycleMode(1)
+        else if (g === 'swipeUp') this.openSettings()
+        else if (g === 'fist') {
+          setApp({ mode: 'command', modeFlashAt: performance.now() })
+          void window.fastasl?.saveSettings({ mode: 'command' })
+          this.setView({ kind: 'ready' })
+        }
+        return
+      case 'toast':
+        if (g === 'fist') this.leaveToast(view.returnTo)
+        return
+      case 'settings':
+        if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
+        else if (g === 'fist') this.settingsBack()
+        else if (g === 'swipeRight' && view.settings.page === 'teachPick') this.teachPage(1)
+        else if (g === 'swipeLeft' && view.settings.page === 'teachPick') this.teachPage(-1)
+        return
+    }
+  }
+
+  /** Mouse taps. */
+  tap(target: TapTarget, index?: number): void {
+    const view = this.view
+    if (target === 'collapse') return this.collapse()
+    if (target === 'expand') return this.expand()
+    if (target === 'camera') return this.toggleCamera()
+    if (target === 'settings') return this.openSettings()
+    if (target === 'option' && index !== undefined) return this.pickOption(index)
+    if (target === 'close') {
+      if (view.kind === 'working') void this.stopAgent()
+      else if (view.kind === 'confirm') void this.respondConfirm(false)
+      else if (view.kind === 'settings') this.settingsBack()
+      else if (view.kind === 'toast') this.leaveToast(view.returnTo)
+      else this.cancel()
+      return
+    }
+    if (target === 'proceed') {
+      if (view.kind === 'building' || view.kind === 'recognizing') this.endPhrase()
+      else if (view.kind === 'sentence') void this.proceed()
+      return
+    }
+    // primary / secondary
+    switch (view.kind) {
+      case 'agentReady':
+        if (target === 'primary') void this.runAgent(view.intent, view.sentence)
+        else this.change()
+        return
+      case 'confirm':
+        void this.respondConfirm(target === 'primary')
+        return
+      case 'didYouMean':
+        if (target === 'primary') this.pickOption(0)
+        else this.change()
+        return
+      case 'done':
+        if (target === 'primary') this.expand()
+        else if (view.view) void this.services.openTarget(view.view)
+        return
+      case 'sentence':
+        if (target === 'primary') void this.proceed()
+        else this.cancel()
+        return
+      case 'toast':
+        if (target === 'secondary') this.leaveToast(view.returnTo)
+        return
+      default:
+        if (target === 'secondary') this.cancel()
+    }
+  }
+
+  // ---------------------------------------------------------------- recognition input
+
+  /** Hands entered the signing zone with motion. */
+  signStart(): void {
+    const view = this.view
+    if (view.kind === 'ready') this.setView({ kind: 'recognizing', token: null, isWord: false })
+  }
+
+  /** A sign / letter was recognized. */
+  token(token: Token): void {
+    const view = this.view
+    const mode = getApp().mode
+    if (mode === 'dictation' && (view.kind === 'dictation' || view.kind === 'ready')) {
+      const text = token.kind === 'letter' ? token.text : `${token.text} `
+      const current = view.kind === 'dictation' ? view.text : ''
+      const joined = (current + (token.kind === 'word' && current && !current.endsWith(' ') ? ' ' : '') + text)
+      this.setView({ kind: 'dictation', text: joined.slice(-120) })
+      void this.services.typeText(token.kind === 'word' && current && !current.endsWith(' ') ? ` ${text}` : text)
+      return
+    }
+    if (view.kind === 'didYouMean' && view.purpose === 'sign') return
+    if (!['ready', 'recognizing', 'building', 'sentence'].includes(view.kind)) return
+    this.tokens.push(token)
+    this.interpretation = null
+    if (this.tokens.length === 1 && view.kind !== 'sentence') {
+      this.setView({ kind: 'recognizing', token: token.text, isWord: token.kind === 'word' })
+      return
+    }
+    this.setView({
+      kind: 'building',
+      tokens: [...this.tokens],
+      current: token.text,
+      sentence: assembleSentence(this.tokens)
+    })
+  }
+
+  /** Recognition was unsure between several signs: ask the user. */
+  ambiguousSign(options: string[]): void {
+    if (!['ready', 'recognizing', 'building'].includes(this.view.kind)) return
+    this.setView({ kind: 'didYouMean', variant: 'list', options: options.slice(0, 3), purpose: 'sign' })
+  }
+
+  /** Both hands down / stillness ended the phrase. */
+  phraseEnd(): void {
+    const kind = this.view.kind
+    if (kind === 'recognizing' || kind === 'building') this.endPhrase()
+  }
+
+  // ---------------------------------------------------------------- phrase flow
+
+  private cancel(): void {
+    this.resetPhrase()
+    this.setView(this.idleView())
+  }
+
+  private deleteLastToken(): void {
+    if (!this.tokens.length) return this.cancel()
+    // Delete a whole word: trailing run of letters counts as one word.
+    const last = this.tokens[this.tokens.length - 1]
+    if (last.kind === 'letter') {
+      while (this.tokens.length && this.tokens[this.tokens.length - 1].kind === 'letter') this.tokens.pop()
+    } else {
+      this.tokens.pop()
+    }
+    this.interpretation = null
+    if (!this.tokens.length) return this.cancel()
+    if (this.view.kind === 'sentence') {
+      this.setView({ kind: 'sentence', sentence: assembleSentence(this.tokens), tokens: [...this.tokens] })
+      this.prefetchInterpretation()
+    } else {
+      this.resumeBuilding()
+    }
+  }
+
+  /** Back to the token strip with the phrase so far (or to listening when it is empty). */
+  private resumeBuilding(): void {
+    if (!this.tokens.length) return this.setView({ kind: 'recognizing', token: null, isWord: false })
+    this.setView({ kind: 'building', tokens: [...this.tokens], current: null, sentence: assembleSentence(this.tokens) })
+  }
+
+  private endPhrase(): void {
+    if (!this.tokens.length) return this.cancel()
+    const mode = getApp().mode
+    const sentence = assembleSentence(this.tokens)
+    if (mode === 'spell') {
+      void this.spellSuggestions()
+      return
+    }
+    this.setView({ kind: 'sentence', sentence, tokens: [...this.tokens] })
+    this.prefetchInterpretation()
+  }
+
+  /** Start Claude early so "proceed" feels instant. */
+  private prefetchInterpretation(): Promise<Interpretation> {
+    const tokens = this.tokens.map((t) => t.text)
+    const sentence = assembleSentence(this.tokens)
+    const intentPrefix = this.intentPrefix
+    const mode = getApp().mode
+    const interpretation = (async (): Promise<Interpretation> => {
+      const frontmost = await this.services.frontmostApp().catch(() => null)
+      const gestures = (await window.fastasl?.getGestures().catch(() => [])) ?? []
+      const res = await settled(
+        this.services.interpret({
+          tokens,
+          sentence,
+          mode,
+          intentPrefix,
+          frontmost,
+          gestures: gestures.map((g) => ({ name: g.name, task: g.task }))
+        })
+      )
+      return res.ok ? { result: res.value, error: null } : { result: null, error: failureText(res) }
+    })()
+    this.interpretation = interpretation
+    return interpretation
+  }
+
+  private async proceed(): Promise<void> {
+    const view = this.view
+    if (view.kind !== 'sentence') return
+    const pending = this.interpretation ?? this.prefetchInterpretation()
+    const thinking: View = { ...view, thinking: true }
+    this.setView(thinking)
+    const { result, error } = await pending
+    // Edited, re-signed or cancelled meanwhile: this answer is for an old sentence.
+    if (this.view !== thinking) return
+    const sentence = view.sentence
+    if (!result) {
+      // Claude unavailable: still let the agent try with the raw sentence.
+      if (error) this.notify(error)
+      this.setView({ kind: 'agentReady', intent: sentence, variant: 'default', sentence })
+      return
+    }
+    this.routeIntent(result, sentence)
+  }
+
+  private routeIntent(result: IntentResult, rawSentence: string): void {
+    const sentence = result.sentence || rawSentence
+    const alternatives = result.alternatives.filter((a) => a && a !== result.intent)
+    if (result.confidence < 0.6 && (alternatives.length || result.intent)) {
+      const options = [result.intent, ...alternatives].filter((o): o is string => Boolean(o)).slice(0, 3)
+      this.setView({ kind: 'didYouMean', variant: 'list', options, purpose: 'intent', quote: sentence })
+      return
+    }
+    if (!result.intent) {
+      if (result.context_actions.length) {
+        this.setView({ kind: 'contextActions', sentence, actions: result.context_actions.slice(0, 3) })
+      } else {
+        this.setView({ kind: 'sentence', sentence, tokens: [...this.tokens] })
+        this.notify('No action found. Swipe left to edit or fist to cancel.')
+      }
+      return
+    }
+    const email = result.intent.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)
+    this.setView({
+      kind: 'agentReady',
+      intent: result.intent,
+      variant: email ? 'email' : 'default',
+      target: email?.[0],
+      sentence
+    })
+  }
+
+  private change(): void {
+    const view = this.view
+    // "Edit" on a spelling or sign list goes back to signing, not to the agent sentence.
+    if (view.kind === 'didYouMean' && view.purpose !== 'intent') return this.resumeBuilding()
+    const sentence = assembleSentence(this.tokens)
+    if (!sentence) return this.cancel()
+    this.setView({ kind: 'sentence', sentence, tokens: [...this.tokens] })
+    this.prefetchInterpretation()
+  }
+
+  /** Inline keyboard edit of the sentence (pencil icon). */
+  editSentence(text: string): void {
+    const words = text.trim().split(/\s+/).filter(Boolean)
+    this.tokens = words.map((w) => ({ text: w, kind: 'word' as const }))
+    if (!this.tokens.length) return this.cancel()
+    this.setView({ kind: 'sentence', sentence: text.trim(), tokens: [...this.tokens] })
+    this.prefetchInterpretation()
+  }
+
+  private pickOption(index: number): void {
+    const view = this.view
+    const options = optionsFor(view)
+    if (index < 0 || index >= options.length) return
+    const choice = options[index]
+    switch (view.kind) {
+      case 'didYouMean':
+        if (view.purpose === 'sign') {
+          this.tokens.push({ text: choice, kind: 'word' })
+          this.setView({
+            kind: 'building',
+            tokens: [...this.tokens],
+            current: choice,
+            sentence: assembleSentence(this.tokens)
+          })
+        } else if (view.purpose === 'spell') {
+          void this.typeSpelled(choice)
+        } else if (view.variant === 'quote') {
+          void this.runAgent(choice, view.quote ?? choice)
+        } else {
+          this.setView({ kind: 'agentReady', intent: choice, variant: 'default', sentence: view.quote ?? choice })
+        }
+        return
+      case 'contextActions':
+        void this.contextAction(choice, view.sentence)
+        return
+      case 'quickMenu':
+        this.intentPrefix = choice
+        this.tokens = []
+        this.setView({ kind: 'ready', hint: `${choice}: sign the details` })
+        return
+      case 'done':
+        if (index === 0 && view.view) void this.services.openTarget(view.view)
+        else if (index === 1) this.expand()
+        else if (index === 2) this.startNewGesture(view.intent)
+        return
+      case 'settings':
+        this.settingsPick(view.settings, index)
+        return
+    }
+  }
+
+  private async contextAction(action: string, sentence: string): Promise<void> {
+    const a = action.toLowerCase()
+    if (a.includes('insert') || a.includes('type')) {
+      const res = await this.services.typeText(sentence)
+      this.toast(res.ok ? 'Text inserted' : 'Could not insert text', res.ok ? sentence : res.error, res.ok)
+      return
+    }
+    if (a.includes('more')) {
+      this.setView({ kind: 'quickMenu', options: QUICK_MENU })
+      return
+    }
+    this.setView({ kind: 'agentReady', intent: `${action}: "${sentence}"`, variant: 'default', sentence })
+  }
+
+  private async spellSuggestions(): Promise<void> {
+    const view = this.view
+    const letters = this.tokens.map((t) => t.text).join('')
+    const frontmost = await this.services.frontmostApp().catch(() => null)
+    const res = await settled(this.services.spellSuggest({ letters, frontmost }))
+    if (this.view !== view) return // cancelled or kept spelling meanwhile
+    const options = res.ok ? [letters, ...res.value.filter((s) => s !== letters)].slice(0, 3) : [letters]
+    if (!res.ok) this.notify(failureText(res))
+    this.setView({ kind: 'didYouMean', variant: 'list', options, purpose: 'spell', quote: letters })
+  }
+
+  private async typeSpelled(text: string): Promise<void> {
+    const res = await this.services.typeText(text)
+    this.resetPhrase()
+    this.toast(res.ok ? 'Typed' : 'Could not type', res.ok ? text : res.error, res.ok)
+  }
+
+  // ---------------------------------------------------------------- agent
+
+  async runAgent(intent: string, sentence: string): Promise<void> {
+    this.subscribe() // dispose() may have run (React StrictMode re-mounts App)
+    this.steps = []
+    this.runIntent = intent
+    this.agentActive = true
+    this.setView({ kind: 'working', intent, steps: [] })
+    const frontmost = await this.services.frontmostApp().catch(() => null)
+    if (!this.agentActive) return // stopped before the agent started
+    const res = await settled(this.services.agentRun({ intent, sentence, frontmost }))
+    if (res.ok || !this.agentActive) return
+    this.agentActive = false
+    this.setView({ kind: 'done', ok: false, title: "Couldn't start the agent", subtitle: failureText(res), intent })
+    this.later(DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
+  }
+
+  private async stopAgent(): Promise<void> {
+    this.agentActive = false
+    await this.services.agentStop().catch(() => undefined)
+    this.agentStopped()
+  }
+
+  private agentStopped(): void {
+    this.resetPhrase()
+    this.toast('Stopped', 'The agent was interrupted', false)
+  }
+
+  private async respondConfirm(approved: boolean): Promise<void> {
+    const view = this.view
+    if (view.kind !== 'confirm') return
+    this.setView({ kind: 'working', intent: this.runIntent, steps: [...this.steps] })
+    await this.services.agentRespond(view.requestId, approved)
+  }
+
+  private onAgentEvent(e: AgentEvent): void {
+    if (!this.agentActive) {
+      // Late event from a stopped or finished run. Never leave an agent waiting on an answer.
+      if (e.type === 'confirm') void this.services.agentRespond(e.requestId, false)
+      return
+    }
+    switch (e.type) {
+      case 'started':
+        this.steps = []
+        return
+      case 'step': {
+        const i = this.steps.findIndex((s) => s.id === e.step.id)
+        if (i >= 0) this.steps[i] = e.step
+        else this.steps.push(e.step)
+        const view = this.view
+        if (view.kind === 'working') this.setView({ ...view, steps: [...this.steps] })
+        return
+      }
+      case 'confirm':
+        this.setView({ kind: 'confirm', requestId: e.requestId, details: e.details })
+        return
+      case 'done': {
+        this.agentActive = false
+        const ok = e.result.evidence.some((ev) => ev.ok) || e.result.title.toLowerCase() !== 'cancelled'
+        this.lastCompleted = { intent: this.runIntent, title: e.result.title }
+        this.resetPhrase()
+        const success = ok && e.result.evidence.every((ev) => ev.ok)
+        this.setView({
+          kind: 'done',
+          ok: success,
+          title: e.result.title,
+          subtitle: e.result.subtitle,
+          view: e.result.view,
+          intent: this.runIntent
+        })
+        // Failures stay twice as long (matches the DoneView progress line).
+        this.later(success ? DONE_AUTO_COLLAPSE_MS : DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
+        return
+      }
+      case 'error':
+        this.agentActive = false
+        this.setView({
+          kind: 'done',
+          ok: false,
+          title: "Couldn't finish",
+          subtitle: failureText({ error: e.message, missingKey: e.missingKey }),
+          intent: this.runIntent
+        })
+        this.later(DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
+        return
+      case 'stopped':
+        // Stopped by the main process rather than by the user.
+        this.agentActive = false
+        this.agentStopped()
+        return
+    }
+  }
+
+  // ---------------------------------------------------------------- shortcuts & toasts
+
+  toast(title: string, subtitle: string | undefined, ok: boolean, meta?: string): void {
+    const returnTo = this.view.kind === 'collapsed' ? 'collapsed' : 'ready'
+    this.showToast({ kind: 'toast', title, subtitle, ok, meta, returnTo })
+  }
+
+  async runShortcut(gestureId: string, returnTo: 'collapsed' | 'ready'): Promise<void> {
+    const res = await this.services.runShortcut(gestureId)
+    const meta = res.ok && res.compiled ? `compiled · ${(res.durationMs / 1000).toFixed(1)} s` : undefined
+    this.showToast({ kind: 'toast', title: res.title, subtitle: res.subtitle, ok: res.ok, meta, returnTo })
+  }
+
+  private showToast(toast: Extract<View, { kind: 'toast' }>): void {
+    this.setView(toast)
+    this.later(TOAST_MS, () => this.leaveToast(toast.returnTo))
+  }
+
+  /** A toast ends a flow: whatever phrase led to it is finished. */
+  private leaveToast(returnTo: 'collapsed' | 'ready'): void {
+    this.resetPhrase()
+    this.setView(returnTo === 'collapsed' ? { kind: 'collapsed' } : this.idleView())
+  }
+
+  // ---------------------------------------------------------------- settings
+
+  private settingsBack(): void {
+    const view = this.view
+    if (view.kind !== 'settings') return
+    if (view.settings.page === 'root') return this.setView(this.idleView())
+    if (view.settings.page === 'gestureDetail') return void this.openGestureList()
+    this.openSettings()
+  }
+
+  private teachPage(dir: 1 | -1): void {
+    const view = this.view
+    if (view.kind !== 'settings' || view.settings.page !== 'teachPick') return
+    const total = STARTER_WORDS.length + LETTERS.length
+    const offset = Math.min(Math.max(0, view.settings.offset + dir * TEACH_PAGE), total - 1)
+    this.setView({ kind: 'settings', settings: { page: 'teachPick', offset: offset - (offset % TEACH_PAGE) } })
+  }
+
+  private settingsPick(page: SettingsPage, index: number): void {
+    switch (page.page) {
+      case 'root':
+        if (index === 0) this.setView({ kind: 'settings', settings: { page: 'teachPick', offset: 0 } })
+        else if (index === 1) this.startNewGesture()
+        else if (index === 2) void this.openGestureList()
+        else if (index === 3) void this.openCameraSettings()
+        else if (index === 4) this.setView({ kind: 'settings', settings: { page: 'sensitivity', current: getApp().sensitivity } })
+        return
+      case 'teachPick': {
+        const options = settingsOptions(page)
+        const label = options[index]
+        if (index === options.length - 1) {
+          this.setView({ kind: 'settings', settings: { page: 'teachSpell', letters: '' } })
+          return
+        }
+        const kind = label.length === 1 ? 'letter' : 'word'
+        this.setView({
+          kind: 'settings',
+          settings: { page: 'teachRecord', label, kind, done: 0, total: kind === 'letter' ? 5 : 10 }
+        })
+        return
+      }
+      case 'newGesturePick': {
+        const options = settingsOptions(page)
+        const task = index === options.length - 1 ? '' : options[index]
+        this.setView({ kind: 'settings', settings: { page: 'newGestureHold', task, countdown: 3, captured: false } })
+        return
+      }
+      case 'gestures': {
+        const gesture = page.gestures[index]
+        if (gesture) this.setView({ kind: 'settings', settings: { page: 'gestureDetail', gesture } })
+        return
+      }
+      case 'gestureDetail':
+        if (index === 0) void this.runShortcut(page.gesture.id, 'ready')
+        else if (index === 1 && !page.gesture.builtin) void this.deleteGesture(page.gesture.id)
+        return
+      case 'camera':
+        void this.chooseCamera(index, page)
+        return
+      case 'sensitivity': {
+        const sensitivity = (['low', 'medium', 'high'] as const)[index]
+        setApp({ sensitivity })
+        void window.fastasl?.saveSettings({ sensitivity })
+        this.setView({ kind: 'settings', settings: { page: 'sensitivity', current: sensitivity } })
+        return
+      }
+    }
+  }
+
+  startNewGesture(task?: string): void {
+    void (async () => {
+      const recent = (await window.fastasl?.getRecentTasks().catch(() => [])) ?? []
+      const tasks = [task, this.lastCompleted?.intent, ...recent.map((t) => t.intent)].filter(
+        (t, i, all): t is string => Boolean(t) && all.indexOf(t) === i
+      )
+      this.setView({ kind: 'settings', settings: { page: 'newGesturePick', tasks: tasks.slice(0, 4) } })
+    })()
+  }
+
+  private async openGestureList(): Promise<void> {
+    const gestures = (await window.fastasl?.getGestures().catch(() => [])) ?? []
+    this.setView({
+      kind: 'settings',
+      settings: { page: 'gestures', gestures: gestures.map(({ id, name, task, builtin }) => ({ id, name, task, builtin })) }
+    })
+  }
+
+  private async deleteGesture(id: string): Promise<void> {
+    const gestures = (await window.fastasl?.getGestures().catch(() => [])) ?? []
+    await window.fastasl?.saveGestures(gestures.filter((g) => g.id !== id))
+    await this.openGestureList()
+  }
+
+  private async openCameraSettings(): Promise<void> {
+    const settings = await window.fastasl?.getSettings().catch(() => null)
+    const src = settings?.cameraSource
+    this.setView({
+      kind: 'settings',
+      settings: {
+        page: 'camera',
+        current: src?.kind === 'mjpeg' ? 'mjpeg' : 'builtin',
+        url: src?.kind === 'mjpeg' ? src.url : ''
+      }
+    })
+  }
+
+  private async chooseCamera(index: number, page: Extract<SettingsPage, { page: 'camera' }>): Promise<void> {
+    if (index === 0) {
+      await window.fastasl?.saveSettings({ cameraSource: { kind: 'builtin' } })
+      this.setView({ kind: 'settings', settings: { ...page, current: 'builtin' } })
+    } else if (index === 1) {
+      if (!page.url) {
+        this.notify('Set a stream URL first (option 3)')
+        return
+      }
+      await window.fastasl?.saveSettings({ cameraSource: { kind: 'mjpeg', url: page.url } })
+      this.setView({ kind: 'settings', settings: { ...page, current: 'mjpeg' } })
+    } else {
+      // Editing a URL needs the keyboard: handled by the camera settings view (focusable input).
+      this.notify('Type the URL, then press Return')
+    }
+  }
+}
+
+/** Mock poses used for the feed per view when no camera is running. */
+export function mockPoseFor(view: View): typeof live.mockPose {
+  switch (view.kind) {
+    case 'recognizing':
+      return view.token ? 'fist' : 'twoHands'
+    case 'building':
+      return 'c'
+    case 'agentReady':
+      return 'point'
+    case 'working':
+      return 'point'
+    case 'confirm':
+      return 'thumbsUp'
+    case 'done':
+      return 'ok'
+    case 'toast':
+      return 'peace'
+    default:
+      return 'palm'
+  }
+}
