@@ -581,7 +581,7 @@ describe('settings by hand', () => {
     expect(optionsFor(getApp().view)).toEqual(['YES', 'NO', 'HELLO', 'MEETING', 'Spell a new word'])
     g('swipeRight')
     fingers(1)
-    expect(page()).toEqual({ page: 'teachRecord', label: 'TOMORROW', kind: 'word', done: 0, total: 10 })
+    expect(page()).toEqual({ page: 'teachRecord', label: 'TOMORROW', kind: 'word', done: 0, total: 5 })
     g('fist')
     expect(page()).toMatchObject({ page: 'teachPick', offset: 4 })
     // A letter's page goes back by swipe: S, T, M and N are held still like a fist.
@@ -897,7 +897,7 @@ describe('teach a sign', () => {
     frames: [],
     createdAt: n
   })
-  const RECORD_MEETING = { page: 'teachRecord', label: 'MEETING', kind: 'word', done: 0, total: 10 } as const
+  const RECORD_MEETING = { page: 'teachRecord', label: 'MEETING', kind: 'word', done: 0, total: 5 } as const
   const RECORD_S = { page: 'teachRecord', label: 'S', kind: 'letter', done: 0, total: 5 } as const
   /** S is letter 18 of the list after the 16 starter words: the page at offset 32. */
   const S_PAGE = 32
@@ -919,7 +919,7 @@ describe('teach a sign', () => {
     expect(optionsFor(getApp().view)).toEqual(['V', 'W', 'X', 'Y', 'Spell a new word'])
   })
 
-  it('records words 10 times and letters 5; the last option spells a new word', () => {
+  it('records words and letters 5 times each; the last option spells a new word', () => {
     const list = (offset: number): View => ({ kind: 'settings', settings: { page: 'teachPick', offset, recorded: {} } })
     c.setView(list(0))
     fingers(4)
@@ -1002,7 +1002,7 @@ describe('teach a sign', () => {
     fingers(2)
     expect(viewAs('settings').settings).toEqual(spelling('KC'))
     g('thumbsUp')
-    expect(viewAs('settings').settings).toEqual({ page: 'teachRecord', label: 'KC', kind: 'word', done: 0, total: 10 })
+    expect(viewAs('settings').settings).toEqual({ page: 'teachRecord', label: 'KC', kind: 'word', done: 0, total: 5 })
     g('fist')
     expect(viewAs('settings').settings).toMatchObject({ page: 'teachPick', offset: 0 })
   })
@@ -1100,7 +1100,7 @@ describe('listening', () => {
       { kind: 'toast', title: 't', ok: true, returnTo: 'ready' },
       { kind: 'quickMenu', options: QUICK_MENU },
       { kind: 'settings', settings: { page: 'root' } },
-      { kind: 'settings', settings: { page: 'teachRecord', label: 'YES', kind: 'word', done: 0, total: 10 } }
+      { kind: 'settings', settings: { page: 'teachRecord', label: 'YES', kind: 'word', done: 0, total: 5 } }
     ]
     expect(yes.map(takesSigns)).toEqual(yes.map(() => true))
     expect(no.map(takesSigns)).toEqual(no.map(() => false))

@@ -62,9 +62,9 @@ describe('teach, then recognize (synthetic signer)', () => {
   if (pack instanceof Error) throw pack
   const templates = pack.templates
 
-  it('records ten templates per word', () => {
-    expect(templates).toHaveLength(30)
-    expect(new Set(templates.map((t) => t.id)).size).toBe(30)
+  it('records five templates per word', () => {
+    expect(templates).toHaveLength(15)
+    expect(new Set(templates.map((t) => t.id)).size).toBe(15)
   })
 
   it('recognizes new noisy repetitions of each word', () => {

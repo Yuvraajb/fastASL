@@ -18,8 +18,19 @@ export interface Classification {
 }
 
 export interface RecognizerOptions {
-  /** Max DTW distance (mean frame distance) to accept a word, before sensitivity scaling. */
+  /**
+   * Max DTW distance (mean frame distance) to accept a word, before sensitivity scaling: the
+   * floor of each word's own radius (see radiusScale).
+   */
   wordThreshold: number
+  /**
+   * Each word's accept distance follows how consistently it was recorded: radiusScale x the
+   * median distance from each of its templates to the nearest other one, clamped to
+   * [wordThreshold, maxWordThreshold]. A word recorded on a real, noisy camera gets a wider
+   * radius than one recorded by a steady signer, without widening every other word.
+   */
+  radiusScale: number
+  maxWordThreshold: number
   /** Max static-vector distance to accept a letter, before sensitivity scaling. */
   letterThreshold: number
   /** best / second-best distance above this (second best being another label) = ambiguous. */
@@ -45,10 +56,17 @@ export interface RecognizerOptions {
  * rejects ~82% of those look-alikes (the rest read as the letter they resemble).
  * Hands half the size (far from the camera) with ~2.6 px jitter: same-sign p95 1.03, still
  * >= 95% of words and letters recognized and unknowns rejected.
- * Real cameras are noisier than this model; raise sensitivity before raising these.
+ * Real cameras are noisier than this model. On a MacBook camera (1280x720, ~17-30 fps) one
+ * signer's clean HELLO repetitions sat 1.57-1.81 from their nearest neighbor (pairwise up to
+ * ~2.3; raising the hand into view as part of it 2.2-3.4), so a fixed 1.5 rejected every real
+ * repetition. Hence the per-word radius: 1.4 x that median nearest distance gives HELLO ~2.2,
+ * while synthetic words (median ~0.5) keep the floor of 1.5, and the cap of 2.4 stays under
+ * the raises and other movements measured there.
  */
 export const RECOGNIZER_DEFAULTS: RecognizerOptions = {
   wordThreshold: 1.5,
+  radiusScale: 1.4,
+  maxWordThreshold: 2.4,
   letterThreshold: 0.7,
   ambiguityRatio: 0.85,
   band: 4,
@@ -61,6 +79,8 @@ const REJECTED: Classification = { status: 'rejected', distance: Infinity, alter
 export class Recognizer {
   private options: RecognizerOptions
   private words: { label: string; frames: number[][] }[] = []
+  /** Accept distance per word label (see RecognizerOptions.radiusScale). */
+  private radii = new Map<string, number>()
   private letters: LabeledVector[] = []
   private profile: SensitivityProfile = SENSITIVITY.medium
   private mode: RecognizerMode = 'both'
@@ -82,6 +102,12 @@ export class Recognizer {
         for (const f of t.frames) if (f.length === STATIC_FEATURE_DIM) this.letters.push({ label: t.label, vector: f })
       }
     }
+    this.radii = wordRadii(this.words, this.options)
+  }
+
+  /** A word's accept distance before sensitivity scaling (dev diagnostics, tests). */
+  wordRadius(label: string): number {
+    return this.radii.get(label) ?? this.options.wordThreshold
   }
 
   setSensitivity(profile: SensitivityProfile): void {
@@ -104,7 +130,7 @@ export class Recognizer {
     const ranked = [...nearest]
       .map(([label, distance]) => ({ label, distance }))
       .sort((a, b) => a.distance - b.distance)
-    return this.decide(ranked, 'word', this.options.wordThreshold)
+    return this.decide(ranked, 'word', this.wordRadius(ranked[0].label))
   }
 
   /** Classify a static handshape vector against the letter templates. */
@@ -124,4 +150,20 @@ export class Recognizer {
       second !== undefined && (second.distance <= 0 || best.distance / second.distance > this.options.ambiguityRatio)
     return { status: ambiguous ? 'ambiguous' : 'accepted', label: best.label, kind, distance: best.distance, alternatives }
   }
+}
+
+/** Each word's accept distance from how close its templates are to one another. */
+function wordRadii(words: readonly { label: string; frames: number[][] }[], o: RecognizerOptions): Map<string, number> {
+  const byLabel = new Map<string, number[][][]>()
+  for (const w of words) byLabel.set(w.label, [...(byLabel.get(w.label) ?? []), w.frames])
+  const radii = new Map<string, number>()
+  for (const [label, seqs] of byLabel) {
+    const nearest = seqs
+      .map((a, i) => Math.min(...seqs.map((b, j) => (i === j ? Infinity : dtw(a, b, { band: o.band })))))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b)
+    const median = nearest.length ? nearest[Math.floor((nearest.length - 1) / 2)] : 0
+    radii.set(label, Math.min(o.maxWordThreshold, Math.max(o.wordThreshold, median * o.radiusScale)))
+  }
+  return radii
 }

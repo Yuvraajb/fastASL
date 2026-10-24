@@ -44,13 +44,13 @@ const progressOf = (events: TeachEvent[]): TeachProgress[] =>
 const range = (n: number, from = 1): number[] => Array.from({ length: n }, (_, i) => from + i * 7)
 
 describe('TeachSession (word)', () => {
-  it('records ten repetitions, announcing each one as it starts', () => {
+  it('records five repetitions, announcing each one as it starts', () => {
     const session = new TeachSession('HELLO', 'word', undefined, { aspect: ASPECT })
-    expect(session.total).toBe(10)
-    expect(session.progress).toEqual({ done: 0, total: 10, lastAccepted: null })
-    const events = feed(session, timeline(reps(WORDS.HELLO, range(10))))
-    expect(events.filter((e) => e.type === 'listening')).toHaveLength(10)
-    expect(progressOf(events).map((p) => p.done)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(session.total).toBe(5)
+    expect(session.progress).toEqual({ done: 0, total: 5, lastAccepted: null })
+    const events = feed(session, timeline(reps(WORDS.HELLO, range(5))))
+    expect(events.filter((e) => e.type === 'listening')).toHaveLength(5)
+    expect(progressOf(events).map((p) => p.done)).toEqual([1, 2, 3, 4, 5])
     expect(session.complete).toBe(true)
   })
 
@@ -61,11 +61,11 @@ describe('TeachSession (word)', () => {
     expect(session.progress.done).toBe(2)
   })
 
-  it('rejects a repetition that is too short, with a reason', () => {
+  it('ignores a movement that is too short: the hand getting back into position', () => {
     const twitch: SignSpec = { durationMs: 120, hands: [{ handedness: 'Right', shape: 'B', path: (u) => [0.8 * u, 0] }] }
     const session = new TeachSession('HELLO', 'word', undefined, { aspect: ASPECT })
     const [last] = progressOf(feed(session, timeline(reps(twitch, [1])))).slice(-1)
-    expect(last).toEqual({ done: 0, total: 10, lastAccepted: false, reason: TEACH_REASONS.tooShort })
+    expect(last).toEqual({ done: 0, total: 5, lastAccepted: null })
   })
 
   it('rejects an outlier that does not match the repetitions so far', () => {
@@ -73,8 +73,8 @@ describe('TeachSession (word)', () => {
     const parts = [...reps(WORDS.HELLO, range(3)), ...reps(WORDS.PLAY, [99]), ...reps(WORDS.HELLO, [100])]
     const progress = progressOf(feed(session, timeline(parts)))
     expect(progress.slice(-2)).toEqual([
-      { done: 3, total: 10, lastAccepted: false, reason: TEACH_REASONS.outlier },
-      { done: 4, total: 10, lastAccepted: true }
+      { done: 3, total: 5, lastAccepted: false, reason: TEACH_REASONS.outlier },
+      { done: 4, total: 5, lastAccepted: true }
     ])
   })
 
@@ -83,7 +83,7 @@ describe('TeachSession (word)', () => {
     const progress = progressOf(feed(session, timeline([...reps(WORDS.YES, [1]), ...reps(WORDS.HELLO, [2, 3])])))
     expect(progress.map((p) => [p.done, p.lastAccepted])).toEqual([
       [1, true],
-      [1, true], // a 1-1 tie goes to the newest attempt
+      [1, false], // matches nothing yet: said so, though as the newest it is kept for now
       [2, true]
     ])
     const live = new RecognitionSession({ aspect: ASPECT })
@@ -150,7 +150,7 @@ describe('TeachSession (letter)', () => {
     const events = feed(session, timeline([...reps(WORDS.HELLO, [1]), ...holds('L', range(5))]))
     expect(progressOf(events).map((p) => [p.done, p.lastAccepted])).toEqual([
       [1, true], // HELLO's final B hold
-      [1, true],
+      [1, false], // the first L matches nothing yet
       [2, true],
       [3, true],
       [4, true],

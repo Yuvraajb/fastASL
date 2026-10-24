@@ -40,6 +40,13 @@ interface Candidate {
   distances: number[]
 }
 
+/**
+ * Word repetitions within this DTW distance agree. On a real MacBook camera one signer's clean
+ * HELLO repetitions linked at 1.57-1.81, while ones that included raising the hand into view
+ * sat 2.15+ away; the recognizer then widens each word's radius to fit (recognizer.ts).
+ */
+const WORD_AGREEMENT = 2.0
+
 /** Older candidates outside the kept set are forgotten beyond total x this. */
 const CANDIDATES_PER_REP = 3
 
@@ -59,6 +66,8 @@ export class TeachSession {
   private latest: Pick<TeachProgress, 'lastAccepted' | 'reason'> = { lastAccepted: null }
   private segmenter: Segmenter
   private outlierDistance: number
+  /** Links that involve a raise or lowering of the hands must be this close (see link()). */
+  private strictDistance: number
 
   constructor(
     readonly label: string,
@@ -66,10 +75,14 @@ export class TeachSession {
     total?: number,
     options: TeachOptions = {}
   ) {
-    this.total = total ?? (kind === 'word' ? 10 : 5)
+    this.total = total ?? 5
     this.segmenter = new Segmenter(options.thresholds, options.aspect)
     this.outlierDistance =
-      options.outlierDistance ?? (kind === 'word' ? RECOGNIZER_DEFAULTS.wordThreshold : RECOGNIZER_DEFAULTS.letterThreshold)
+      options.outlierDistance ?? (kind === 'word' ? WORD_AGREEMENT : RECOGNIZER_DEFAULTS.letterThreshold)
+    this.strictDistance = Math.min(
+      this.outlierDistance,
+      kind === 'word' ? RECOGNIZER_DEFAULTS.wordThreshold : RECOGNIZER_DEFAULTS.letterThreshold
+    )
   }
 
   get progress(): TeachProgress {
@@ -78,6 +91,16 @@ export class TeachSession {
 
   get complete(): boolean {
     return this.kept.length >= this.total
+  }
+
+  /** Dev diagnostics: the latest repetition's distance to each earlier one still remembered. */
+  get latestDistances(): number[] {
+    return this.candidates[this.candidates.length - 1]?.distances ?? []
+  }
+
+  /** Dev diagnostics: repetitions within this distance agree. */
+  get matchDistance(): number {
+    return this.outlierDistance
   }
 
   /** Camera image width / height; invalid values are ignored. */
@@ -96,9 +119,10 @@ export class TeachSession {
       case 'start':
         return { type: 'listening' }
       case 'cancel':
-        // A quick raise or lowering of the hands is not a failed attempt: just end "Listening".
-        if (segment.reason === 'too-short' && (segment.entered || segment.left)) return this.event()
-        return this.result(false, segment.reason === 'too-short' ? TEACH_REASONS.tooShort : TEACH_REASONS.tooLong)
+        // A short movement is the hand getting back into position between repetitions, not a
+        // failed attempt: just end "Listening". Only an overlong one gets a reason.
+        if (segment.reason === 'too-short') return this.event()
+        return this.result(false, TEACH_REASONS.tooLong)
       case 'dynamic':
         return this.consider(resample(segment.features), !segment.entered && !segment.left)
       default:
@@ -121,7 +145,11 @@ export class TeachSession {
     this.candidates.push({ rep, clean, distances: this.candidates.map((c) => this.distance(rep, c.rep)) })
     const latest = this.candidates.length - 1
     this.kept = this.bestGroup()
-    const accepted = this.kept.includes(latest)
+    // A repetition that agrees with no earlier clean one only "wins" as the newest of several
+    // lone attempts: progress doesn't move, so say why instead of nothing. (Alone among raises
+    // and lowerings of the hands, it is simply the first real repetition.)
+    const alone = this.kept.length === 1 && this.candidates.some((c, i) => i !== latest && c.clean)
+    const accepted = this.kept.includes(latest) && !alone
     this.forgetOld()
     if (accepted) return this.result(true)
     // Probably the hands coming up or going down between repetitions: say nothing.
@@ -160,7 +188,7 @@ export class TeachSession {
       grouped.add(first)
       for (let k = 0; k < group.length; k++) {
         this.candidates.forEach((_, j) => {
-          if (grouped.has(j) || this.between(group[k], j) > this.outlierDistance) return
+          if (grouped.has(j) || !this.linked(group[k], j)) return
           grouped.add(j)
           group.push(j)
         })
@@ -177,6 +205,16 @@ export class TeachSession {
     this.candidates.splice(drop, 1)
     for (const c of this.candidates.slice(drop)) c.distances.splice(drop, 1)
     this.kept = this.kept.map((i) => (i > drop ? i - 1 : i))
+  }
+
+  /**
+   * Two clean repetitions agree within outlierDistance. One that also caught the hands rising
+   * or falling must be closer (strictDistance): otherwise the raise itself joins the kept set
+   * and raising the hands would later read as the sign.
+   */
+  private linked(i: number, j: number): boolean {
+    const both = this.candidates[i].clean && this.candidates[j].clean
+    return this.between(i, j) <= (both ? this.outlierDistance : this.strictDistance)
   }
 
   private between(i: number, j: number): number {

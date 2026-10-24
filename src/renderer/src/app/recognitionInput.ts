@@ -1,5 +1,6 @@
 import type { Mode, SignTemplate } from '@shared/types'
 import { HOLD_MS } from '../engine/gestures/engine'
+import { slotPresent } from '../engine/recognition/features'
 import { Segmenter } from '../engine/recognition/segmenter'
 import { RecognitionSession, type RecognitionEvent } from '../engine/recognition/session'
 import { TeachSession } from '../engine/recognition/teach'
@@ -156,7 +157,16 @@ export function connectRecognition(controller: Target): RecognitionConnection {
     t.segmenter.setAspect(aspect)
     if (newCamera) restartTeaching(t)
     for (const segment of t.segmenter.push(frame)) {
+      if (segment.kind === 'cancel') log(`[teach-dbg] cancel ${segment.reason} entered=${segment.entered} left=${segment.left}`)
       const event = t.session.addSegment(segment)
+      if (segment.kind === 'dynamic' && window.fastasl?.isDev) {
+        const f = segment.features
+        const share = (slot: number): string => `${Math.round((100 * f.filter((v) => slotPresent(v, slot)).length) / f.length)}%`
+        log(
+          `[teach-dbg] dynamic ${f.length} frames ${Math.round(segment.durationMs)}ms entered=${segment.entered} left=${segment.left} ` +
+            `right=${share(0)} left=${share(1)} distances=[${t.session.latestDistances.map((d) => d.toFixed(2)).join(' ')}] match<=${t.session.matchDistance}`
+        )
+      }
       if (!event) continue
       if (event.type === 'listening') {
         log('[teach] listening')
@@ -199,6 +209,12 @@ export function connectRecognition(controller: Target): RecognitionConnection {
       }
       fed = true
       const events = rec.update(frame)
+      if (rec.lastWord && window.fastasl?.isDev) {
+        const { status, distance, alternatives } = rec.lastWord
+        const best = alternatives[0]
+        log(`[sign-dbg] ${status}: nearest ${best ?? '(none taught)'} at ${distance.toFixed(2)}${best ? ` (accepts <= ${rec.recognizer.wordRadius(best).toFixed(2)})` : ''}`)
+        rec.lastWord = null
+      }
       events.forEach(route)
       return events.some((e) => (e.type === 'token' || e.type === 'ambiguous') && (e.kind === 'word' || lettersOnly))
     },

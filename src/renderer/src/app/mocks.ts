@@ -199,7 +199,7 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     pose: 'palm'
   },
   settingsTeachRecord: {
-    view: { kind: 'settings', settings: { page: 'teachRecord', label: 'MEETING', kind: 'word', done: 2, total: 10 } },
+    view: { kind: 'settings', settings: { page: 'teachRecord', label: 'MEETING', kind: 'word', done: 2, total: 5 } },
     pose: 'twoHands'
   },
   settingsTeachSpell: {
@@ -213,8 +213,8 @@ export const MOCK_SCENES: Record<string, MockScene> = {
         page: 'teachRecord',
         label: 'HELLO',
         kind: 'word',
-        done: 4,
-        total: 10,
+        done: 2,
+        total: 5,
         reason: "That one didn't match the others. Try again."
       }
     },

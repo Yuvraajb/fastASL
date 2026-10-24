@@ -45,6 +45,8 @@ export class RecognitionSession {
   private controlHoldMs: number
   private holdScale = 1
   private lettersOnly = false
+  /** Dev diagnostics: how the last movement classified (nearest word and its distance). */
+  lastWord: Classification | null = null
   private suspendedUntil = -Infinity
   private lastT = 0
   private pending: { event: RecognitionEvent; until: number } | null = null
@@ -115,6 +117,7 @@ export class RecognitionSession {
       else if (segment.kind === 'cancel') events.push({ type: 'rejected' })
       else {
         const result = this.recognizer.classifyDynamic(segment.features)
+        this.lastWord = result
         // The hand usually rests in a word's last shape; that is not a letter.
         if (result.status !== 'rejected') this.segmenter.blockStatic()
         events.push(outcome(result) ?? { type: 'rejected' })

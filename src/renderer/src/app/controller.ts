@@ -283,7 +283,7 @@ export const LETTERS = 'ABCDEFGHIKLMNOPQRSTUVWXY'.split('')
 const TEACH_LABELS = [...STARTER_WORDS, ...LETTERS]
 const TEACH_PAGE = 4
 /** Repetitions recorded per sign (TeachSession defaults). */
-const TEACH_REPS = { word: 10, letter: 5 } as const
+const TEACH_REPS = { word: 5, letter: 5 } as const
 const MAX_TEACH_WORD = 32
 
 /** Recorded templates per label (one per kept repetition). */
