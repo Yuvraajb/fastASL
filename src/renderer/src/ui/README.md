@@ -166,6 +166,10 @@ for the mock silhouette; fists pass a higher thickness so curled fingers merge i
 foreshortened (curled) finger segments get no contour line.
 Landmarks are always raw MediaPipe coordinates; mirroring happens only at draw time.
 
+`useLiveError(active)` returns `live.error` as React state (polled each animation frame,
+re-rendering only on a change). The feed uses it for its one-line error; Settings › Camera
+source shows the whole message in its `Notice`.
+
 ### `TokenPill`
 
 Centered 22px semibold token, 44px tall dark pill (full width by default). The text has its
@@ -376,10 +380,11 @@ Green circle with a dark check (ref3-08), pops in. `ok={false}` = gray circle wi
 
 ### `Notice`
 
-30px for one line, info icon, `--surface` panel. A long message (a permission's System Settings path) wraps to a second line, then ellipsis. Reads `store.notice` unless `text` is given; renders nothing when empty.
+30px for one line, info icon, `--surface` panel. A long message (a permission's System Settings path) wraps to a second line, then ellipsis (`lines` allows more: Settings › Camera source shows camera errors on up to 4). Reads `store.notice` unless `text` is given; renders nothing when empty.
 
 ```tsx
 <Notice />
+<Notice text={cameraError} lines={4} />
 ```
 
 ### `CloseButton`

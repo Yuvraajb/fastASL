@@ -59,6 +59,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 export class CameraPipeline {
   private readonly deps: PipelineDeps
   private readonly subscribers = new Set<(frame: FrameSample) => void>()
+  private readonly statusListeners = new Set<(error: string | null) => void>()
   private source: CameraSource | null = null
   private running = false
   private enabled = true
@@ -108,6 +109,17 @@ export class CameraPipeline {
     this.subscribers.add(fn)
     return () => {
       this.subscribers.delete(fn)
+    }
+  }
+
+  /**
+   * Whether the camera works: `null` on the first frame of every session (a start, a new
+   * source, a retry that worked), and the message of every failure, retries included.
+   */
+  onStatus(fn: (error: string | null) => void): () => void {
+    this.statusListeners.add(fn)
+    return () => {
+      this.statusListeners.delete(fn)
     }
   }
 
@@ -177,6 +189,7 @@ export class CameraPipeline {
   }
 
   private publish(frame: FrameSample, handle: CameraHandle, now: number): void {
+    const first = this.lastDetect === null
     if (this.lastDetect !== null) {
       const interval = now - this.lastDetect
       this.intervalEma = this.intervalEma ? this.intervalEma + FPS_SMOOTHING * (interval - this.intervalEma) : interval
@@ -197,16 +210,20 @@ export class CameraPipeline {
     live.mock = false
     live.error = null
     this.emit(frame)
+    if (first) callAll(this.statusListeners, null)
   }
 
   private fail(message: string, retry = true): void {
     this.teardown(message)
-    if (!retry) return
-    const session = this.session
-    this.retryTimer = setTimeout(() => {
-      if (session === this.session) void this.restart(true)
-    }, this.retryDelay)
-    this.retryDelay = Math.min(this.retryDelay * 2, RETRY_MAX_MS)
+    if (retry) {
+      const session = this.session
+      this.retryTimer = setTimeout(() => {
+        if (session === this.session) void this.restart(true)
+      }, this.retryDelay)
+      this.retryDelay = Math.min(this.retryDelay * 2, RETRY_MAX_MS)
+    }
+    // Last: a listener may switch the source, which cancels the retry just scheduled.
+    callAll(this.statusListeners, message)
   }
 
   /** Close the camera and put `live` back on the mock hand. */
@@ -230,12 +247,16 @@ export class CameraPipeline {
   }
 
   private emit(frame: FrameSample): void {
-    for (const fn of this.subscribers) {
-      try {
-        fn(frame)
-      } catch (err) {
-        console.error('[camera] subscriber failed', err)
-      }
+    callAll(this.subscribers, frame)
+  }
+}
+
+function callAll<T>(listeners: Iterable<(value: T) => void>, value: T): void {
+  for (const fn of listeners) {
+    try {
+      fn(value)
+    } catch (err) {
+      console.error('[camera] subscriber failed', err)
     }
   }
 }

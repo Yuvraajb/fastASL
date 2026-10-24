@@ -238,6 +238,46 @@ describe('CameraPipeline', () => {
     expect(h.live).toMatchObject({ mock: false, source: h.handles[1].element, error: null })
   })
 
+  it('reports the first frame of each session and every failure', async () => {
+    const h = harness()
+    const status: (string | null)[] = []
+    h.pipeline.onStatus((error) => status.push(error))
+    await h.pipeline.start(ESP32)
+    h.frame()
+    h.frame()
+    expect(status).toEqual([null])
+
+    h.handles[0].error = 'Lost the ESP32 stream'
+    h.frame()
+    h.setOpen(async () => {
+      throw new Error("Can't reach the ESP32 stream")
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(status).toEqual([null, 'Lost the ESP32 stream', "Can't reach the ESP32 stream"])
+
+    h.setOpen(async (s) => fakeHandle(s))
+    await h.pipeline.setSource(BUILTIN)
+    h.frame()
+    expect(status.at(-1)).toBeNull()
+  })
+
+  it('a status listener that switches the source on a failure cancels the retry', async () => {
+    const h = harness()
+    h.setOpen(async (s) => {
+      if (s.kind === 'mjpeg') throw new Error("Can't reach the ESP32 stream")
+      return fakeHandle(s)
+    })
+    h.pipeline.onStatus((error) => {
+      if (error) void h.pipeline.setSource(BUILTIN)
+    })
+    await h.pipeline.start(ESP32)
+    await vi.advanceTimersByTimeAsync(0)
+    h.frame()
+    expect(h.live).toMatchObject({ mock: false, error: null, source: h.handles[0].element })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(h.deps.openCamera.mock.calls).toEqual([[ESP32], [BUILTIN]])
+  })
+
   it('rebuilds the tracker after an inference error', async () => {
     const h = harness()
     await h.pipeline.start(BUILTIN)

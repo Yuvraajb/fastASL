@@ -15,5 +15,7 @@ export function applyScene(id: string): boolean {
     pick: scene.pick ?? null
   })
   live.mockPose = scene.pose ?? 'palm'
+  // The pipeline owns live.error wherever a camera can run.
+  if (window.fastasl?.isScreenshotMode) live.error = scene.error ?? null
   return true
 }

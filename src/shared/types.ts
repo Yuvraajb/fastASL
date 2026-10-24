@@ -12,6 +12,11 @@ export interface Settings {
   cameraEnabled: boolean
   sensitivity: Sensitivity
   mode: Mode
+  /**
+   * The ESP32-CAM stream URL, kept while the MacBook camera is in use. Until one is typed
+   * in Settings › Camera source, FASTASL_MJPEG_URL from .env (or '').
+   */
+  streamUrl: string
 }
 
 export type EnvKey = 'ANTHROPIC_API_KEY' | 'FACTORY_API_KEY' | 'SPOTIFY_CLIENT_ID' | 'SPOTIFY_CLIENT_SECRET'

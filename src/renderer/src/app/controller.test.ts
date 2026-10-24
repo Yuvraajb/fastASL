@@ -24,6 +24,7 @@ import {
   type GestureName
 } from './controller'
 import { CAPTURE_REASONS } from '../engine/gestures/customShapes'
+import { live } from './live'
 import { mockServices, type Services } from './services'
 import { getApp, setApp, useApp } from './store'
 import type { SettingsPage, Token, View } from './types'
@@ -37,11 +38,13 @@ const word = (text: string): Token => ({ text, kind: 'word' })
 const letter = (text: string): Token => ({ text, kind: 'letter' })
 const MEETING = ['meeting', 'tomorrow', 'at', '3', 'pm'].map(word)
 
+const STREAM = 'http://192.168.1.50:81/stream'
 const SETTINGS: Settings = {
-  cameraSource: { kind: 'mjpeg', url: 'http://192.168.1.50:81/stream' },
+  cameraSource: { kind: 'mjpeg', url: STREAM },
   cameraEnabled: true,
   sensitivity: 'medium',
-  mode: 'command'
+  mode: 'command',
+  streamUrl: STREAM
 }
 const GESTURES: CustomGesture[] = [
   { id: 'builtin-peace', name: 'Peace sign', task: 'Take a screenshot', shape: [], builtin: true, createdAt: 0 },
@@ -324,14 +327,10 @@ describe('settings', () => {
   })
 
   it('root --4 fingers--> camera page --fist--> root --fist--> ready', async () => {
+    await c.loadSettings()
     g('swipeUp')
     fingers(4)
-    await settle()
-    expect(viewAs('settings').settings).toEqual({
-      page: 'camera',
-      current: 'mjpeg',
-      url: 'http://192.168.1.50:81/stream'
-    })
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'mjpeg', url: STREAM })
     g('fist')
     expect(viewAs('settings').settings).toEqual({ page: 'root' })
     g('fist')
@@ -346,20 +345,22 @@ describe('settings', () => {
     expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
   })
 
-  it('camera page: choosing the built-in camera saves it', async () => {
+  it('camera page: choosing the built-in camera saves it', () => {
     c.setView({ kind: 'settings', settings: { page: 'camera', current: 'mjpeg', url: 'http://cam' } })
     fingers(1)
-    await settle()
-    expect(api.saveSettings).toHaveBeenCalledWith({ cameraSource: { kind: 'builtin' } })
-    expect(viewAs('settings').settings).toMatchObject({ page: 'camera', current: 'builtin' })
+    expect(getApp().cameraSource).toEqual({ kind: 'builtin' })
+    expect(api.saveSettings).toHaveBeenCalledWith({ cameraSource: { kind: 'builtin' }, cameraEnabled: true })
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'builtin', url: 'http://cam' })
   })
 
-  it('camera page: choosing the stream saves it and updates the live source', () => {
+  it('camera page: choosing the stream switches the live source at once and saves it on its first frame', () => {
     c.setView({ kind: 'settings', settings: { page: 'camera', current: 'builtin', url: 'http://cam' } })
     fingers(2)
     expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: 'http://cam' })
-    expect(api.saveSettings).toHaveBeenCalledWith({ cameraSource: { kind: 'mjpeg', url: 'http://cam' } })
-    expect(viewAs('settings').settings).toMatchObject({ page: 'camera', current: 'mjpeg' })
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraEnabled: true })
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'mjpeg', url: 'http://cam' })
+    c.cameraStatus(null)
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraSource: { kind: 'mjpeg', url: 'http://cam' } })
   })
 
   it('camera page: the stream needs a URL first', async () => {
@@ -368,6 +369,119 @@ describe('settings', () => {
     await settle()
     expect(api.saveSettings).not.toHaveBeenCalled()
     expect(getApp().notice).toBe('Set a stream URL first (option 3)')
+  })
+
+  it('camera page: picking a source turns a camera that was off back on', () => {
+    setApp({ cameraOn: false })
+    c.setView({ kind: 'settings', settings: { page: 'camera', current: 'builtin', url: 'http://cam' } })
+    fingers(1)
+    expect(getApp().cameraOn).toBe(true)
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ cameraEnabled: true }))
+  })
+
+  it('camera page: 3 fingers open the URL field; Return saves the URL and switches to it', () => {
+    c.setView({ kind: 'settings', settings: { page: 'camera', current: 'builtin', url: STREAM } })
+    fingers(3)
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'builtin', url: STREAM, editing: true })
+    expect(api.saveSettings).not.toHaveBeenCalled()
+    c.saveStreamUrl('  http://192.168.4.7:81/stream ')
+    const source = { kind: 'mjpeg', url: 'http://192.168.4.7:81/stream' }
+    expect(api.saveSettings).toHaveBeenCalledWith({ cameraEnabled: true, streamUrl: source.url })
+    expect(getApp()).toMatchObject({ cameraSource: source, streamUrl: source.url })
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'mjpeg', url: source.url })
+    c.cameraStatus(null)
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraSource: source })
+  })
+
+  it('camera page: a URL that is not http(s) is refused and the field stays open', () => {
+    c.setView({ kind: 'settings', settings: { page: 'camera', current: 'builtin', url: '', editing: true } })
+    c.saveStreamUrl('ftp://x/stream')
+    expect(getApp().notice).toBe('Enter a URL starting with http://')
+    expect(api.saveSettings).not.toHaveBeenCalled()
+    expect(viewAs('settings').settings).toMatchObject({ editing: true })
+  })
+
+  it('camera page: hands typing the URL (a fist, finger counts) leave the field alone; a swipe left, Esc or the X close it', () => {
+    setApp({ cameraSource: { kind: 'builtin' }, streamUrl: STREAM })
+    const editing: SettingsPage = { page: 'camera', current: 'builtin', url: STREAM, editing: true }
+    c.setView({ kind: 'settings', settings: editing })
+    expect(activeGestures(getApp().view)).toEqual(new Set(['swipeLeft']))
+    g('fist')
+    fingers(1)
+    fingers(2)
+    expect(viewAs('settings').settings).toEqual(editing)
+    expect(getApp().cameraSource).toEqual({ kind: 'builtin' })
+    g('swipeLeft')
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'builtin', url: STREAM })
+    g('swipeLeft') // the list itself has no swipe
+    fingers(3)
+    c.tap('close')
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'builtin', url: STREAM })
+    c.tap('close')
+    expect(viewAs('settings').settings).toEqual({ page: 'root' })
+    expect(api.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('camera page: a stream that fails before its first frame gives way to the MacBook camera, which is saved', () => {
+    setApp({ cameraSource: { kind: 'builtin' }, streamUrl: STREAM })
+    c.setView({ kind: 'settings', settings: { page: 'camera', current: 'builtin', url: STREAM } })
+    fingers(3)
+    c.saveStreamUrl('http://192.168.1.99:81/stream')
+    expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: 'http://192.168.1.99:81/stream' })
+    c.cameraStatus("Can't reach the ESP32 stream")
+    expect(getApp()).toMatchObject({ cameraSource: { kind: 'builtin' }, streamUrl: 'http://192.168.1.99:81/stream' })
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraSource: { kind: 'builtin' } })
+    expect(getApp().notice).toBe("Can't reach the ESP32 stream. Using the MacBook camera.")
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'builtin', url: 'http://192.168.1.99:81/stream' })
+    // Hands work again: 2 fingers retry the stream once the camera is fixed.
+    fingers(2)
+    expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: 'http://192.168.1.99:81/stream' })
+  })
+
+  it('camera page: a stream that showed a frame stays through later failures (the pipeline retries it)', () => {
+    c.setView({ kind: 'settings', settings: { page: 'camera', current: 'builtin', url: STREAM } })
+    fingers(2)
+    c.cameraStatus(null)
+    c.cameraStatus('Lost the ESP32 stream')
+    expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: STREAM })
+    expect(api.saveSettings).toHaveBeenCalledTimes(2)
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraSource: { kind: 'mjpeg', url: STREAM } })
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('camera page: picking the stream that is already showing frames has nothing to wait for', () => {
+    setApp({ cameraSource: { kind: 'mjpeg', url: STREAM } })
+    live.mock = false
+    try {
+      c.setView({ kind: 'settings', settings: { page: 'camera', current: 'mjpeg', url: STREAM } })
+      fingers(2)
+      expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraSource: { kind: 'mjpeg', url: STREAM }, cameraEnabled: true })
+      c.cameraStatus('Lost the ESP32 stream')
+      expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: STREAM })
+    } finally {
+      live.mock = true
+    }
+  })
+
+  it('camera page: the MacBook camera never gives way', () => {
+    setApp({ cameraSource: { kind: 'mjpeg', url: STREAM } })
+    c.setView({ kind: 'settings', settings: { page: 'camera', current: 'mjpeg', url: STREAM } })
+    fingers(1)
+    c.cameraStatus('Camera access denied')
+    expect(getApp().cameraSource).toEqual({ kind: 'builtin' })
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('camera page: the stream URL outlives picking the MacBook camera', async () => {
+    await c.loadSettings()
+    c.openSettings()
+    fingers(4)
+    fingers(1)
+    g('fist')
+    fingers(4)
+    expect(viewAs('settings').settings).toEqual({ page: 'camera', current: 'builtin', url: STREAM })
+    fingers(2)
+    expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: STREAM })
   })
 
   it('sensitivity page saves the choice', () => {
@@ -422,6 +536,143 @@ describe('settings', () => {
     await settle(400)
     expect(viewAs('toast')).toMatchObject({ title: 'Screenshot taken', returnTo: 'ready' })
     await settle(TOAST_MS)
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+})
+
+/**
+ * Every Settings page reached and left by hand, with the inputs the dev simulator sends
+ * (Ctrl+Opt+1…5: fingers, Ctrl+Opt+F: fist, Ctrl+Opt+arrows: swipes), and what each pick changes.
+ */
+describe('settings by hand', () => {
+  const page = (): SettingsPage => viewAs('settings').settings
+
+  it.each([
+    ['Ready', [], { kind: 'ready' }],
+    ['Dictation', ['swipeRight'], { kind: 'dictation', text: '' }],
+    ['Spell mode', ['swipeLeft'], { kind: 'ready' }]
+  ] as const)('%s: swipe up opens Settings, and a fist on its first page goes back', (_, enter, idle) => {
+    enter.forEach(g)
+    g('swipeUp')
+    expect(page()).toEqual({ page: 'root' })
+    expect(optionsFor(getApp().view)).toEqual(SETTINGS_ROOT)
+    g('fist')
+    expect(getApp().view).toEqual(idle)
+  })
+
+  it('Done: swipe up opens Settings, which stops the collapse; a fist goes to Ready', async () => {
+    await toAgentReady()
+    g('thumbsUp')
+    await settle(1400)
+    g('thumbsUp') // approves the mock agent's confirm step
+    await settle(1400)
+    expect(viewAs('done').ok).toBe(true)
+    g('swipeUp')
+    await settle(DONE_AUTO_COLLAPSE_MS * 2)
+    expect(page()).toEqual({ page: 'root' })
+    g('fist')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('1 Teach a sign: swipes page, fingers pick a sign (5: Spell a new word), and back leads to Settings', () => {
+    c.openSettings()
+    fingers(1)
+    expect(page()).toMatchObject({ page: 'teachPick', offset: 0 })
+    expect(optionsFor(getApp().view)).toEqual(['YES', 'NO', 'HELLO', 'MEETING', 'Spell a new word'])
+    g('swipeRight')
+    fingers(1)
+    expect(page()).toEqual({ page: 'teachRecord', label: 'TOMORROW', kind: 'word', done: 0, total: 10 })
+    g('fist')
+    expect(page()).toMatchObject({ page: 'teachPick', offset: 4 })
+    // A letter's page goes back by swipe: S, T, M and N are held still like a fist.
+    for (let i = 0; i < 3; i++) g('swipeRight')
+    fingers(1)
+    expect(page()).toEqual({ page: 'teachRecord', label: 'A', kind: 'letter', done: 0, total: 5 })
+    g('fist')
+    expect(page()).toMatchObject({ page: 'teachRecord', label: 'A' })
+    g('swipeLeft')
+    expect(page()).toMatchObject({ page: 'teachPick', offset: 16 })
+    for (let i = 0; i < 4; i++) g('swipeLeft')
+    fingers(5)
+    expect(page()).toEqual({ page: 'teachSpell', letters: '', canSpell: false })
+    g('fist')
+    expect(page()).toMatchObject({ page: 'teachPick', offset: 0 })
+    g('fist')
+    expect(page()).toEqual({ page: 'root' })
+    expect(api.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('2 New gesture: fingers pick the task and start the countdown; swipe left and a fist lead back', async () => {
+    c.openSettings()
+    fingers(2)
+    await settle()
+    expect(page()).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+    fingers(1)
+    expect(page()).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 3 })
+    g('fist') // the shape being formed may read as a fist: only a swipe goes back
+    expect(page()).toMatchObject({ page: 'newGestureHold' })
+    g('swipeLeft')
+    await settle()
+    expect(page()).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+    g('fist')
+    expect(page()).toEqual({ page: 'root' })
+  })
+
+  it('3 My gestures: fingers open a gesture, and fists lead back to the list and to Settings', async () => {
+    c.openSettings()
+    fingers(3)
+    await settle()
+    expect(optionsFor(getApp().view)).toEqual(['Peace sign', 'Rock on'])
+    fingers(2)
+    expect(page()).toMatchObject({ page: 'gestureDetail', gesture: { id: 'g2' } })
+    expect(optionsFor(getApp().view)).toEqual(['Test it', 'Delete'])
+    g('fist')
+    await settle()
+    expect(page()).toMatchObject({ page: 'gestures', offset: 0 })
+    g('fist')
+    expect(page()).toEqual({ page: 'root' })
+  })
+
+  it('4 Camera source: each pick switches the source at once and is saved (a stream on its first frame); 3 opens the URL field', async () => {
+    await c.loadSettings() // the ESP32 stream is the saved source
+    c.openSettings()
+    fingers(4)
+    expect(page()).toEqual({ page: 'camera', current: 'mjpeg', url: STREAM })
+    fingers(1)
+    expect(getApp().cameraSource).toEqual({ kind: 'builtin' })
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraSource: { kind: 'builtin' }, cameraEnabled: true })
+    fingers(2)
+    expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: STREAM })
+    c.cameraStatus(null) // its first frame
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraSource: { kind: 'mjpeg', url: STREAM } })
+    fingers(3)
+    expect(page()).toMatchObject({ page: 'camera', editing: true })
+    c.saveStreamUrl('http://10.0.0.9:81/stream')
+    expect(getApp().cameraSource).toEqual({ kind: 'mjpeg', url: 'http://10.0.0.9:81/stream' })
+    c.cameraStatus(null)
+    expect(api.saveSettings).toHaveBeenLastCalledWith({ cameraSource: { kind: 'mjpeg', url: 'http://10.0.0.9:81/stream' } })
+    expect(api.saveSettings).toHaveBeenCalledTimes(5)
+    g('fist')
+    expect(page()).toEqual({ page: 'root' })
+    g('fist')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('5 Sensitivity: each level is picked by fingers, saved and applied at once', () => {
+    c.openSettings()
+    fingers(5) // an open palm held 0.8 s
+    expect(page()).toEqual({ page: 'sensitivity', current: 'medium' })
+    for (const [count, level] of [[1, 'low'], [3, 'high'], [2, 'medium']] as const) {
+      fingers(count)
+      expect(getApp().sensitivity).toBe(level)
+      expect(api.saveSettings).toHaveBeenLastCalledWith({ sensitivity: level })
+      expect(page()).toEqual({ page: 'sensitivity', current: level })
+    }
+    fingers(4) // three levels only
+    expect(api.saveSettings).toHaveBeenCalledTimes(3)
+    g('fist')
+    expect(page()).toEqual({ page: 'root' })
+    g('fist')
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 })
@@ -2239,6 +2490,37 @@ describe('restoreMode (launch)', () => {
     expect(getApp().mode).toBe('spell')
     expect(getApp().view).toEqual({ kind: 'collapsed' })
     c.expand()
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+})
+
+describe('loadSettings (launch)', () => {
+  it('applies the saved camera, stream URL, sensitivity and mode', async () => {
+    api.getSettings.mockResolvedValue({ ...SETTINGS, cameraEnabled: false, sensitivity: 'high', mode: 'dictation' })
+    await c.loadSettings()
+    expect(getApp()).toMatchObject({
+      cameraOn: false,
+      cameraSource: SETTINGS.cameraSource,
+      streamUrl: STREAM,
+      sensitivity: 'high',
+      mode: 'dictation'
+    })
+    expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+    expect(api.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('a saved stream showed frames before: when it is off, it is retried rather than replaced', async () => {
+    await c.loadSettings()
+    c.cameraStatus("Can't reach the ESP32 stream")
+    expect(getApp().cameraSource).toEqual(SETTINGS.cameraSource)
+    expect(getApp().notice).toBeNull()
+    expect(api.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('keeps the defaults when the settings cannot be read', async () => {
+    api.getSettings.mockRejectedValue(new Error('no main process'))
+    await c.loadSettings()
+    expect(getApp()).toMatchObject({ cameraOn: true, cameraSource: { kind: 'builtin' }, sensitivity: 'medium', mode: 'command' })
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 })

@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { mergeTemplates, validateTemplatePack } from '@shared/templatePack'
-import type { CameraSource, CompletedTask, CustomGesture, Settings, TemplateStore } from '@shared/types'
+import type { CameraSource, CompletedTask, CustomGesture, Mode, Sensitivity, Settings, TemplateStore } from '@shared/types'
 
 /** ~/Library/Application Support/fastASL, or FASTASL_DATA_DIR (dev / smoke tests). */
 export function dataDir(): string {
@@ -31,8 +31,12 @@ export const DEFAULT_SETTINGS: Settings = {
   cameraSource: { kind: 'builtin' },
   cameraEnabled: true,
   sensitivity: 'medium',
-  mode: 'command'
+  mode: 'command',
+  streamUrl: ''
 }
+
+const SENSITIVITIES: readonly unknown[] = ['low', 'medium', 'high'] satisfies Sensitivity[]
+const MODES: readonly unknown[] = ['command', 'dictation', 'spell'] satisfies Mode[]
 
 function isCameraSource(value: unknown): value is CameraSource {
   const v = value as { kind?: unknown; deviceId?: unknown; url?: unknown } | null
@@ -41,17 +45,38 @@ function isCameraSource(value: unknown): value is CameraSource {
   return v.kind === 'mjpeg' && typeof v.url === 'string'
 }
 
-/** Main and renderer both read settings here, so a hand-edited or broken camera source can't crash boot. */
+/** settings.json over the defaults. A hand-edited or broken value falls back to its default, so it can't crash boot. */
+function savedSettings(): Settings {
+  const saved = readJson<unknown>('settings.json', {})
+  const file = typeof saved === 'object' && saved !== null && !Array.isArray(saved) ? saved : {}
+  const s = { ...DEFAULT_SETTINGS, ...file } as Settings
+  if (!isCameraSource(s.cameraSource)) s.cameraSource = DEFAULT_SETTINGS.cameraSource
+  if (typeof s.cameraEnabled !== 'boolean') s.cameraEnabled = DEFAULT_SETTINGS.cameraEnabled
+  if (!SENSITIVITIES.includes(s.sensitivity)) s.sensitivity = DEFAULT_SETTINGS.sensitivity
+  if (!MODES.includes(s.mode)) s.mode = DEFAULT_SETTINGS.mode
+  if (typeof s.streamUrl !== 'string') s.streamUrl = DEFAULT_SETTINGS.streamUrl
+  // A file from before streamUrl kept the typed URL only in its source.
+  if (!('streamUrl' in file) && s.cameraSource.kind === 'mjpeg') s.streamUrl = s.cameraSource.url
+  return s
+}
+
+/**
+ * Main and renderer both read settings here. Until a stream URL is typed (the file's
+ * streamUrl is ''), FASTASL_MJPEG_URL (.env) stands in for it, and a stream picked with it
+ * follows a later .env edit. It is never written to the file.
+ */
 export function getSettings(): Settings {
-  const settings = { ...DEFAULT_SETTINGS, ...readJson<Partial<Settings>>('settings.json', {}) }
-  if (!isCameraSource(settings.cameraSource)) settings.cameraSource = DEFAULT_SETTINGS.cameraSource
+  const settings = savedSettings()
+  if (settings.streamUrl) return settings
+  const envUrl = process.env.FASTASL_MJPEG_URL?.trim() ?? ''
+  if (settings.cameraSource.kind === 'mjpeg' && envUrl) settings.cameraSource = { kind: 'mjpeg', url: envUrl }
+  settings.streamUrl = settings.cameraSource.kind === 'mjpeg' ? settings.cameraSource.url : envUrl
   return settings
 }
 
 export function saveSettings(patch: Partial<Settings>): Settings {
-  const next = { ...getSettings(), ...patch }
-  writeJson('settings.json', next)
-  return next
+  writeJson('settings.json', { ...savedSettings(), ...patch })
+  return getSettings()
 }
 
 export function getTemplates(): TemplateStore {

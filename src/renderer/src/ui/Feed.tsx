@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import { CameraOff } from 'lucide-react'
 import { useApp } from '../app/store'
 import { live } from '../app/live'
 import { animateMockHands, MOCK_FRAME } from './mockHands'
 import { createMockCache, drawBrackets, drawFrame, drawLandmarks, drawMockFrame } from './feedDraw'
 import { prefersReducedMotion, useAnimationFrame } from './useAnimationFrame'
+import { useLiveError } from './useLiveError'
 import './Feed.css'
 
 export type FeedVariant = 'full' | 'thumb' | 'round'
@@ -49,7 +50,7 @@ export function Feed({
   const box = useRef({ w: 0, h: 0 })
   const cache = useRef(createMockCache())
   const fpsRef = useRef<HTMLSpanElement>(null)
-  const [error, setError] = useState<string | null>(live.error)
+  const error = useLiveError(cameraOn)
 
   useEffect(() => {
     const el = canvasRef.current
@@ -62,7 +63,6 @@ export function Feed({
   }, [cameraOn])
 
   useAnimationFrame((t) => {
-    if (live.error !== error) setError(live.error)
     const fps = fpsRef.current
     if (fps) {
       const text = live.mock || !live.fps ? '' : `${Math.round(live.fps)} fps`

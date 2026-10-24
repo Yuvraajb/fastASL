@@ -16,6 +16,8 @@ export interface AppState {
   cameraOn: boolean
   /** Saved camera source; app/engines.ts applies changes to the running camera. */
   cameraSource: CameraSource
+  /** The ESP32-CAM stream URL (Settings › Camera source), kept while the MacBook camera is in use. */
+  streamUrl: string
   /** 0..1 progress of the open-palm hold that expands the collapsed pill. */
   holdProgress: number
   /** Finger-count hold in progress (menus). */
@@ -40,6 +42,7 @@ export const useApp = create<AppState>(() => ({
   sensitivity: 'medium',
   cameraOn: true,
   cameraSource: { kind: 'builtin' },
+  streamUrl: '',
   holdProgress: 0,
   pick: null,
   notice: null,

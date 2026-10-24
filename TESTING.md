@@ -496,3 +496,86 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
     - 28 shows the countdown over an OK hand, and 29 shows four gestures with page dots.
     - New: 38 (recording), 39 (the fist refusal) and 40 ("Gesture saved").
     - The camera light stays off.
+
+## Phase 9 — Settings by hand
+
+**Before you start**
+
+- Use a fresh data folder: `export FASTASL_DATA_DIR=~/fastasl-test9`, then `FASTASL_LOG=1 npm run dev`. No API keys are needed. Steps 6–17 need the ESP32 stand-in: `npm run mock:mjpeg -- --test` in a second terminal (needs ffmpeg).
+- The hotkeys send what your hands would: Ctrl+Opt+↑ is swipe up, Ctrl+Opt+1…5 hold up 1–5 fingers, and Ctrl+Opt+F is a fist. With hands, 4 means four fingers with the thumb folded, and 5 an open palm held still for about 0.8 s. Option+0 opens the dev panel, which now has 4- and 5-finger buttons too.
+- After each step that changes a setting, `cat ~/fastasl-test9/settings.json` should show it.
+- Automated: `npx vitest run src/renderer/src/app src/main/store.test.ts src/renderer/src/engine/camera/pipeline.test.ts`. **Expected:** 4 files, 289 tests passed:
+  - 201 for the controller, including "settings by hand" (the whole Settings tree, driven by fingers, fists and swipes), the camera page (the URL field, and a stream that fails before its first frame) and "loadSettings (launch)".
+  - 50 for the engines: a camera pick switches the running pipeline, a stream failure switches it back, a sensitivity pick reaches both engines, and synthetic hands drive Settings.
+  - 17 for the main-process store: the stream URL, `FASTASL_MJPEG_URL` (never written, and followed by a stream picked with it) and broken values.
+  - 21 for the camera pipeline, including its first-frame and failure reports.
+
+### Opening and leaving Settings
+
+1. **From every idle card.**
+   1. In Ready, press Ctrl+Opt+↑. **Expected:** Settings, with Teach a sign, New gesture, My gestures, Camera source and Sensitivity numbered 1–5, and the hint "hold 1–5 fingers · fist = back". Press Ctrl+Opt+F. **Expected:** Ready.
+   2. Press Ctrl+Opt+→ (Dictation), then Ctrl+Opt+↑ and Ctrl+Opt+F. **Expected:** the Dictation card.
+   3. Press Ctrl+Opt+→ (Spell), then Ctrl+Opt+↑ and Ctrl+Opt+F. **Expected:** Ready, with "Spell" in the header. Press Ctrl+Opt+→ to get back to Command.
+   4. Press Option+5 (Agent ready), then Ctrl+Opt+T. **Expected:** Done, "Couldn't start the agent" (no key). Within 8 s, press Ctrl+Opt+↑. **Expected:** Settings, and it is still there 10 s later (Done's collapse was cancelled). Press Ctrl+Opt+F. **Expected:** Ready.
+2. **With your hands** (camera on, MacBook camera). In Ready, rest a flat hand in view, then swipe up. **Expected:** Settings. Lower your hand.
+   1. Hold up four fingers, thumb folded, for about 0.8 s. **Expected:** the ring fills on badge 4, then Camera source opens.
+   2. Hold a fist for about 1 s. **Expected:** back to the Settings list.
+   3. Lower your hand, then hold an open palm still. **Expected:** after about 0.8 s, Sensitivity opens.
+   4. Make two fists, lowering your hand in between. **Expected:** Ready.
+
+### Every page by finger count
+
+3. **Teach a sign.** Press Ctrl+Opt+↑, then Ctrl+Opt+1. **Expected:** YES, NO, HELLO, MEETING and Spell a new word.
+   1. Press Ctrl+Opt+→, then Ctrl+Opt+1. **Expected:** "Sign TOMORROW · 1 of 10" and "Recording automatically". Press Ctrl+Opt+F. **Expected:** the list's second page.
+   2. Press Ctrl+Opt+← and Ctrl+Opt+5. **Expected:** Spell a new word. Press Ctrl+Opt+F twice. **Expected:** the list, then Settings.
+4. **New gesture.** Press Ctrl+Opt+2. **Expected:** "New gesture" / "Pick a task", with only "Sign a new task" in a fresh folder. Press Ctrl+Opt+1. **Expected:** Ready with the hint "Sign the task for your gesture". Press Ctrl+Opt+F, then Ctrl+Opt+P. **Expected:** the card collapses (a fist in Ready), then expands to a plain Ready without the hint.
+5. **My gestures.** Press Ctrl+Opt+↑, then Ctrl+Opt+3. **Expected:** "Peace sign" (built-in). Press Ctrl+Opt+1. **Expected:** its page, with Test it only. Press Ctrl+Opt+F twice. **Expected:** the list, then Settings.
+
+### Camera source
+
+6. **The `.env` stream URL.** Quit. Add `FASTASL_MJPEG_URL=http://127.0.0.1:8081/stream` to `.env`, start the mock server, and run `npm run dev` again. Press Ctrl+Opt+↑, then Ctrl+Opt+4. **Expected:** MacBook camera checked, and `http://127.0.0.1:8081/stream` under "ESP32-CAM stream". `settings.json` has no `streamUrl`, or an empty one: the `.env` value is never written.
+7. **Pick the stream.** Press Ctrl+Opt+2. **Expected:**
+   - Within about 1 s the feed shows the test pattern, and the check moves to row 2.
+   - The mock server logs "client connected (1 watching)".
+   - `settings.json` has `"cameraSource": {"kind": "mjpeg", …}` and still `"streamUrl": ""`. Nothing restarted.
+
+   Press Ctrl+Opt+F twice (Ready), Ctrl+Opt+→ (Dictation, which saves the mode) and Ctrl+Opt+← (back to Ready). **Expected:** `settings.json` still has `"streamUrl": ""`.
+8. **A camera that was off.** Click the camera icon ("Camera off"). Press Ctrl+Opt+↑, Ctrl+Opt+4 and Ctrl+Opt+2. **Expected:** the camera comes back on with the stream, and `settings.json` has `"cameraEnabled": true`.
+9. **Edit stream URL.** Press Ctrl+Opt+3. **Expected:** a text field under the list holding the current URL, selected, with the hint "Return saves · Esc or swipe ← cancels". Your typing goes to the field.
+   1. Type `ftp://x/stream` and press Return. **Expected:** the notice "Enter a URL starting with http://", and the field stays open.
+   2. **Hands at the keyboard.** Press Ctrl+Opt+F, then Ctrl+Opt+1. **Expected:** nothing happens. The field keeps its text, and the check stays on row 2. Press Ctrl+Opt+← (swipe left). **Expected:** the field closes and the page stays.
+   3. Press Ctrl+Opt+3, then Esc. **Expected:** the field closes, the page stays, and there is no focus ring on the X.
+   4. **A stream that can't be reached.** Press Ctrl+Opt+3, type `http://127.0.0.1:8099/stream` and press Return. **Expected:**
+      - The field closes, the check moves to row 2 with the new URL, and the mock server logs "client left (0 watching)".
+      - Within about 5 s the check moves back to MacBook camera and the feed shows the MacBook camera (macOS may ask for camera access). The notice reads "Can't reach the ESP32 stream. Using the MacBook camera."
+      - `settings.json` has the new URL as `streamUrl` and `"cameraSource": {"kind": "builtin"}`.
+   5. **Hands still work.** With your hand in front of the MacBook camera, hold up two fingers. **Expected:** the stream is tried again, and about 5 s later the same fallback. Hold up three fingers. **Expected:** the field opens with the unreachable URL selected. Press Esc.
+10. **A long reason in full.** Press Ctrl+Opt+3, type `http://127.0.0.1:8081/` and press Return. **Expected:** within about 1 s, MacBook camera is checked again. The notice shows "That URL isn't a camera stream — ESP32-CAM streams usually look like http://<ip>:81/stream. Using the MacBook camera." whole, on four lines.
+11. **Back to the stream.** Press Ctrl+Opt+3, type `http://127.0.0.1:8081/stream` and press Return. **Expected:** the test pattern within about 1 s, with the check on row 2. `settings.json` has the URL as `streamUrl` and in `cameraSource`.
+12. **The URL survives the MacBook camera.** Press Ctrl+Opt+1. **Expected:** the MacBook camera, and row 2 still shows the URL. Press Ctrl+Opt+2. **Expected:** the stream again, with nothing typed.
+13. **The keyboard goes back (optional; needs the Phase 7 permissions).** After step 11, click into a TextEdit document. Press Ctrl+Opt+F twice, Ctrl+Opt+→ (Dictation), then Ctrl+Opt+S. **Expected:** "better" appears in TextEdit, not only on the card.
+
+### Sensitivity and launch
+
+14. **Sensitivity at once.** Press Ctrl+Opt+↑, then Ctrl+Opt+5. **Expected:** Medium checked.
+    1. Press Ctrl+Opt+1. **Expected:** Low checked, and `"sensitivity": "low"` in `settings.json`.
+    2. With your hands, make two fists to get back to Ready, then hold a fist to collapse. **Expected:** it takes about 1.2 s. The palm hold that expands the card takes about 1.35 s.
+    3. Set High (Ctrl+Opt+3). **Expected:** the same holds take about 0.7 s.
+    4. Set Medium again.
+15. **Everything comes back at launch.** Choose Dictation (Ctrl+Opt+→), Settings › Sensitivity › High, and the 8081 stream. Quit from the tray (ASL › Quit) and run `npm run dev` again. **Expected:**
+    - The card opens on Dictation, and there is no camera prompt.
+    - The stream runs.
+    - Settings › Sensitivity has High checked, and Camera source has the stream checked with its URL.
+16. **A saved stream that is off at launch is retried.** Quit, stop the mock server (Ctrl+C) and run `npm run dev` again. **Expected:** "Can't reach the ESP32 stream" at the bottom of the feed, with no camera prompt. The MacBook camera does not take over, since this stream has worked before, and hands don't work. Start the mock server again. **Expected:** within about 10 s the test pattern is back, without touching anything.
+17. **`.env` edits follow a stream picked with it.** Quit. Use a second fresh folder (`export FASTASL_DATA_DIR=~/fastasl-test9-env`), keep `FASTASL_MJPEG_URL=http://127.0.0.1:8081/stream` in `.env`, run `npm run dev`, and pick Settings › Camera source › 2. Quit. Change `.env` to `FASTASL_MJPEG_URL=http://127.0.0.1:8082/stream`, run `npm run mock:mjpeg -- --test --port 8082` in a third terminal, and run `npm run dev` again. **Expected:**
+    - The 8082 server logs "client connected" and the test pattern shows.
+    - Camera source has row 2 checked, with the 8082 URL.
+    - `settings.json` has `"streamUrl": ""`.
+18. **A broken settings file.** Quit, `export FASTASL_DATA_DIR=~/fastasl-test9`, and write `{"mode":"shout","sensitivity":"ultra","cameraEnabled":"yes"}` to `~/fastasl-test9/settings.json`. Relaunch. **Expected:** Ready in Command mode, Medium checked in Sensitivity, the camera on with the MacBook camera, and no errors in the terminal.
+19. **Screenshots.** Run `npm run screens`. **Expected:**
+    - 43 files.
+    - 24, 30 and 31 look unchanged.
+    - 41-settingsCameraUrl shows the URL field with the hint "Return saves · Esc or swipe ← cancels".
+    - 42-settingsCameraError shows MacBook camera checked after a URL that wasn't a stream, with the reason whole in a four-line notice.
+    - 43-settingsCameraLost shows the stream checked, with "Lost the ESP32 stream" at the bottom of the feed and in the notice.
+    - The camera light stays off.

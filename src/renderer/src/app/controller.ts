@@ -82,6 +82,12 @@ const CAPTURE_TIMEOUT_MS = 2500
 const SIGN_TASK_HINT = 'Sign the task for your gesture'
 /** Gestures per page of My gestures (two-line rows). */
 export const GESTURE_PAGE = 4
+/** What Settings › Camera source accepts as a stream URL (the proxy checks the rest). */
+const STREAM_URL = /^https?:\/\/\S+$/i
+/** Why a stream gave way to the MacBook camera: long enough to read. */
+const CAMERA_FALLBACK_NOTICE_MS = 8000
+const BUILTIN_CAMERA: CameraSource = { kind: 'builtin' }
+export const cameraFallbackNotice = (error: string): string => `${error}. Using the MacBook camera.`
 
 const isInsertAction = (action: string): boolean => /\b(insert|type)\b/i.test(action)
 const isMoreAction = (action: string): boolean => /\bmore\b/i.test(action)
@@ -205,6 +211,10 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
           // The new shape may read as a fist (or a thumbs up) while it is formed: until a recording
           // is refused, only a swipe goes back.
           return new Set(view.settings.reason ? ['thumbsUp', 'fist', 'swipeLeft'] : ['swipeLeft'])
+        case 'camera':
+          // Hands typing the URL can read as a fist or a finger count: while the field is open,
+          // only a swipe closes it.
+          return new Set(view.settings.editing ? ['swipeLeft'] : ['fingers', 'fist', 'swipeLeft', 'swipeRight'])
         default:
           return new Set(['fingers', 'fist', 'swipeLeft', 'swipeRight'])
       }
@@ -347,6 +357,8 @@ export class Controller {
   private lastTyped: { kind: Token['kind']; at: number } | null = null
   /** An Insert text / spelling paste is on its way: a second pick would type it twice. */
   private inserting = false
+  /** A stream picked in Settings that hasn't shown a frame yet (cameraStatus). */
+  private untestedStream = false
   private unsubscribe: (() => void) | null = null
 
   constructor(private services: Services) {
@@ -436,9 +448,37 @@ export class Controller {
     void window.fastasl?.saveSettings({ cameraEnabled: cameraOn })
   }
 
-  setCameraSource(cameraSource: CameraSource): void {
-    setApp({ cameraSource })
-    void window.fastasl?.saveSettings({ cameraSource })
+  /**
+   * Settings › Camera source: applied at once (engines.ts switches the running camera when
+   * the store changes), and a camera that was off is turned back on. The MacBook camera is
+   * saved at once, a stream only once it shows a frame (cameraStatus).
+   */
+  private switchCamera(cameraSource: CameraSource, streamUrl?: string): void {
+    const before = getApp().cameraSource
+    const showing = !live.mock && before.kind === 'mjpeg' && cameraSource.kind === 'mjpeg' && before.url === cameraSource.url
+    this.untestedStream = cameraSource.kind === 'mjpeg' && !showing
+    const url = streamUrl === undefined ? {} : { streamUrl }
+    const source = this.untestedStream ? {} : { cameraSource }
+    setApp({ cameraSource, cameraOn: true, ...url })
+    void window.fastasl?.saveSettings({ ...source, cameraEnabled: true, ...url })
+  }
+
+  /**
+   * engines.ts: the camera's first frame (null) or why it failed. Hand gestures need camera
+   * frames, so a stream picked in Settings that fails before its first one gives way to the
+   * MacBook camera: a wrong URL or an ESP32 that is off never takes hand control away.
+   */
+  cameraStatus(error: string | null): void {
+    if (!this.untestedStream) return
+    this.untestedStream = false
+    if (!error) return void window.fastasl?.saveSettings({ cameraSource: getApp().cameraSource })
+    setApp({ cameraSource: BUILTIN_CAMERA })
+    void window.fastasl?.saveSettings({ cameraSource: BUILTIN_CAMERA })
+    this.notify(cameraFallbackNotice(error), CAMERA_FALLBACK_NOTICE_MS)
+    const view = this.view
+    if (view.kind === 'settings' && view.settings.page === 'camera') {
+      this.setView({ kind: 'settings', settings: { ...view.settings, current: 'builtin' } })
+    }
   }
 
   cycleMode(dir: 1 | -1): void {
@@ -452,6 +492,14 @@ export class Controller {
     void window.fastasl?.saveSettings({ mode })
     this.resetPhrase()
     this.setView(this.idleView())
+  }
+
+  /** Launch: the saved camera, sensitivity and mode take effect before the camera and engines start. */
+  async loadSettings(): Promise<void> {
+    const s = await window.fastasl?.getSettings().catch(() => null)
+    if (!s) return
+    setApp({ cameraOn: s.cameraEnabled, cameraSource: s.cameraSource, streamUrl: s.streamUrl, sensitivity: s.sensitivity })
+    this.restoreMode(s.mode)
   }
 
   /** The mode saved last time, applied at launch: an idle card shows that mode's idle view. */
@@ -540,6 +588,7 @@ export class Controller {
         else if (page.page === 'gestures' && (g === 'swipeLeft' || g === 'swipeRight')) this.gesturePage(page, g === 'swipeRight' ? 1 : -1)
         else if (page.page === 'newGestureHold' && g === 'swipeLeft') this.settingsBack()
         else if (page.page === 'newGestureHold' && g === 'thumbsUp') this.startShapeCapture(page.task)
+        else if (page.page === 'camera' && page.editing && g === 'swipeLeft') this.settingsBack()
         return
       }
     }
@@ -1099,6 +1148,7 @@ export class Controller {
     if (view.kind !== 'settings') return
     const page = view.settings
     if (page.page === 'root') return this.setView(this.idleView())
+    if (page.page === 'camera' && page.editing) return this.openCameraSettings() // closes the URL field
     if (page.page === 'gestureDetail') return void this.openGestureList(page.gesture.id)
     if (page.page === 'newGestureHold') return this.startNewGesture()
     if (page.page === 'teachRecord') return this.setView({ kind: 'settings', settings: this.teachList(page.label) })
@@ -1212,7 +1262,7 @@ export class Controller {
         if (index === 0) this.setView({ kind: 'settings', settings: this.teachList() })
         else if (index === 1) this.startNewGesture()
         else if (index === 2) void this.openGestureList()
-        else if (index === 3) void this.openCameraSettings()
+        else if (index === 3) this.openCameraSettings()
         else if (index === 4) this.setView({ kind: 'settings', settings: { page: 'sensitivity', current: getApp().sensitivity } })
         return
       case 'teachPick': {
@@ -1352,34 +1402,30 @@ export class Controller {
     await this.openGestureList()
   }
 
-  private async openCameraSettings(): Promise<void> {
-    const settings = await window.fastasl?.getSettings().catch(() => null)
-    const src = settings?.cameraSource
-    this.setView({
-      kind: 'settings',
-      settings: {
-        page: 'camera',
-        current: src?.kind === 'mjpeg' ? 'mjpeg' : 'builtin',
-        url: src?.kind === 'mjpeg' ? src.url : ''
-      }
-    })
+  /** Camera source, showing the store's settings (loaded at launch, changed only by this page and cameraStatus). */
+  private openCameraSettings(): void {
+    const { cameraSource, streamUrl } = getApp()
+    this.setView({ kind: 'settings', settings: { page: 'camera', current: cameraSource.kind, url: streamUrl } })
   }
 
   private chooseCamera(index: number, page: Extract<SettingsPage, { page: 'camera' }>): void {
-    if (index === 0) {
-      this.setCameraSource({ kind: 'builtin' })
-      this.setView({ kind: 'settings', settings: { ...page, current: 'builtin' } })
-    } else if (index === 1) {
-      if (!page.url) {
-        this.notify('Set a stream URL first (option 3)')
-        return
-      }
-      this.setCameraSource({ kind: 'mjpeg', url: page.url })
-      this.setView({ kind: 'settings', settings: { ...page, current: 'mjpeg' } })
-    } else {
-      // Editing a URL needs the keyboard: handled by the camera settings view (focusable input).
-      this.notify('Type the URL, then press Return')
-    }
+    // Typing a URL needs the keyboard: the page opens its field, which takes focus while open.
+    if (index === 2) return this.setView({ kind: 'settings', settings: { ...page, editing: true } })
+    if (index === 1 && !page.url) return this.notify('Set a stream URL first (option 3)')
+    const source: CameraSource = index === 0 ? { kind: 'builtin' } : { kind: 'mjpeg', url: page.url }
+    this.switchCamera(source)
+    this.setView({ kind: 'settings', settings: { page: 'camera', current: source.kind, url: page.url } })
+  }
+
+  /** Camera source › Edit stream URL, Return: saves the URL and switches to that stream at once. */
+  saveStreamUrl(text: string): void {
+    const view = this.view
+    if (view.kind !== 'settings' || view.settings.page !== 'camera') return
+    const url = text.trim()
+    if (!STREAM_URL.test(url)) return this.notify('Enter a URL starting with http://')
+    this.notify(null)
+    this.switchCamera({ kind: 'mjpeg', url }, url)
+    this.setView({ kind: 'settings', settings: { page: 'camera', current: 'mjpeg', url } })
   }
 }
 

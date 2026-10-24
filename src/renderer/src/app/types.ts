@@ -35,7 +35,8 @@ export type SettingsPage =
   /** `offset`: index of the first gesture on the page (swipes page through the list). */
   | { page: 'gestures'; gestures: Pick<CustomGesture, 'id' | 'name' | 'task' | 'builtin'>[]; offset: number }
   | { page: 'gestureDetail'; gesture: Pick<CustomGesture, 'id' | 'name' | 'task' | 'builtin'> }
-  | { page: 'camera'; current: 'builtin' | 'mjpeg'; url: string }
+  /** `editing`: the stream URL field is open (Edit stream URL); the keyboard saves it. */
+  | { page: 'camera'; current: 'builtin' | 'mjpeg'; url: string; editing?: boolean }
   | { page: 'sensitivity'; current: Sensitivity }
 
 /** Every card state. Exactly one is shown at a time. */

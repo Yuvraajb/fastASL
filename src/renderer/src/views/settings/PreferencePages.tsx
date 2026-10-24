@@ -3,7 +3,7 @@ import { Camera, Gauge, GraduationCap, Laptop, Link, Shapes, Sparkles, Wifi, typ
 import { controller } from '../../app/context'
 import { settingsOptions } from '../../app/controller'
 import { useApp } from '../../app/store'
-import { OptionList, type OptionItem } from '../../ui'
+import { OptionList, useLiveError, type OptionItem } from '../../ui'
 import { fingersHint, SettingsFrame, type PageOf, type SettingsState } from './SettingsFrame'
 import './PreferencePages.css'
 
@@ -37,40 +37,39 @@ export function SensitivityPage({ view, page }: PageProps<'sensitivity'>): React
 }
 
 const CAMERA_ICONS: LucideIcon[] = [Laptop, Wifi, Link]
-const EDIT_URL = 2
-/** The controller's answer to "Edit stream URL" (finger pick); it reveals the input here. */
-const EDIT_URL_NOTICE = 'Type the URL, then press Return'
 const URL_PLACEHOLDER = 'http://192.168.1.50:81/stream'
 
+/**
+ * Picks the camera by finger count (or a click). The feed above shows the chosen source at
+ * once; why it can't run (live.error, or why a stream gave way to the MacBook camera) shows
+ * in full below the list, since the feed's own line is cut to one.
+ */
 export function CameraPage({ view, page }: PageProps<'camera'>): React.JSX.Element {
   const notice = useApp((s) => s.notice)
-  const [editing, setEditing] = useState(false)
-
-  // A finger pick of option 3 only reaches the controller, which posts EDIT_URL_NOTICE.
-  useEffect(() => {
-    if (notice === EDIT_URL_NOTICE) setEditing(true)
-  }, [notice])
+  const cameraOn = useApp((s) => s.cameraOn)
+  const cameraError = useLiveError(cameraOn)
 
   const items: OptionItem[] = settingsOptions(page).map((label, i) => ({ label, icon: CAMERA_ICONS[i] }))
   items[1] = { ...items[1], sub: page.url || 'No stream URL yet', mono: Boolean(page.url) }
 
-  const pick = (i: number): void => {
-    if (i === EDIT_URL) setEditing(true)
-    controller.tap('option', i)
-  }
-
   return (
-    <SettingsFrame view={view} title="Camera source" hint={editing ? ['Return saves', 'Esc cancels'] : fingersHint(items.length)}>
-      <OptionList options={items} selected={page.current === 'builtin' ? 0 : 1} onPick={pick} />
-      {editing ? <UrlField page={page} onDone={() => setEditing(false)} /> : null}
+    <SettingsFrame
+      view={view}
+      title="Camera source"
+      hint={page.editing ? ['Return saves', 'Esc or swipe ← cancels'] : fingersHint(items.length)}
+      notice={notice ?? (cameraOn ? cameraError : null)}
+      noticeLines={4}
+    >
+      <OptionList options={items} selected={page.current === 'builtin' ? 0 : 1} />
+      {page.editing ? <UrlField url={page.url} /> : null}
     </SettingsFrame>
   )
 }
 
-/** Inline URL input. The overlay window only takes keyboard focus while it is focused. */
-function UrlField({ page, onDone }: { page: PageOf<'camera'>; onDone: () => void }): React.JSX.Element {
+/** Inline URL input. The overlay window takes keyboard focus only while it is open. Return saves, Esc closes it. */
+function UrlField({ url }: { url: string }): React.JSX.Element {
   const ref = useRef<HTMLInputElement>(null)
-  const [value, setValue] = useState(page.url)
+  const [value, setValue] = useState(url)
 
   useEffect(() => {
     window.fastasl?.setFocusable(true)
@@ -79,24 +78,9 @@ function UrlField({ page, onDone }: { page: PageOf<'camera'>; onDone: () => void
     return () => window.fastasl?.setFocusable(false)
   }, [])
 
-  const save = (): void => {
-    const url = value.trim()
-    if (!/^https?:\/\/\S+$/i.test(url)) {
-      controller.notify('Enter a URL starting with http://')
-      return
-    }
-    controller.setCameraSource({ kind: 'mjpeg', url })
-    controller.notify(null)
-    controller.setView({ kind: 'settings', settings: { page: 'camera', current: 'mjpeg', url } })
-    onDone()
-  }
-
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
-    if (e.key === 'Enter') save()
-    else if (e.key === 'Escape') {
-      controller.notify(null)
-      onDone()
-    }
+    if (e.key === 'Enter') controller.saveStreamUrl(value)
+    else if (e.key === 'Escape') controller.tap('close')
   }
 
   return (

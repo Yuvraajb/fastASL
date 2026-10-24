@@ -1,8 +1,9 @@
 import type { Mode } from '@shared/types'
 import type { PickProgress } from './store'
 import type { View } from './types'
-import { QUICK_MENU } from './controller'
+import { cameraFallbackNotice, QUICK_MENU } from './controller'
 import type { MockPose } from './live'
+import { STREAM_LOST, STREAM_NOT_MJPEG } from '../engine/camera/cameraSource'
 
 export interface MockScene {
   view: View
@@ -11,6 +12,8 @@ export interface MockScene {
   holdProgress?: number
   pick?: PickProgress | null
   pose?: MockPose
+  /** Camera error shown in the feed (live.error); screenshots only, where the camera never runs. */
+  error?: string
 }
 
 /**
@@ -278,6 +281,22 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     view: { kind: 'settings', settings: { page: 'camera', current: 'builtin', url: 'http://192.168.1.50:81/stream' } },
     pose: 'palm'
   },
+  settingsCameraUrl: {
+    view: { kind: 'settings', settings: { page: 'camera', current: 'builtin', url: 'http://192.168.1.50:81/stream', editing: true } },
+    pose: 'point'
+  },
+  // A typed URL that never showed a frame: the MacBook camera took over.
+  settingsCameraError: {
+    view: { kind: 'settings', settings: { page: 'camera', current: 'builtin', url: 'http://192.168.1.50/' } },
+    notice: cameraFallbackNotice(STREAM_NOT_MJPEG),
+    pose: 'palm'
+  },
+  // A stream that worked, then dropped: the pipeline keeps retrying it.
+  settingsCameraLost: {
+    view: { kind: 'settings', settings: { page: 'camera', current: 'mjpeg', url: 'http://192.168.1.50:81/stream' } },
+    error: STREAM_LOST,
+    pose: 'palm'
+  },
   settingsSensitivity: { view: { kind: 'settings', settings: { page: 'sensitivity', current: 'medium' } }, pose: 'palm' },
   missingKey: {
     view: {
@@ -361,5 +380,8 @@ export const SCREENSHOT_ORDER: string[] = [
   'dictationNoAutomation',
   'settingsShapeRecording',
   'settingsShapeRefused',
-  'toastGestureSaved'
+  'toastGestureSaved',
+  'settingsCameraUrl',
+  'settingsCameraError',
+  'settingsCameraLost'
 ]

@@ -26,9 +26,7 @@ export default function App(): React.JSX.Element {
     void window.fastasl?.getEnvStatus().then((keyStatus) => setApp({ keyStatus }))
     void controller.loadTemplates()
     void controller.loadGestures()
-    void window.fastasl?.getSettings().then((s) => {
-      setApp({ sensitivity: s.sensitivity, cameraOn: s.cameraEnabled, cameraSource: s.cameraSource })
-      controller.restoreMode(s.mode)
+    void controller.loadSettings().then(() => {
       if (liveCamera && !disposed) stopEngines = startEngines(controller)
     })
     return () => {
@@ -36,6 +34,16 @@ export default function App(): React.JSX.Element {
       stopEngines?.()
       controller.dispose()
     }
+  }, [])
+
+  // The panel takes the keyboard only for a text field. As it gives it back, Chromium focuses the
+  // first button (a stray focus ring on the X), so buttons never keep focus.
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent): void => {
+      if (e.target instanceof HTMLButtonElement) e.target.blur()
+    }
+    document.addEventListener('focusin', onFocusIn)
+    return () => document.removeEventListener('focusin', onFocusIn)
   }, [])
 
   // Without a live camera the feed shows a mock hand that matches the state.

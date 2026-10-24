@@ -9,7 +9,7 @@ import './devpanel.css'
 
 const GESTURES: SimGesture[] = [
   'palmHold', 'thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'swipeUp',
-  'fingers1', 'fingers2', 'fingers3', 'handsDown', 'signToken', 'peace'
+  'fingers1', 'fingers2', 'fingers3', 'fingers4', 'fingers5', 'handsDown', 'signToken', 'peace'
 ]
 
 /** Hidden dev menu (Option+0): jump to any mock state, simulate gestures, FPS. */

@@ -15,7 +15,9 @@ import {
 } from '../engine/recognition/synthetic'
 import { staticFeatures } from '../engine/recognition/features'
 import { TeachSession } from '../engine/recognition/teach'
-import type { FrameSample } from '../engine/types'
+import { GestureEngine } from '../engine/gestures/engine'
+import { RecognitionSession } from '../engine/recognition/session'
+import { SENSITIVITY, type FrameSample } from '../engine/types'
 import { Controller, QUICK_MENU } from './controller'
 import { startEngines, subscribeFrames } from './engines'
 import { live } from './live'
@@ -28,7 +30,8 @@ const camera = vi.hoisted(() => ({
   stop: vi.fn(),
   setSource: vi.fn(async () => {}),
   setEnabled: vi.fn(async () => {}),
-  subscribe: vi.fn((_fn: (frame: FrameSample) => void) => () => {})
+  subscribe: vi.fn((_fn: (frame: FrameSample) => void) => () => {}),
+  onStatus: vi.fn((_fn: (error: string | null) => void) => () => {})
 }))
 
 vi.mock('../engine/camera/pipeline', () => ({
@@ -37,7 +40,8 @@ vi.mock('../engine/camera/pipeline', () => ({
   }
 }))
 
-const ESP32: CameraSource = { kind: 'mjpeg', url: 'http://192.168.4.1:81/stream' }
+const ESP32_URL = 'http://192.168.4.1:81/stream'
+const ESP32: CameraSource = { kind: 'mjpeg', url: ESP32_URL }
 
 let controller: Controller
 let stop: (() => void) | null = null
@@ -88,6 +92,52 @@ describe('engines', () => {
     expect(camera.stop).toHaveBeenCalledTimes(1)
     setApp({ cameraSource: ESP32 })
     expect(camera.setSource).not.toHaveBeenCalled()
+  })
+
+  it('Settings by hand: a camera pick switches the running camera at once, a camera that was off included', () => {
+    setApp({ cameraOn: false, streamUrl: ESP32_URL })
+    stop = startEngines(controller)
+    controller.gesture({ gesture: 'swipeUp' })
+    controller.gesture({ gesture: 'fingers', count: 4 })
+    controller.gesture({ gesture: 'fingers', count: 2 })
+    expect(camera.setSource).toHaveBeenLastCalledWith(ESP32)
+    expect(camera.setEnabled).toHaveBeenLastCalledWith(true)
+    controller.gesture({ gesture: 'fingers', count: 1 })
+    expect(camera.setSource).toHaveBeenLastCalledWith({ kind: 'builtin' })
+    controller.gesture({ gesture: 'fingers', count: 3 })
+    controller.saveStreamUrl('http://10.0.0.9:81/stream')
+    expect(camera.setSource).toHaveBeenLastCalledWith({ kind: 'mjpeg', url: 'http://10.0.0.9:81/stream' })
+    expect(camera.setSource).toHaveBeenCalledTimes(3)
+    expect(camera.start).toHaveBeenCalledTimes(1) // switched, never restarted
+  })
+
+  it('Settings by hand: a stream that fails before its first frame switches the running camera back to the MacBook camera', () => {
+    setApp({ streamUrl: ESP32_URL })
+    stop = startEngines(controller)
+    const status = camera.onStatus.mock.calls[0][0]
+    controller.gesture({ gesture: 'swipeUp' })
+    controller.gesture({ gesture: 'fingers', count: 4 })
+    controller.gesture({ gesture: 'fingers', count: 2 })
+    expect(camera.setSource).toHaveBeenLastCalledWith(ESP32)
+    status("Can't reach the ESP32 stream")
+    expect(camera.setSource).toHaveBeenLastCalledWith({ kind: 'builtin' })
+    expect(getApp().view).toMatchObject({ kind: 'settings', settings: { page: 'camera', current: 'builtin' } })
+  })
+
+  it('Settings by hand: a sensitivity pick reaches the gesture engine and the recognizer at once', () => {
+    const gestures = vi.spyOn(GestureEngine.prototype, 'setSensitivity')
+    const signs = vi.spyOn(RecognitionSession.prototype, 'setSensitivity')
+    stop = startEngines(controller)
+    controller.gesture({ gesture: 'swipeUp' })
+    controller.gesture({ gesture: 'fingers', count: 5 })
+    controller.gesture({ gesture: 'fingers', count: 1 })
+    expect(gestures).toHaveBeenLastCalledWith(SENSITIVITY.low)
+    expect(signs).toHaveBeenLastCalledWith(SENSITIVITY.low)
+    controller.gesture({ gesture: 'fingers', count: 3 })
+    expect(gestures).toHaveBeenLastCalledWith(SENSITIVITY.high)
+    expect(signs).toHaveBeenLastCalledWith(SENSITIVITY.high)
+    gestures.mockRestore()
+    signs.mockRestore()
   })
 
   it('fans frames out through the pipeline', () => {
@@ -202,6 +252,34 @@ describe('gesture control', () => {
     play()
     expect(getApp().mode).toBe(mode)
     expect(getApp().view.kind).toBe(mode === 'dictation' ? 'dictation' : 'ready')
+  })
+
+  it('Settings: four fingers open Camera source, a fist goes back, an open palm opens Sensitivity, one finger picks Low', () => {
+    const page = (): unknown => {
+      const view = getApp().view
+      return view.kind === 'settings' ? view.settings.page : view.kind
+    }
+    stop = startEngines(controller)
+    controller.openSettings()
+    tl.hold(900, { pose: 'four', noise: 0.002 })
+    play()
+    expect(page()).toBe('camera')
+    tl.none(400).hold(1000, FIST)
+    play()
+    expect(page()).toBe('root')
+    tl.none(400).hold(900, PALM)
+    play()
+    expect(page()).toBe('sensitivity')
+    tl.none(400).hold(900, { pose: 'one', noise: 0.002 })
+    play()
+    expect(getApp().sensitivity).toBe('low')
+    // Low: holds take 1.35 times longer from now on.
+    tl.none(400).hold(1000, FIST)
+    play()
+    expect(page()).toBe('sensitivity')
+    tl.hold(300, FIST)
+    play()
+    expect(page()).toBe('root')
   })
 
   it('in-view gating: a palm held in ready does nothing', () => {

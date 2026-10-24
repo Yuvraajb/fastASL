@@ -45,6 +45,10 @@ interface SettingsFrameProps {
   feed?: ReactNode
   /** Help line under everything, segments joined by a middle dot. */
   hint: HintItems
+  /** Defaults to store.notice. */
+  notice?: string | null
+  /** Lines the notice shows before an ellipsis (Notice's default: 2). */
+  noticeLines?: number
   children?: ReactNode
 }
 
@@ -53,7 +57,7 @@ interface SettingsFrameProps {
  * notice, hint. Each page is its own component, so moving between pages remounts this
  * and the fade below plays (CardShell only fades on a change of view kind).
  */
-export function SettingsFrame({ view, title, subtitle, aside, feed, hint, children }: SettingsFrameProps): React.JSX.Element {
+export function SettingsFrame({ view, title, subtitle, aside, feed, hint, notice, noticeLines, children }: SettingsFrameProps): React.JSX.Element {
   return (
     <Stack className="set-page">
       <Header view={view} close />
@@ -70,7 +74,7 @@ export function SettingsFrame({ view, title, subtitle, aside, feed, hint, childr
         ) : null}
         {children}
       </Stack>
-      <Notice />
+      <Notice text={notice} lines={noticeLines} />
       <Hint items={hint} />
     </Stack>
   )

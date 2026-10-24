@@ -10,8 +10,10 @@ import { getApp, useApp } from './store'
 /**
  * The single owner of the camera pipeline and the engines fed by it (gestures, sign
  * recognition, the New gesture shape recorder). App starts it on launch, except in
- * screenshot / ?mock=1 mode where the feed keeps its mock hand. Camera settings flow in through the store: controller.toggleCamera sets
- * cameraOn, controller.setCameraSource sets cameraSource. Engine output goes to the controller.
+ * screenshot / ?mock=1 mode where the feed keeps its mock hand. Settings flow in through the
+ * store and apply at once: the camera follows cameraOn (the camera button, a source pick) and
+ * cameraSource (Settings › Camera source), the engines follow sensitivity. Engine output, and
+ * whether the camera works, go to the controller.
  */
 const camera = new CameraPipeline()
 
@@ -33,6 +35,7 @@ export function startEngines(controller: Controller): () => void {
     if (recognition.update(frame)) gestures.spendShown()
   })
   const stopShapes = connectShapeCapture(controller, subscribeFrames)
+  const stopStatus = camera.onStatus((error) => controller.cameraStatus(error))
   void camera.setEnabled(cameraOn)
   void camera.start(cameraSource)
   const unsubscribe = useApp.subscribe((s, prev) => {
@@ -42,6 +45,7 @@ export function startEngines(controller: Controller): () => void {
   const stopLog = window.fastasl?.isDev ? logCameraStatus() : null
   return () => {
     unsubscribe()
+    stopStatus()
     stopLog?.()
     camera.stop()
     gestures.stop()
