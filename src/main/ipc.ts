@@ -6,6 +6,7 @@ import type {
   AgentRunRequest,
   CustomGesture,
   InterpretRequest,
+  LlmStatusEvent,
   Result,
   Settings,
   ShortcutRunResult,
@@ -23,8 +24,20 @@ import type { OverlayWindow } from './window'
  * runs; a missing service answers with a soft error the card can show.
  */
 export interface MainServices {
-  interpret?: (req: InterpretRequest) => Promise<Result<import('@shared/types').IntentResult>>
-  spellSuggest?: (req: SpellRequest) => Promise<Result<string[]>>
+  /**
+   * `onStatus` reaches the card as a one-line notice while the call runs ("Rate limited, retrying...").
+   * `signal` aborts when the card drops the call (IPC.llmCancel).
+   */
+  interpret?: (
+    req: InterpretRequest,
+    onStatus?: (status: string) => void,
+    signal?: AbortSignal
+  ) => Promise<Result<import('@shared/types').IntentResult>>
+  spellSuggest?: (
+    req: SpellRequest,
+    onStatus?: (status: string) => void,
+    signal?: AbortSignal
+  ) => Promise<Result<string[]>>
   agentRun?: (req: AgentRunRequest, emit: (e: AgentEvent) => void) => Promise<Result<{ runId: string }>>
   agentStop?: () => Promise<void>
   agentRespond?: (requestId: string, approved: boolean) => Promise<void>
@@ -39,10 +52,28 @@ export interface MainServices {
 const notReady = <T>(what: string): Result<T> => ({ ok: false, error: `${what} is not available yet` })
 
 export function registerIpc(getOverlay: () => OverlayWindow | null, services: MainServices): void {
-  const emitAgent = (event: AgentEvent): void => {
+  const broadcast = (channel: string, event: AgentEvent | LlmStatusEvent): void => {
     for (const w of BrowserWindow.getAllWindows()) {
-      if (!w.isDestroyed()) w.webContents.send(IPC.agentEvent, event)
+      if (!w.isDestroyed()) w.webContents.send(channel, event)
     }
+  }
+  const emitAgent = (event: AgentEvent): void => broadcast(IPC.agentEvent, event)
+  /** LLM calls still running, by the id their renderer picked, so the card can cancel them. */
+  const llmCalls = new Map<string, AbortController>()
+  /**
+   * Runs one LLM call. With an id, its status lines go out tagged with it and IPC.llmCancel can
+   * abort it; without one it gets neither.
+   */
+  function llmCall<T>(
+    callId: unknown,
+    run: (onStatus?: (status: string) => void, signal?: AbortSignal) => Promise<T>
+  ): Promise<T> {
+    if (typeof callId !== 'string' || !callId) return run()
+    const ctl = new AbortController()
+    llmCalls.set(callId, ctl)
+    return run((status) => broadcast(IPC.llmStatus, { callId, status }), ctl.signal).finally(() => {
+      if (llmCalls.get(callId) === ctl) llmCalls.delete(callId)
+    })
   }
 
   ipcMain.on(IPC.setCardSize, (e, size: CardSize) => {
@@ -69,12 +100,17 @@ export function registerIpc(getOverlay: () => OverlayWindow | null, services: Ma
   ipcMain.handle(IPC.mjpegProxyUrl, (_e, url: string) => services.mjpegProxyUrl?.(url) ?? url)
   ipcMain.handle(IPC.assetBase, () => services.assetBase?.() ?? '')
 
-  ipcMain.handle(IPC.interpret, (_e, req: InterpretRequest) =>
-    services.interpret ? services.interpret(req) : notReady('Claude')
-  )
-  ipcMain.handle(IPC.spellSuggest, (_e, req: SpellRequest) =>
-    services.spellSuggest ? services.spellSuggest(req) : notReady('Claude')
-  )
+  ipcMain.handle(IPC.interpret, (_e, req: InterpretRequest, callId?: string) => {
+    const { interpret } = services
+    return interpret ? llmCall(callId, (onStatus, signal) => interpret(req, onStatus, signal)) : notReady('Claude')
+  })
+  ipcMain.handle(IPC.spellSuggest, (_e, req: SpellRequest, callId?: string) => {
+    const { spellSuggest } = services
+    return spellSuggest ? llmCall(callId, (onStatus, signal) => spellSuggest(req, onStatus, signal)) : notReady('Claude')
+  })
+  ipcMain.on(IPC.llmCancel, (_e, callId: unknown) => {
+    if (typeof callId === 'string') llmCalls.get(callId)?.abort()
+  })
 
   ipcMain.handle(IPC.agentRun, (_e, req: AgentRunRequest) =>
     services.agentRun ? services.agentRun(req, emitAgent) : notReady('The agent')

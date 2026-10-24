@@ -8,6 +8,7 @@ import { registerIpc, type MainServices } from './ipc'
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
+  listeners: new Map<string, (event: unknown, ...args: unknown[]) => void>(),
   windows: [] as { isDestroyed(): boolean; webContents: { send(channel: string, event: AgentEvent): void } }[]
 }))
 
@@ -15,7 +16,7 @@ vi.mock('electron', () => ({
   app: { getPath: () => tmpdir(), getAppPath: () => tmpdir() },
   ipcMain: {
     handle: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) => electron.handlers.set(channel, fn),
-    on: () => undefined
+    on: (channel: string, fn: (event: unknown, ...args: unknown[]) => void) => electron.listeners.set(channel, fn)
   },
   BrowserWindow: { getAllWindows: () => electron.windows },
   shell: {}
@@ -130,5 +131,83 @@ describe('agent IPC', () => {
     expect(await invoke(IPC.agentRun, request)).toEqual({ ok: false, error: 'The agent is not available yet' })
     expect(await invoke(IPC.runShortcut, 'builtin-peace')).toMatchObject({ ok: false, title: 'Shortcut unavailable' })
     expect(await invoke(IPC.agentStop)).toBeUndefined()
+  })
+})
+
+describe('LLM status IPC', () => {
+  const req = { tokens: ['HI'], sentence: 'hi', mode: 'command' as const, frontmost: null, gestures: [] }
+  const intent = { sentence: 'Hi.', intent: null, alternatives: [], confidence: 1, needs_confirmation: false, context_actions: [] }
+
+  /** Every event sent to the one live window. */
+  function liveWindow() {
+    const sent: { channel: string; event: unknown }[] = []
+    electron.windows.splice(0, electron.windows.length, {
+      isDestroyed: () => false,
+      webContents: { send: (channel: string, event: unknown) => void sent.push({ channel, event }) }
+    } as (typeof electron.windows)[number])
+    return sent
+  }
+
+  it("tags a call's status lines with the renderer's call id", async () => {
+    const sent = liveWindow()
+    registerIpc(() => null, {
+      interpret: async (_req, onStatus) => {
+        onStatus?.('Rate limited, retrying...')
+        return { ok: true, value: intent }
+      },
+      spellSuggest: async (_req, onStatus) => {
+        onStatus?.('Rate limited, retrying...')
+        return { ok: true, value: [] }
+      }
+    })
+
+    expect(await invoke(IPC.interpret, req, 'abc-1')).toEqual({ ok: true, value: intent })
+    await invoke(IPC.spellSuggest, { letters: 'KR', frontmost: null }, 'abc-2')
+    expect(sent).toEqual([
+      { channel: IPC.llmStatus, event: { callId: 'abc-1', status: 'Rate limited, retrying...' } },
+      { channel: IPC.llmStatus, event: { callId: 'abc-2', status: 'Rate limited, retrying...' } }
+    ])
+  })
+
+  it('gives a call without an id no status listener and no cancel signal', async () => {
+    liveWindow()
+    const args: unknown[] = []
+    registerIpc(() => null, {
+      interpret: async (_req, onStatus, signal) => {
+        args.push(onStatus, signal)
+        return { ok: true, value: intent }
+      }
+    })
+    await invoke(IPC.interpret, req)
+    expect(args).toEqual([undefined, undefined])
+  })
+
+  it('aborts the call the renderer cancels, and only that one', async () => {
+    liveWindow()
+    const signals: AbortSignal[] = []
+    const answers: (() => void)[] = []
+    registerIpc(() => null, {
+      interpret: (_req, _onStatus, signal) => {
+        signals.push(signal!)
+        return new Promise((resolve) => answers.push(() => resolve({ ok: true, value: intent })))
+      },
+      spellSuggest: (_req, _onStatus, signal) => {
+        signals.push(signal!)
+        return new Promise((resolve) => answers.push(() => resolve({ ok: true, value: [] })))
+      }
+    })
+    const cancel = (callId: unknown): void => electron.listeners.get(IPC.llmCancel)?.({}, callId)
+
+    const a = invoke(IPC.interpret, req, 'w-1')
+    const b = invoke(IPC.spellSuggest, { letters: 'KR', frontmost: null }, 'w-2')
+    cancel('w-1')
+    cancel('nobody')
+    cancel(42)
+    expect(signals.map((s) => s.aborted)).toEqual([true, false])
+
+    answers.forEach((answer) => answer())
+    await Promise.all([a, b])
+    cancel('w-2') // settled: nothing left to abort
+    expect(signals[1].aborted).toBe(false)
   })
 })

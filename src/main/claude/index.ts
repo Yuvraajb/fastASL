@@ -1,7 +1,7 @@
 import type { InterpretRequest, IntentResult, Result, SpellRequest } from '@shared/types'
+import { createLlmService } from '../llm'
 import { getClaude, type ClaudeProvider } from './client'
-import { interpret, type ToolSummary } from './intent'
-import { spellSuggest } from './spell'
+import type { ToolSummary } from './intent'
 
 export type { ToolSummary } from './intent'
 
@@ -17,9 +17,7 @@ export interface ClaudeServiceOptions {
   claude?: ClaudeProvider
 }
 
+/** The LLM service on Claude (LLM_PROVIDER=claude). */
 export function createClaudeService({ tools, claude = getClaude }: ClaudeServiceOptions): ClaudeService {
-  return {
-    interpret: (req) => interpret(req, { tools: tools() }, claude),
-    spellSuggest: (req) => spellSuggest(req, claude)
-  }
+  return createLlmService({ tools, provider: { ok: true, value: 'claude' }, overrides: { claude } })
 }

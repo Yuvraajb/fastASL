@@ -48,6 +48,7 @@ export const useApp = create<AppState>(() => ({
   notice: null,
   keyStatus: {
     ANTHROPIC_API_KEY: false,
+    GEMINI_API_KEY: false,
     FACTORY_API_KEY: false,
     SPOTIFY_CLIENT_ID: false,
     SPOTIFY_CLIENT_SECRET: false

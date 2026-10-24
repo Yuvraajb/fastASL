@@ -1,7 +1,8 @@
 import { z } from 'zod/v4'
 import type { InterpretRequest, IntentResult, Result } from '@shared/types'
+import type { LlmSource } from '../llm/structured'
 import { getClaude, type ClaudeProvider } from './client'
-import { askJson } from './structured'
+import { claudeSource } from './structured'
 import { appContext, cleanList, squash } from './text'
 
 export interface ToolSummary {
@@ -13,7 +14,8 @@ export interface InterpretContext {
   tools: ToolSummary[]
 }
 
-const IntentReply = z.object({
+/** The intent JSON every LLM_PROVIDER must return (Gemini's responseSchema is built from it). */
+export const IntentReply = z.object({
   sentence: z.string(),
   intent: z.string().nullable(),
   alternatives: z.array(z.string()),
@@ -22,7 +24,7 @@ const IntentReply = z.object({
   context_actions: z.array(z.string())
 })
 
-type IntentReply = z.infer<typeof IntentReply>
+export type IntentReply = z.infer<typeof IntentReply>
 
 /** Leading verbs of actions other people see or that are hard to undo. Only ever upgrades to "confirm". */
 const SIDE_EFFECT_VERBS = new Set(
@@ -85,21 +87,34 @@ export function buildRequest(req: InterpretRequest): string {
 }
 
 /** Turns signed glosses into an English sentence and (in command mode) an agent-ready intent. */
-export async function interpret(
+export function interpret(
   req: InterpretRequest,
   ctx: InterpretContext,
   claude: ClaudeProvider = getClaude
 ): Promise<Result<IntentResult>> {
+  return interpretWith(req, ctx, claudeSource(claude))
+}
+
+/** `interpret` on any LLM_PROVIDER: the same prompt, schema and sanitizing for all of them. */
+export async function interpretWith(
+  req: InterpretRequest,
+  ctx: InterpretContext,
+  llm: LlmSource,
+  onStatus?: (status: string) => void,
+  signal?: AbortSignal
+): Promise<Result<IntentResult>> {
   if (!req.tokens.length && !req.sentence.trim() && !req.intentPrefix) {
     return { ok: false, error: 'Nothing signed yet' }
   }
-  const client = claude()
-  if (!client.ok) return client
-  const reply = await askJson(client.value, {
+  const model = llm()
+  if (!model.ok) return model
+  const reply = await model.value.ask({
     system: buildSystemPrompt(ctx.tools),
     user: buildRequest(req),
     schema: IntentReply,
-    maxTokens: 1024
+    maxTokens: model.value.maxTokens.intent,
+    onStatus,
+    signal
   })
   return reply.ok ? { ok: true, value: sanitizeIntent(reply.value, req) } : reply
 }

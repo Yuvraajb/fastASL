@@ -9,7 +9,7 @@ import { getSettings } from './store'
 import { createOverlayWindow, createStageWindow, type OverlayWindow } from './window'
 import { registerDevShortcuts, setupTray } from './devtools'
 import { startMjpegProxy, type MjpegProxy } from './camera/mjpegProxy'
-import { createClaudeService } from './claude'
+import { createLlmService, parseLlmProvider } from './llm'
 import { createAgentServices } from './agent'
 import { TOOLS } from './tools'
 import { getFrontmostApp } from './mac/frontmost'
@@ -42,16 +42,21 @@ function loadRenderer(win: BrowserWindow, query: Record<string, string> = {}): v
 
 /**
  * Dev: one terminal line per call (request -> answer), to check the card's routing against
- * Claude's answer, or Dictation's spacing against what was typed.
+ * the LLM's answer, or Dictation's spacing against what was typed. A status the call reports
+ * on the way ("Rate limited, retrying...") gets a line too.
  */
 function devLogged<Req, T>(
   tag: string,
   name: string,
-  call: (req: Req) => Promise<Result<T>>
-): (req: Req) => Promise<Result<T>> {
+  call: (req: Req, onStatus?: (status: string) => void, signal?: AbortSignal) => Promise<Result<T>>
+): (req: Req, onStatus?: (status: string) => void, signal?: AbortSignal) => Promise<Result<T>> {
   if (!dev) return call
-  return async (req) => {
-    const res = await call(req)
+  return async (req, onStatus, signal) => {
+    const status = (s: string): void => {
+      console.log(`[${tag}] ${name} status: ${s}`)
+      onStatus?.(s)
+    }
+    const res = await call(req, status, signal)
     const answer = res.ok ? (res.value === undefined ? 'ok' : JSON.stringify(res.value)) : JSON.stringify({ error: res.error })
     console.log(`[${tag}] ${name} ${JSON.stringify(req)} -> ${answer}`)
     return res
@@ -83,12 +88,24 @@ function typeAtCursor(text: string): Promise<Result<void>> {
   return typeText(text)
 }
 
-// Claude phrases intents in terms of the agent's real tools.
-const claude = createClaudeService({ tools: () => TOOLS.map(({ name, description }) => ({ name, description })) })
+/**
+ * LLM_PROVIDER (claude | gemini | local | mock) answers interpret and spellSuggest. Unset is
+ * claude; an unknown value makes both answer with its error, so nothing falls back silently.
+ */
+const llmProvider = parseLlmProvider(process.env.LLM_PROVIDER)
+/** Its name for the dev log and the dev footer badge (an unknown value as written, with a "?"). */
+const llmLabel = llmProvider.ok ? llmProvider.value : `${process.env.LLM_PROVIDER?.trim() ?? ''}?`
+if (!llmProvider.ok) console.error(`[llm] ${llmProvider.error}`)
+
+// The LLM phrases intents in terms of the agent's real tools.
+const llm = createLlmService({
+  tools: () => TOOLS.map(({ name, description }) => ({ name, description })),
+  provider: llmProvider
+})
 
 const services: MainServices = {
-  interpret: devLogged('claude', 'interpret', claude.interpret),
-  spellSuggest: devLogged('claude', 'spellSuggest', claude.spellSuggest),
+  interpret: devLogged(llmLabel, 'interpret', llm.interpret),
+  spellSuggest: devLogged(llmLabel, 'spellSuggest', llm.spellSuggest),
   frontmostApp: getFrontmostApp,
   typeText: devLogged('mac', 'typeText', typeAtCursor),
   capture: async (name: string) => {
@@ -177,7 +194,7 @@ async function boot(): Promise<void> {
     }
   }
 
-  overlay = createOverlayWindow({ dev, screenshots, mockServices })
+  overlay = createOverlayWindow({ dev, screenshots, mockServices, llmProvider: llmLabel })
   if (logRenderer) forwardConsole(overlay.win)
   loadRenderer(overlay.win)
 

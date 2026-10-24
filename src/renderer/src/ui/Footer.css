@@ -24,3 +24,26 @@
   font-weight: 500;
   color: var(--text-2);
 }
+
+/* Dev only: the LLM provider, out of the grid so the buttons and the center don't move. */
+.footer--badge {
+  position: relative;
+}
+
+.footer__llm {
+  position: absolute;
+  top: 50%;
+  right: calc(var(--icon-btn) + var(--gap-tight));
+  transform: translateY(-50%);
+  max-width: 72px;
+  overflow: hidden;
+  padding: 1px 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  font-size: var(--fs-badge);
+  line-height: 1.3;
+  color: var(--text-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}

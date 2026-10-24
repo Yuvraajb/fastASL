@@ -1,10 +1,12 @@
 import { z } from 'zod/v4'
 import type { Result, SpellRequest } from '@shared/types'
+import type { LlmSource } from '../llm/structured'
 import { getClaude, type ClaudeProvider } from './client'
-import { askJson } from './structured'
+import { claudeSource } from './structured'
 import { appContext, cleanList } from './text'
 
-const SpellReply = z.object({ suggestions: z.array(z.string()) })
+/** The spelling JSON every LLM_PROVIDER must return. */
+export const SpellReply = z.object({ suggestions: z.array(z.string()) })
 
 const SYSTEM = `You complete fingerspelling for fastASL, a macOS overlay that reads ASL fingerspelling from a camera for Deaf and hard-of-hearing users.
 
@@ -19,15 +21,27 @@ export function buildSpellRequest(req: SpellRequest): string {
 }
 
 /** Up to 3 likely completions/corrections for a run of fingerspelled letters. */
-export async function spellSuggest(req: SpellRequest, claude: ClaudeProvider = getClaude): Promise<Result<string[]>> {
+export function spellSuggest(req: SpellRequest, claude: ClaudeProvider = getClaude): Promise<Result<string[]>> {
+  return spellSuggestWith(req, claudeSource(claude))
+}
+
+/** `spellSuggest` on any LLM_PROVIDER: the same prompt, schema and filtering for all of them. */
+export async function spellSuggestWith(
+  req: SpellRequest,
+  llm: LlmSource,
+  onStatus?: (status: string) => void,
+  signal?: AbortSignal
+): Promise<Result<string[]>> {
   if (!req.letters.trim()) return { ok: true, value: [] }
-  const client = claude()
-  if (!client.ok) return client
-  const reply = await askJson(client.value, {
+  const model = llm()
+  if (!model.ok) return model
+  const reply = await model.value.ask({
     system: SYSTEM,
     user: buildSpellRequest(req),
     schema: SpellReply,
-    maxTokens: 512
+    maxTokens: model.value.maxTokens.spell,
+    onStatus,
+    signal
   })
   if (!reply.ok) return reply
   // Backstop for the prompt: with no "@" spelled, any address in the reply was made up.

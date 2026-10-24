@@ -5,7 +5,13 @@ import dotenv from 'dotenv'
 import type { EnvKey, KeyStatus } from '@shared/types'
 import { dataDir } from './store'
 
-const KEYS: EnvKey[] = ['ANTHROPIC_API_KEY', 'FACTORY_API_KEY', 'SPOTIFY_CLIENT_ID', 'SPOTIFY_CLIENT_SECRET']
+const KEYS: EnvKey[] = [
+  'ANTHROPIC_API_KEY',
+  'GEMINI_API_KEY',
+  'FACTORY_API_KEY',
+  'SPOTIFY_CLIENT_ID',
+  'SPOTIFY_CLIENT_SECRET'
+]
 
 /** Load .env from the project root (dev) or the app data dir (installed). Never throws. */
 export function loadEnv(): void {

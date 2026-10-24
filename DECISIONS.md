@@ -289,3 +289,174 @@ Decisions made while building, in the order they came up. Each entry: what, why,
       - Whether the native panel can become key again after the renderer's window `focus` event in 116. `setFocusable(false)` should prevent that, and `typeAtCursor` releases the keyboard before every paste anyway (97).
 
       These are TESTING Phase 9, steps 2, 9.2–9.5, 10, 12, 13 and 16.
+
+## Gemini provider
+
+122. **`LLM_PROVIDER` picks the model behind both LLM calls: `claude`, `gemini`, `local` or `mock`.**
+    - Unset or blank means `claude`, so nothing changes for a `.env` without it.
+    - The value is trimmed and case-insensitive. Main reads it once at launch, after `loadEnv()`, so `.env` works.
+    - Any other value makes both calls answer `Unknown LLM_PROVIDER "x": use claude, gemini, local or mock`, and launch logs `[llm] Unknown LLM_PROVIDER …`. The app still runs, and nothing falls back to another provider.
+123. **One provider serves intent and spelling, with the same prompts and schemas as Claude.** With `LLM_PROVIDER=gemini`, fastASL needs no Anthropic key.
+    - `interpretWith` and `spellSuggestWith` run on any provider, and `createLlmService` (`src/main/llm`) wires them up.
+    - The prompts (`INSTRUCTIONS`, `buildSystemPrompt`, `buildRequest`, the spelling `SYSTEM` and `buildSpellRequest`), the zod schemas (`IntentReply`, `SpellReply`, now exported) and `sanitizeIntent` stay in `src/main/claude`. The Claude path and its tests didn't move.
+    - Output caps: Claude keeps 1024 for intent and 512 for spelling. Gemini and local use 300 for both, as the user asked for about 300.
+    - `createClaudeService` is now `createLlmService` on `claude`.
+124. **The corrective retry and validation are shared; each provider brings a transport.**
+    - `askStructured(transport, req)` in `src/main/llm/structured.ts` runs the exchange: one call, then exactly one corrective retry when the reply fails to parse or validate. Both attempts share one deadline signal, and zod checks the result.
+    - A transport supplies:
+      - `send`
+      - `text`, which reports a cut-off reply before parsing
+      - `echo`, the bad reply as a turn, or none when it is empty
+      - `failure`, the error mapping
+      - its name for "<name> took too long to answer" and "<name> returned an unusable reply (…)"
+      - its deadline
+    - Claude's `askJson` is this exchange with the Claude transport. It sends the same request, keeps the same 15 s deadline and the same messages, and its 52 tests pass unchanged.
+125. **The Gemini client uses `@google/genai` 2.31.0.**
+    - **Version.** Pinned exactly and kept in `dependencies`, so electron-vite leaves it external. Its engines field is `>=20`, and its README says 3.0 will need Node 22.
+    - **Built lazily, never without a key.** `getGemini()` builds the client on first use, the same way `getClaude` does, and rebuilds it only when the key changes. Without a key the SDK would fall back to Google Cloud default credentials and probe the metadata server, so it is never built without one.
+    - **Missing key.** The result is `{ ok: false, error: 'Add GEMINI_API_KEY to .env', missingKey: 'GEMINI_API_KEY' }`.
+    - **Client options.** `vertexai: false` pins the Developer API. `httpOptions.retryOptions.attempts: 1` keeps the SDK from retrying: 2.31.0 doesn't by default, and this keeps it that way.
+    - **One call per request.** `automaticContinuation: false` makes each `generateContent` one HTTP request.
+126. **The default `GEMINI_MODEL` is `gemini-3.5-flash-lite`.** The docs and the user's wording differ here, and the docs win.
+    - **What the user asked.** "A current Gemini Flash model".
+    - **What the docs say.** "For any new projects, use our latest models: 3.5 Flash-Lite or 3.8 Flash". Flash-Lite is in the Flash family, is stable, and is on the free tier.
+    - **3.8 Flash.** It never answered on this free-tier key during the research probe: it timed out at 20, 60 and 40 s, and 3.6 Flash returned 503.
+    - **3.5 Flash-Lite.** It answered every live check here in 2.5 to 6.6 s. Once, the free tier answered with a 5xx, shown as "Gemini is busy right now".
+    - **Switching.** `GEMINI_MODEL=gemini-3.8-flash` picks the bigger model, and the thinking setting and output cap follow the model (128). It is unverified: it still timed out after 15 s at review time.
+127. **Structured output uses `responseMimeType: 'application/json'` and a `responseSchema` built from the same zod schema that validates the reply.**
+    - **How.** `geminiSchema()` converts the schema's JSON Schema into Gemini's `Schema`, using the `Type` enum. `intent` is written as `nullable: true`, every field is `required`, and `propertyOrdering` follows the fields. A test pins the exact intent and spelling schemas.
+    - **Unsupported shapes.** A shape the converter can't express throws, rather than sending a looser schema.
+    - **Not `z.toJSONSchema` as-is.** Its `$schema` key makes the SDK move the schema to `responseJsonSchema`, and the SDK's converter drops `additionalProperties`.
+    - **Still validated.** The reply is validated with zod and sanitized like Claude's, because the docs say the model "ignores unsupported properties".
+128. **Thinking stays minimal, and the 300 tokens are for the answer.** `maxOutputTokens` includes thought tokens, so `thinkingFor(model)` sends:
+    - `MINIMAL` for Flash-Lite
+    - `LOW` for other 3.x and 4 models (3.8 Flash rejects `MINIMAL`)
+    - `thinkingBudget: 0` for 2.5, and 128 for 2.5 Pro, which can't turn thinking off
+    - nothing for 2.0 and 1.x
+
+    Only one of the two fields is ever sent, because both together is a 400. No temperature or top-p is sent either, following the Gemini 3 guidance. A `models/` prefix on `GEMINI_MODEL` is ignored when matching.
+
+    Thinking the model can't turn off gets room on top of the 300 (`thinkingAllowance`), so it can't cut the JSON off: 1024 tokens for `LOW` and 128 for 2.5 Pro. `MINIMAL`, `thinkingBudget: 0` and no thinking get none, so the default model sends exactly 300. It used 0 thought tokens live.
+129. **How a Gemini reply is read.**
+    - **Text.** The text is the first candidate's non-thought parts.
+    - **Corrective retry.** A cut-off reply (`MAX_TOKENS`) gets the corrective retry with "cut off; keep it shorter", and any other non-STOP finish gets it with "it stopped early". The bad model turn is echoed back unchanged, thought signature included, unless it has no text.
+    - **Blocks.** A blocked prompt (`promptFeedback.blockReason`) or a SAFETY-class finish is "Gemini declined to answer this one", with no retry, like a Claude refusal.
+    - **Errors.**
+      - "Gemini rejected GEMINI_API_KEY. Check .env": a 400 about the key, a 401 or a 403. `missingKey` is not set, because the key is present.
+      - `Gemini has no model "<id>". Check GEMINI_MODEL in .env`: a 404.
+      - "Gemini is busy right now. Try again in a moment": 5xx.
+      - "Can't reach Gemini. Check your connection": `fetch failed`.
+      - "Gemini took too long to answer": a timeout.
+      - `Gemini error: <message>`: anything else, cut to 160 characters.
+130. **HTTP 429 is retried up to 3 times, with a status in the card, but only when a retry can work.**
+    - **Status line.** Before each wait, the call reports "Rate limited, retrying...".
+    - **Waits.** What the server asked for, or else 1 s, 2 s and 4 s with ±10% jitter. Live against a stub, the backoff gaps were 1.1, 1.9 and 4.2 s.
+      - The server's delay is the longer of `RetryInfo.retryDelay` and the message's "Please retry in 37.4s", because `RetryInfo` is often cut to whole seconds.
+    - **One budget per exchange.** The first attempt and the corrective retry share the 3 retries, so one call shows the status at most 3 times.
+    - **No retry when it can't help.** The error then comes at once, with no status:
+      - **Wait too long.** A wait that would leave less than 5 s before the 30 s deadline. A free-tier per-minute 429 often asks for 20 to 50 s, and retrying sooner only earns another 429. Waits that fit are honored in full, up to about 25 s.
+      - **Daily quota.** A `QuotaFailure` whose `quotaId` is per day. It resets at midnight Pacific.
+      - **Zero quota.** A quota of 0 (`quotaValue` "0", or "limit: 0"): the model isn't on the key's tier.
+    - **Messages.**
+      - "Gemini is rate limited. Try again in 51 s", with the server's delay. "…in a minute" when the server sent none.
+      - "Gemini's daily quota is used up. Try tomorrow or set LLM_PROVIDER=claude".
+      - "Gemini has no quota for <model> on this key. Change GEMINI_MODEL in .env".
+    - **Only 429.** 503 and other 5xx get "busy" at once, since the user asked for retries on 429.
+    - **Deadlines.**
+      - Each HTTP request gets 15 s, so a stalled model (like 3.8 Flash in 126) fails as fast as a whole Claude exchange.
+      - The whole Gemini exchange gets 30 s: the requests, the waits and the corrective retry.
+      - A wait still running at the deadline is cut short. Claude keeps its 15 s.
+131. **The status reaches the card over a new IPC channel, `llm:status`, and the card can cancel a call over `llm:cancel`.**
+    - `interpret` and `spellSuggest` take an optional `callId`. Main broadcasts `{ callId, status }` to live windows on `IPC.llmStatus`, the same way agent events go out.
+    - `ipcServices` gives each call an id (a random per-window prefix plus a counter), passes only that id's events to the call's listener, and unsubscribes when the call settles. A call with neither a listener nor a cancel signal gets no id, and main then gives the provider no `onStatus` and no signal.
+    - `Services.interpret` and `spellSuggest` take an optional `onStatus` and an optional `AbortSignal`, which the mock services ignore.
+    - **Cancelling.** When the signal aborts, `ipcServices` sends `llm:cancel` with the call's id. Main keeps an `AbortController` per running call id and aborts it. A call dropped before it reached main is never sent.
+      - In main the signal reaches `askStructured`, which links it to the deadline. The in-flight request and any rate-limit wait stop at once, and the call answers "Cancelled", which nobody shows.
+      - Without this, a call the card had dropped kept retrying 429s for up to 30 s. Every edit during a rate limit added another chain of requests against the same per-minute quota.
+      - It applies to every provider. A superseded Claude or Ollama call stops too, and the card never used those answers anyway.
+    - The dev log prints `[gemini] interpret status: Rate limited, retrying...`, and `-> {"error":"Cancelled"}` for a cancelled call. Each call's line is tagged with the provider (`[claude]`, `[gemini]`, …), so the Claude lines in TESTING Phase 5 read as before.
+132. **The status notice stays as long as its call does, and only on its own.** It is handled by the controller's `showLlmStatus` and `clearLlmStatus`.
+    - **When it shows.** Only while the call is still the card's: the pending interpretation is still that call, or the spelling list is still pending. The notice line must be empty, already hold this status, or hold the last LLM error. So it never covers another notice, such as a missing key or "Still typing the last pick", but a new call's status takes the place of "Gemini is rate limited…" from the call before.
+    - **When it goes.** As soon as the call settles. It also goes as soon as the call is superseded or cancelled: an edit, a new sign (an ambiguous-sign pick included), a delete, a quick-menu pick, a fist, a collapse or Settings. Every `setView` or change of the pending interpretation drops a stale status and cancels the stale call (131).
+    - **A superseded call.** Its late status lines are ignored.
+    - **Never clears another notice.** A notice that replaced the status meanwhile stays when the call settles.
+    - **The final error.** It goes through `notify` as before when the card proceeds. When the Sentence card showed "Rate limited, retrying..." and the retries then fail, the error replaces the status at once, without waiting for a thumbs-up, so the card never looks as if the call worked. A prefetch that fails without having shown a status stays quiet until proceed, as before.
+    - **Where it shows.** On the Sentence card (also during "Understanding..."), on the spelling list and in the collapsed pill.
+    - **Tests.** Two existing controller assertions now also expect the status-listener and cancel-signal arguments (`expect.any(Function)`, `expect.any(AbortSignal)`).
+133. **`LLM_PROVIDER=local` runs Ollama.**
+    - **Request.** `POST <LOCAL_LLM_URL>/api/chat` with:
+      - `stream: false`
+      - `format`: the zod schema's JSON Schema, which Ollama accepts as is
+      - `temperature: 0` and `num_predict: 300`
+      - `think: false`
+      - `keep_alive: '30m'`
+    - **Settings.** `LOCAL_LLM_URL` (default `http://127.0.0.1:11434`, `host:port` accepted) and `LOCAL_LLM_MODEL` (default `llama3.2`). They are plain settings read on each call, not keys.
+    - **Deadline.** 30 s for the exchange, which covers a cold model load (13 s measured).
+    - **Messages.**
+      - "Start Ollama (ollama serve) or set LOCAL_LLM_URL": nothing listens.
+      - "Run: ollama pull <model>": the model isn't pulled.
+      - "No Ollama server at <url>. Check LOCAL_LLM_URL in .env": the URL isn't an Ollama server.
+      - "Ollama is busy right now": 503 or 429.
+    - **Live.**
+      - `llama3.2` answered in 5.2 s with a valid intent.
+      - `tinyllama` rambled past 300 tokens twice, so it ended "The local model returned an unusable reply (it was cut off; keep it shorter)". It is no good for intents.
+      - Small models may also return a tool name as the intent, which `hasSideEffect` doesn't catch (research note). That is left alone, since fixing it would change shared behavior.
+134. **`LLM_PROVIDER=mock` gives canned answers with no key and no network.**
+    - The replies are modeled on the renderer's `mockServices`: a meeting, an email, a low-confidence question, and otherwise the draft as the intent (with the quick-menu prefix). Spelling gets the letters plus a `.com` and an `@` entry.
+    - The replies come back as JSON text, so they go through the same parsing, validation, `@` filter and sanitizing.
+    - It is not `FASTASL_MOCK=1`, which swaps every renderer service (agent and typing included) for mocks.
+135. **Key status and the provider in the renderer.**
+    - `GEMINI_API_KEY` is now an `EnvKey`, in `KeyStatus` and in `getEnvStatus`.
+    - The renderer never pre-checked `keyStatus` for Claude features (it only loads it), so there was nothing to switch to the active provider's key. Missing-key text still comes from the main-process result (`failureText`).
+    - The provider reaches the renderer as `window.fastasl.llmProvider`, through `--fastasl-llm=<name>`.
+136. **The dev footer badge shows the provider.**
+    - **Look.** A 10px gray outlined label (`gemini`, `claude`, `local`, `mock`). It sits left of the chevron, positioned outside the footer grid with `pointer-events: none`, so the camera button, the center and the chevron don't move and nothing is covered.
+    - **Where.** Only in dev mode, and never on the screenshot stage. It shows on the cards that use `Footer`: Ready, Recognizing, Dictation, Spell letters.
+    - **Labels.** It reads `mock` when the renderer itself runs on mock services (`FASTASL_MOCK=1`, `?mock=1`). An unknown value reads `<value>?`.
+    - **Screenshots.** `npm run screens` output differed from the committed PNGs only inside the feed (film grain and the mock hand). The PNGs were restored.
+137. **Verified, and not verified.**
+    - **Checks.** Both typechecks, 965 tests (70 new), the build and the 43 screenshots pass.
+    - **New tests.**
+      - Gemini (28): the schema, thinking and its allowance, the client, parameters, the corrective retry, MAX_TOKENS, blocks, errors, and on fake timers the 429 waits, the shared retry budget, the daily and zero quotas, and cancelling.
+      - Providers (9): selection, identical prompts across providers, sanitizing, spelling, the missing key, an unknown value, and the status pass-through.
+      - Local (8).
+      - Mock (4).
+      - IPC status and cancel (3).
+      - Controller notice lifecycle and cancelling (14).
+      - `ipcServices` routing and cancelling (4).
+    - **Live through the provider modules** (a scratch vite-node harness), with 2 real Gemini calls:
+      - The intent took 6.6 s, with `"intent":"Create a calendar event called Meeting tomorrow at 3 PM"` and confidence 0.95.
+      - Spelling `KRISH` took 4.8 s and returned `["Krish"]`.
+      - On local, `llama3.2` returned a valid intent and `tinyllama` was cut off (133). Mock answered.
+    - **Live in the built app in dev mode** (camera off, a throwaway data folder, driven over CDP), with 3 real Gemini calls:
+      - The badge showed `gemini`.
+      - One call answered and Agent ready showed Gemini's intent.
+      - One got a 5xx ("Gemini is busy right now", Agent ready with the raw sentence).
+      - One was cancelled while it ran.
+    - **Without real calls,** using a local 429 stub through `GOOGLE_GEMINI_BASE_URL`:
+      - The Sentence card showed "Rate limited, retrying..." from the first 429 until the fourth.
+      - The stub saw 4 requests.
+      - The notice cleared when the call settled, and the proceed showed "Gemini is rate limited. Try again in a minute".
+      - `GEMINI_API_KEY=` gave "Add GEMINI_API_KEY to .env", and `LLM_PROVIDER=Bogus` gave the unknown-provider notice and the badge `Bogus?`.
+    - **Not verified.**
+      - A real 429 from Google, which was not provoked, to save the free quota. Its body shape comes from the research note.
+      - Gemini spelling inside the app (it was verified through the harness).
+      - `gemini-3.8-flash` today, and so whether 1024 tokens of `LOW` thinking room is enough for it.
+138. **Review fixes.** Three reviews (spec, code, live) found no critical or major problems. These minor ones were fixed:
+    - **Calls the card dropped kept running.** A superseded or cancelled call kept retrying 429s in main for up to 30 s. Now it is cancelled (131).
+    - **Retries ran out silently on the Sentence card.** The status went and the card looked fine. Now the error replaces it (132).
+    - **A leftover error hid the next status.** A new call's status now replaces the previous LLM error (132).
+    - **An ambiguous-sign pick kept the old status.** The pick now drops the old sentence's interpretation, as a new sign does (132).
+    - **Futile 429 retries.** Retries ran even when the server asked for 51 s or the daily quota was gone, and the error always said "a minute". Now there are no futile retries, the messages are specific, and the retry budget is shared (130).
+    - **The thinking budget could cut the JSON off on 3.8 Flash.** There is now room on top of the 300, and a `models/` prefix is handled (128).
+
+    Not changed: the default model stays `gemini-3.5-flash-lite` (126). The user asked for "a current Gemini Flash model". Flash-Lite is in the Flash line the docs recommend, and `gemini-3.8-flash` still timed out after 15 s at review time. `GEMINI_MODEL=gemini-3.8-flash` switches.
+
+    **Verified after the fixes**
+    - **Built app in dev mode.** Camera off, driven over CDP, against a local stub that always answers 429, with a fake key and no quota used:
+      - A fist while "Rate limited, retrying..." showed: main logged `-> {"error":"Cancelled"}` at once, and the stub got no more requests (before: 3 more over 7 s).
+      - An edit: the old call stopped, and only the new sentence's call retried (5 requests in all, before: 8).
+      - Waiting on the Sentence card: the status, then after about 6 s "Gemini is rate limited. Try again in 2 s".
+      - A 51 s `RetryInfo`: one request, then "Try again in 51 s" on proceed.
+      - A per-day `quotaId`: one request, then the daily-quota message.
+    - **One live Gemini interpret** through the real module, with a cancel signal that never fired: 4.3 s, finish STOP, 88 output tokens, `maxOutputTokens` 300 with `MINIMAL`, and a valid intent ("Create a calendar event called Meeting tomorrow at 3 PM").

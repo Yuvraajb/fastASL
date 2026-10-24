@@ -19,7 +19,12 @@ export interface Settings {
   streamUrl: string
 }
 
-export type EnvKey = 'ANTHROPIC_API_KEY' | 'FACTORY_API_KEY' | 'SPOTIFY_CLIENT_ID' | 'SPOTIFY_CLIENT_SECRET'
+export type EnvKey =
+  | 'ANTHROPIC_API_KEY'
+  | 'GEMINI_API_KEY'
+  | 'FACTORY_API_KEY'
+  | 'SPOTIFY_CLIENT_ID'
+  | 'SPOTIFY_CLIENT_SECRET'
 
 export type KeyStatus = Record<EnvKey, boolean>
 
@@ -80,7 +85,7 @@ export interface InterpretRequest {
   gestures: { name: string; task: string }[]
 }
 
-/** Strict JSON contract returned by Claude. */
+/** Strict JSON contract returned by the LLM (every LLM_PROVIDER). */
 export interface IntentResult {
   sentence: string
   intent: string | null
@@ -93,6 +98,16 @@ export interface IntentResult {
 export interface SpellRequest {
   letters: string
   frontmost: FrontmostApp | null
+}
+
+/** Which LLM answers interpret and spellSuggest (LLM_PROVIDER in .env; unset = claude). */
+export type LlmProviderName = 'claude' | 'gemini' | 'local' | 'mock'
+
+/** Main -> renderer while an interpret / spellSuggest call runs, e.g. "Rate limited, retrying...". */
+export interface LlmStatusEvent {
+  /** The id the renderer passed with the call. */
+  callId: string
+  status: string
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type FastAslApi } from '@shared/ipc'
-import type { AgentEvent, DevCommand } from '@shared/types'
+import type { AgentEvent, DevCommand, LlmStatusEvent } from '@shared/types'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_e: IpcRendererEvent, payload: T): void => cb(payload)
@@ -10,11 +10,24 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   }
 }
 
+/** A `--name=<URI-encoded value>` argument main passed to this window, or ''. */
+function argValue(name: string): string {
+  const prefix = `--${name}=`
+  const arg = process.argv.find((a) => a.startsWith(prefix))
+  if (!arg) return ''
+  try {
+    return decodeURIComponent(arg.slice(prefix.length))
+  } catch {
+    return arg.slice(prefix.length)
+  }
+}
+
 const api: FastAslApi = {
   isDev: process.argv.includes('--fastasl-dev'),
   isScreenshotMode: process.argv.includes('--fastasl-screenshots'),
   nativeVibrancy: process.argv.includes('--fastasl-vibrancy'),
   mockServices: process.argv.includes('--fastasl-mock'),
+  llmProvider: argValue('fastasl-llm'),
 
   setCardSize: (size) => ipcRenderer.send(IPC.setCardSize, size),
   setFocusable: (focusable) => ipcRenderer.send(IPC.setFocusable, focusable),
@@ -33,8 +46,10 @@ const api: FastAslApi = {
   getMjpegProxyUrl: (url) => ipcRenderer.invoke(IPC.mjpegProxyUrl, url),
   getAssetBase: () => ipcRenderer.invoke(IPC.assetBase),
 
-  interpret: (req) => ipcRenderer.invoke(IPC.interpret, req),
-  spellSuggest: (req) => ipcRenderer.invoke(IPC.spellSuggest, req),
+  interpret: (req, callId) => ipcRenderer.invoke(IPC.interpret, req, callId),
+  spellSuggest: (req, callId) => ipcRenderer.invoke(IPC.spellSuggest, req, callId),
+  onLlmStatus: (cb) => subscribe<LlmStatusEvent>(IPC.llmStatus, cb),
+  cancelLlm: (callId) => ipcRenderer.send(IPC.llmCancel, callId),
 
   agentRun: (req) => ipcRenderer.invoke(IPC.agentRun, req),
   agentStop: () => ipcRenderer.invoke(IPC.agentStop),

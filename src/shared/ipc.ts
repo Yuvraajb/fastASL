@@ -8,6 +8,7 @@ import type {
   InterpretRequest,
   IntentResult,
   KeyStatus,
+  LlmStatusEvent,
   Result,
   Settings,
   ShortcutRunResult,
@@ -36,9 +37,11 @@ export const IPC = {
   // camera / assets
   mjpegProxyUrl: 'camera:mjpegProxyUrl',
   assetBase: 'assets:base',
-  // claude
+  // claude (or the LLM_PROVIDER in .env)
   interpret: 'claude:interpret',
   spellSuggest: 'claude:spellSuggest',
+  llmStatus: 'llm:status',
+  llmCancel: 'llm:cancel',
   // agent
   agentRun: 'agent:run',
   agentStop: 'agent:stop',
@@ -68,6 +71,8 @@ export interface FastAslApi {
   nativeVibrancy: boolean
   /** FASTASL_MOCK=1: the renderer uses mock services instead of the main process ones. */
   mockServices: boolean
+  /** LLM_PROVIDER as main resolved it ("claude", "gemini", "local", "mock"), or the unknown value as written. */
+  llmProvider: string
 
   setCardSize(size: CardSize): void
   setFocusable(focusable: boolean): void
@@ -88,8 +93,13 @@ export interface FastAslApi {
   /** Base URL for bundled assets (MediaPipe wasm + models). */
   getAssetBase(): Promise<string>
 
-  interpret(req: InterpretRequest): Promise<Result<IntentResult>>
-  spellSuggest(req: SpellRequest): Promise<Result<string[]>>
+  /** `callId` asks main for status events (onLlmStatus) while the call runs. */
+  interpret(req: InterpretRequest, callId?: string): Promise<Result<IntentResult>>
+  spellSuggest(req: SpellRequest, callId?: string): Promise<Result<string[]>>
+  /** Status lines of running interpret / spellSuggest calls, e.g. "Rate limited, retrying...". */
+  onLlmStatus(cb: (event: LlmStatusEvent) => void): () => void
+  /** Aborts the interpret / spellSuggest call started with this `callId` (the card dropped it). */
+  cancelLlm(callId: string): void
 
   agentRun(req: AgentRunRequest): Promise<Result<{ runId: string }>>
   agentStop(): Promise<void>

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Camera, CameraOff, ChevronDown, MicOff } from 'lucide-react'
-import { controller } from '../app/context'
+import { controller, llmBadge } from '../app/context'
 import { useApp } from '../app/store'
 import { IconButton } from './IconButton'
 import './Footer.css'
@@ -30,7 +30,7 @@ export function Footer({ camera = true, micOff = false, collapse = true, brand =
       <span className="footer__brand">fastASL</span>
     ) : null)
   return (
-    <footer className={`footer${className ? ` ${className}` : ''}`}>
+    <footer className={`footer${llmBadge ? ' footer--badge' : ''}${className ? ` ${className}` : ''}`}>
       <div className="footer__side">
         {camera ? (
           <IconButton
@@ -45,6 +45,11 @@ export function Footer({ camera = true, micOff = false, collapse = true, brand =
       <div className="footer__side footer__side--end">
         {collapse ? <IconButton icon={ChevronDown} label="Minimize" onClick={() => controller.tap('collapse')} /> : null}
       </div>
+      {llmBadge ? (
+        <span className="footer__llm" aria-hidden>
+          {llmBadge}
+        </span>
+      ) : null}
     </footer>
   )
 }

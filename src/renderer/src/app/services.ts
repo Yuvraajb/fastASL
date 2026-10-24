@@ -10,10 +10,17 @@ import type {
   ViewAction
 } from '@shared/types'
 
+/** Status lines of one LLM call while it runs, e.g. "Rate limited, retrying...". */
+export type LlmStatusListener = (status: string) => void
+
+/** What a call the card cancelled before it reached main answers. Nobody shows it. */
+const CANCELLED = { ok: false as const, error: 'Cancelled' }
+
 /** Everything the controller needs from the outside world. */
 export interface Services {
-  interpret(req: InterpretRequest): Promise<Result<IntentResult>>
-  spellSuggest(req: SpellRequest): Promise<Result<string[]>>
+  /** `onStatus` gets the call's progress lines; aborting `signal` cancels the call in main. */
+  interpret(req: InterpretRequest, onStatus?: LlmStatusListener, signal?: AbortSignal): Promise<Result<IntentResult>>
+  spellSuggest(req: SpellRequest, onStatus?: LlmStatusListener, signal?: AbortSignal): Promise<Result<string[]>>
   agentRun(req: AgentRunRequest): Promise<Result<{ runId: string }>>
   agentStop(): Promise<void>
   agentRespond(requestId: string, approved: boolean): Promise<void>
@@ -27,9 +34,36 @@ export interface Services {
 /** Real services: everything goes through the preload bridge to the main process. */
 export function ipcServices(): Services {
   const api = window.fastasl
+  // Ids main tags a call's status events with. The prefix keeps two windows' ids apart.
+  const prefix = Math.random().toString(36).slice(2, 8)
+  let calls = 0
+  /**
+   * Runs `call` with a fresh id, passes its status events to `onStatus` until it settles, and
+   * cancels it in main when `signal` aborts. A call with neither gets no id.
+   */
+  function tracked<T>(
+    onStatus: LlmStatusListener | undefined,
+    signal: AbortSignal | undefined,
+    call: (callId?: string) => Promise<Result<T>>
+  ): Promise<Result<T>> {
+    if (!onStatus && !signal) return call()
+    if (signal?.aborted) return Promise.resolve(CANCELLED)
+    const callId = `${prefix}-${++calls}`
+    const off = onStatus
+      ? api.onLlmStatus((e) => {
+          if (e.callId === callId) onStatus(e.status)
+        })
+      : null
+    const cancel = (): void => api.cancelLlm(callId)
+    signal?.addEventListener('abort', cancel, { once: true })
+    return call(callId).finally(() => {
+      off?.()
+      signal?.removeEventListener('abort', cancel)
+    })
+  }
   return {
-    interpret: (req) => api.interpret(req),
-    spellSuggest: (req) => api.spellSuggest(req),
+    interpret: (req, onStatus, signal) => tracked(onStatus, signal, (callId) => api.interpret(req, callId)),
+    spellSuggest: (req, onStatus, signal) => tracked(onStatus, signal, (callId) => api.spellSuggest(req, callId)),
     agentRun: (req) => api.agentRun(req),
     agentStop: () => api.agentStop(),
     agentRespond: (id, approved) => api.agentRespond(id, approved),

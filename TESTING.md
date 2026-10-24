@@ -579,3 +579,78 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
     - 42-settingsCameraError shows MacBook camera checked after a URL that wasn't a stream, with the reason whole in a four-line notice.
     - 43-settingsCameraLost shows the stream checked, with "Lost the ESP32 stream" at the bottom of the feed and in the notice.
     - The camera light stays off.
+
+## Gemini provider
+
+**Before you start**
+
+- `LLM_PROVIDER` in `.env` picks the LLM: `claude` (default), `gemini`, `local` or `mock`. `.env` is read at launch, so restart after every change.
+- Run `FASTASL_LOG=1 npm run dev` from a terminal. In dev, every LLM call prints one line tagged with the provider: `[gemini] interpret <request> -> <answer>`, or `spellSuggest`.
+- The free Gemini tier has small per-minute and per-day quotas. Each phrase is one call, or two when the first reply is unusable. Steps 1–2 and 8–12 make no Gemini calls.
+- Automated: `npx vitest run src/main/llm src/main/claude src/main/ipc.test.ts src/renderer/src/app/controller.test.ts src/renderer/src/app/services.test.ts`. **Expected:** 12 files and 328 tests pass:
+  - 49 for the providers (Gemini, provider selection, local, mock)
+  - 52 for the Claude module, unchanged
+  - 8 for IPC, 3 of them for status events and cancelling
+  - 215 for the controller, 14 of them for the "Rate limited" notice and cancelling
+  - 4 for `ipcServices`
+
+### Without a key
+
+1. Set `LLM_PROVIDER=gemini` and leave `GEMINI_API_KEY` empty. Run `FASTASL_LOG=1 npm run dev`. **Expected:** Ready shows a small gray `gemini` label in the footer, left of the chevron. Press Ctrl+Opt+S three times, then Ctrl+Opt+H. **Expected:** the log shows `[gemini] interpret {…} -> {"error":"Add GEMINI_API_KEY to .env"}` at once. Press Ctrl+Opt+T. **Expected:** Agent ready with the raw sentence "Meeting tomorrow at", and the notice "Add GEMINI_API_KEY to .env" for about 5 s. Cancel with Ctrl+Opt+F. No Anthropic key is asked for.
+2. Press Ctrl+Opt+← (Spell mode), Ctrl+Opt+S three times (K R I), then Ctrl+Opt+H. **Expected:** "Pick a spelling" with only "KRI", and the same notice. Press Ctrl+Opt+F, then Ctrl+Opt+→ to go back to Command mode.
+
+### With a key
+
+3. **A command.** Put your key in `GEMINI_API_KEY` and restart. Press Ctrl+Opt+S five times (meeting tomorrow at 3 pm), then Ctrl+Opt+H. **Expected:** within about 3–7 s, the log shows an answer such as `{"sentence":"Schedule a meeting tomorrow at 3 PM.","intent":"Create a calendar event called Meeting tomorrow at 3 PM",…,"needs_confirmation":true,…}`. Press Ctrl+Opt+T. **Expected:** Agent ready shows that intent. Cancel with Ctrl+Opt+F; don't send it to the agent.
+4. **Same prompt as Claude.** End any phrase, click the pencil, type `play motion sickness on spotify` and press Return, then press Ctrl+Opt+T. **Expected:** the request line has the frontmost app and your saved gestures, as on Claude. Agent ready shows an intent like "Play Motion Sickness by Phoebe Bridgers on Spotify". Cancel.
+5. **Spelling.** Switch to Spell mode, press Ctrl+Opt+S five times (K R I S H), then Ctrl+Opt+H. **Expected:** after a few seconds, "KRISH" first and up to two suggestions (for example "Krish"), none with "@". The log shows `[gemini] spellSuggest {"letters":"KRISH",…}`. Press Ctrl+Opt+F and go back to Command mode.
+6. **Wrong key.** Set `GEMINI_API_KEY=invalid` and restart. End a phrase and press Ctrl+Opt+T. **Expected:** the notice "Gemini rejected GEMINI_API_KEY. Check .env", not "Add …", and Agent ready with the raw sentence.
+7. **Wrong model.** Put the real key back, set `GEMINI_MODEL=gemini-no-such-model` and restart. End a phrase and press Ctrl+Opt+T. **Expected:** `Gemini has no model "gemini-no-such-model". Check GEMINI_MODEL in .env`. Then clear `GEMINI_MODEL`, which gives the default `gemini-3.5-flash-lite`.
+
+### Rate limits (HTTP 429)
+
+A real 429 needs more requests per minute than the free tier allows (see https://aistudio.google.com/rate-limit). For example, edit the sentence with the pencil many times within a minute. Simulating one is quicker, and it spends no quota:
+
+8. **Start a fake Gemini that always answers 429.** In a second terminal, run:
+   ```
+   node -e "require('http').createServer((q,s)=>{s.writeHead(429,{'content-type':'application/json'});s.end('{\"error\":{\"code\":429,\"message\":\"Resource has been exhausted\",\"status\":\"RESOURCE_EXHAUSTED\"}}')}).listen(8429)"
+   ```
+   Then, with `LLM_PROVIDER=gemini` and any `GEMINI_API_KEY` value, start the app with `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8429 FASTASL_LOG=1 npm run dev`. The SDK then sends every request to the stub.
+9. **Retry, then error.** Press Ctrl+Opt+S five times, then Ctrl+Opt+H. **Expected:**
+   - Within a second, the Sentence card shows the notice "Rate limited, retrying...".
+   - The log prints `[gemini] interpret status: Rate limited, retrying...` three times, about 1, 2 and 4 s apart. The stub sees 4 requests.
+   - After about 7 s the log ends `-> {"error":"Gemini is rate limited. Try again in a minute"}`, and on the Sentence card that message replaces the status for about 5 s.
+
+   Press Ctrl+Opt+T. **Expected:** Agent ready with the raw sentence and the same notice for about 5 s. Within those 5 s, press Ctrl+Opt+← (Edit). **Expected:** the Sentence card, where "Rate limited, retrying..." takes the error's place for the new call. Cancel, end a new phrase, and press Ctrl+Opt+T while "Rate limited, retrying..." still shows. **Expected:** "Understanding..." with the notice under it, then the same error once the retries end.
+10. **Never stale, and cancelled.** End a phrase, and while "Rate limited, retrying..." shows:
+    - Click the pencil, type `open notes` and press Return. **Expected:** the old notice goes away at once, then comes back for the new sentence's own call. The log prints `-> {"error":"Cancelled"}` for the old sentence at once, and only the new call keeps retrying.
+    - Press Ctrl+Opt+F. **Expected:** Ready with no notice. The log prints `-> {"error":"Cancelled"}` at once, with no more status lines, and the stub gets no more requests.
+11. **Spelling.** In Spell mode, spell K R, press Ctrl+Opt+H, and wait for the notice. Press Ctrl+Opt+F. **Expected:** the notice goes with the list, and the log prints `[gemini] spellSuggest … -> {"error":"Cancelled"}`. Go back to Command mode and stop the stub (Ctrl+C).
+12. **Long waits and a used-up daily quota.** Each of these makes one request and no retry, with no "Rate limited, retrying...".
+    - **Long wait.** Start this stub instead, which asks for 51 s:
+      ```
+      node -e "require('http').createServer((q,s)=>{s.writeHead(429,{'content-type':'application/json'});s.end(JSON.stringify({error:{code:429,message:'Please retry in 51s.',status:'RESOURCE_EXHAUSTED',details:[{'@type':'type.googleapis.com/google.rpc.RetryInfo',retryDelay:'51s'}]}}))}).listen(8429)"
+      ```
+      End a phrase and press Ctrl+Opt+T. **Expected:** the notice "Gemini is rate limited. Try again in 51 s".
+    - **Daily quota.** Stop it, start this one, and repeat:
+      ```
+      node -e "require('http').createServer((q,s)=>{s.writeHead(429,{'content-type':'application/json'});s.end(JSON.stringify({error:{code:429,message:'Quota exceeded',status:'RESOURCE_EXHAUSTED',details:[{'@type':'type.googleapis.com/google.rpc.QuotaFailure',violations:[{quotaId:'GenerateRequestsPerDayPerProjectPerModel-FreeTier',quotaValue:'1000'}]}]}}))}).listen(8429)"
+      ```
+      **Expected:** "Gemini's daily quota is used up. Try tomorrow or set LLM_PROVIDER=claude".
+
+    Stop the stub, then quit the app and start it again without `GOOGLE_GEMINI_BASE_URL`.
+
+### Dev badge
+
+13. In `npm run dev`, look at the footer on Ready, Dictation and the Spell-mode letters. **Expected:** a small gray outlined label with the provider (`gemini`) left of the chevron. The camera button, the mic-off icon and the chevron are where they were, and clicking the chevron still collapses the card.
+14. Run `npm run screens`. **Expected:** no screenshot shows the label (for example 03-ready and 20-dictation), and every screenshot looks as before.
+
+### Switching LLM_PROVIDER
+
+15. **Claude.** Set `LLM_PROVIDER=claude` (or remove the line), with `ANTHROPIC_API_KEY` set, and restart. **Expected:** the label reads `claude`, the log lines are `[claude] …`, and TESTING Phase 5 steps 11–22 behave as before.
+16. **Unknown value.** Set `LLM_PROVIDER=openai` and restart. **Expected:** the terminal prints `[llm] Unknown LLM_PROVIDER "openai": use claude, gemini, local or mock` at launch, and the label reads `openai?`. End a phrase and press Ctrl+Opt+T. **Expected:** that message as the notice, and Agent ready with the raw sentence. Spell mode shows the same notice. The rest of the app keeps working.
+17. **Local.** Install Ollama, run `ollama pull llama3.2`, set `LLM_PROVIDER=local` and restart. **Expected:** the label reads `local`. End a phrase and press Ctrl+Opt+T. **Expected:** the first answer can take up to about 15 s while the model loads, then about 2–5 s each. The log shows `[local] interpret … -> {…}`.
+    - Quit Ollama and repeat. **Expected:** "Start Ollama (ollama serve) or set LOCAL_LLM_URL".
+    - Set `LOCAL_LLM_MODEL=llama3.2:1b` without pulling it. **Expected:** "Run: ollama pull llama3.2:1b".
+    - Don't use `tinyllama`: its replies run past 300 tokens and end "The local model returned an unusable reply (it was cut off; keep it shorter)".
+18. **Mock.** Set `LLM_PROVIDER=mock` and restart. **Expected:** the label reads `mock`, and nothing goes over the network. Press Ctrl+Opt+S five times, then Ctrl+Opt+H and Ctrl+Opt+T. **Expected:** at once, Agent ready with "Schedule a meeting tomorrow at 3pm with the team". In Spell mode, K R I gives "KRI", "Kri" and "kri.com" (the made-up address is dropped). Then run `FASTASL_MOCK=1 npm run dev`. **Expected:** the label also reads `mock`, because there the renderer mocks every service, the agent and typing included.

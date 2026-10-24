@@ -1387,7 +1387,11 @@ describe('interpretation', () => {
       tokens: [word('Email'), word('the'), word('team')]
     })
     await settle()
-    expect(interpret).toHaveBeenLastCalledWith(expect.objectContaining({ sentence: 'Email the team' }))
+    expect(interpret).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sentence: 'Email the team' }),
+      expect.any(Function), // the call's status listener
+      expect.any(AbortSignal) // aborted once the card drops the call
+    )
     c.editSentence('   ')
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
@@ -2203,7 +2207,11 @@ describe('spell mode', () => {
     g(gesture)
     expect(viewAs('didYouMean')).toMatchObject({ purpose: 'spell', options: ['KC'] })
     await settle()
-    expect(spellSuggest).toHaveBeenCalledWith({ letters: 'KC', frontmost: { name: 'Mail', windowTitle: 'New Message' } })
+    expect(spellSuggest).toHaveBeenCalledWith(
+      { letters: 'KC', frontmost: { name: 'Mail', windowTitle: 'New Message' } },
+      expect.any(Function), // the call's status listener
+      expect.any(AbortSignal) // aborted once the card drops the call
+    )
   })
 
   it('the raw letters can be typed before the spellings arrive, which are then dropped', async () => {
@@ -2740,5 +2748,239 @@ describe('shortcuts and toasts', () => {
     expect(viewAs('toast').returnTo).toBe('ready')
     await settle(TOAST_MS)
     expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+  })
+})
+
+describe('LLM status notice (rate limits)', () => {
+  const RATE_LIMITED = 'Rate limited, retrying...'
+  type Pending<T> = { status: (s: string) => void; answer: (res: T) => void; signal?: AbortSignal }
+
+  /** interpret / spellSuggest that wait for the test: each call's status listener, answer and signal are kept. */
+  function heldLlm() {
+    const interprets: Pending<Awaited<ReturnType<Services['interpret']>>>[] = []
+    const spells: Pending<Awaited<ReturnType<Services['spellSuggest']>>>[] = []
+    useServices({
+      ...mockServices(),
+      interpret: (_req, onStatus, signal) =>
+        new Promise((answer) => interprets.push({ status: (s) => onStatus?.(s), answer, signal })),
+      spellSuggest: (_req, onStatus, signal) =>
+        new Promise((answer) => spells.push({ status: (s) => onStatus?.(s), answer, signal }))
+    })
+    return { interprets, spells }
+  }
+
+  it('shows while the interpretation retries, through Understanding..., and goes with the answer', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    expect(llm.interprets).toHaveLength(1)
+    llm.interprets[0].status(RATE_LIMITED)
+    expect(getApp().notice).toBe(RATE_LIMITED)
+    g('thumbsUp')
+    expect(viewAs('sentence').thinking).toBe(true)
+    expect(getApp().notice).toBe(RATE_LIMITED)
+
+    llm.interprets[0].answer({ ok: true, value: intentResult({ intent: 'Open Notes' }) })
+    await settle()
+    expect(viewAs('agentReady').intent).toBe('Open Notes')
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('gives way to the final error, shown as before', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    llm.interprets[0].status(RATE_LIMITED)
+    g('thumbsUp')
+    llm.interprets[0].answer({ ok: false, error: 'Gemini is rate limited. Try again in a minute' })
+    await settle()
+    expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
+    expect(viewAs('agentReady')).toMatchObject({ intent: 'Meeting tomorrow at 3 pm' })
+    await settle(5000)
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('goes at once when the sentence is edited, and the old call cannot bring it back', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    llm.interprets[0].status(RATE_LIMITED)
+    c.editSentence('open notes')
+    expect(getApp().notice).toBeNull()
+    await settle()
+    expect(llm.interprets).toHaveLength(2)
+
+    llm.interprets[0].status(RATE_LIMITED)
+    expect(getApp().notice).toBeNull()
+    llm.interprets[0].answer({ ok: false, error: 'Gemini is rate limited. Try again in a minute' })
+    await settle()
+    expect(getApp().notice).toBeNull()
+
+    // The new call's own status still shows.
+    llm.interprets[1].status(RATE_LIMITED)
+    expect(getApp().notice).toBe(RATE_LIMITED)
+  })
+
+  it('goes when the phrase is cancelled', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    llm.interprets[0].status(RATE_LIMITED)
+    g('fist')
+    expect(viewAs('ready')).toBeTruthy()
+    expect(getApp().notice).toBeNull()
+    llm.interprets[0].status(RATE_LIMITED)
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('never covers another notice, and never clears it', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    setApp({ notice: 'Add GEMINI_API_KEY to .env' })
+    llm.interprets[0].status(RATE_LIMITED)
+    expect(getApp().notice).toBe('Add GEMINI_API_KEY to .env')
+    llm.interprets[0].answer({ ok: true, value: intentResult({ intent: 'Open Notes' }) })
+    await settle()
+    expect(getApp().notice).toBe('Add GEMINI_API_KEY to .env')
+  })
+
+  it('a notice that comes up meanwhile is left alone when the call settles', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    llm.interprets[0].status(RATE_LIMITED)
+    c.notify('Still typing the last pick')
+    llm.interprets[0].status(RATE_LIMITED)
+    expect(getApp().notice).toBe('Still typing the last pick')
+    llm.interprets[0].answer({ ok: true, value: intentResult({}) })
+    await settle()
+    expect(getApp().notice).toBe('Still typing the last pick')
+  })
+
+  it('shows while the spellings retry, and goes when the user moves on', async () => {
+    setApp({ mode: 'spell' })
+    const llm = heldLlm()
+    sign(letter('K'), letter('R'))
+    g('handsDown')
+    await settle()
+    llm.spells[0].status(RATE_LIMITED)
+    expect(getApp().notice).toBe(RATE_LIMITED)
+    expect(viewAs('didYouMean').pending).toBe(true)
+
+    g('fist')
+    expect(getApp().notice).toBeNull()
+    llm.spells[0].status(RATE_LIMITED)
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('a spelling status goes with the spellings', async () => {
+    setApp({ mode: 'spell' })
+    const llm = heldLlm()
+    sign(letter('K'), letter('R'))
+    g('handsDown')
+    await settle()
+    llm.spells[0].status(RATE_LIMITED)
+    llm.spells[0].answer({ ok: true, value: ['Krish'] })
+    await settle()
+    expect(viewAs('didYouMean').options).toEqual(['KR', 'Krish'])
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('says on the Sentence card itself when the retries run out, without waiting for proceed', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    llm.interprets[0].status(RATE_LIMITED)
+    llm.interprets[0].answer({ ok: false, error: 'Gemini is rate limited. Try again in a minute' })
+    await settle()
+    expect(viewAs('sentence').thinking).toBeFalsy()
+    expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
+    await settle(5000)
+    expect(getApp().notice).toBeNull()
+
+    // Proceeding later still says it, as before.
+    g('thumbsUp')
+    await settle()
+    expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
+    expect(viewAs('agentReady').intent).toBe('Meeting tomorrow at 3 pm')
+  })
+
+  it('a prefetch that fails without having shown a status stays quiet until proceed, as before', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    llm.interprets[0].answer({ ok: false, error: 'Gemini is busy right now. Try again in a moment' })
+    await settle()
+    expect(getApp().notice).toBeNull()
+  })
+
+  it("a new call's status takes the place of the last call's error", async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    llm.interprets[0].status(RATE_LIMITED)
+    g('thumbsUp')
+    llm.interprets[0].answer({ ok: false, error: 'Gemini is rate limited. Try again in a minute' })
+    await settle()
+    expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
+
+    g('swipeLeft') // Edit: back to the sentence, which is interpreted again
+    await settle()
+    expect(llm.interprets).toHaveLength(2)
+    llm.interprets[1].status(RATE_LIMITED)
+    expect(getApp().notice).toBe(RATE_LIMITED)
+    llm.interprets[1].answer({ ok: true, value: intentResult({ intent: 'Open Notes' }) })
+    await settle()
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('picking an ambiguous sign drops the old sentence\'s call and its status', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    llm.interprets[0].status(RATE_LIMITED)
+    c.ambiguousSign(['today', 'tonight'])
+    fingers(1)
+    expect(viewAs('building').sentence).toBe('Meeting tomorrow at 3 pm today')
+    expect(getApp().notice).toBeNull()
+    expect(llm.interprets[0].signal?.aborted).toBe(true)
+    llm.interprets[0].status(RATE_LIMITED)
+    expect(getApp().notice).toBeNull()
+  })
+
+  it('cancels a call once the card drops it: edited, cancelled or moved on from', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    expect(llm.interprets[0].signal?.aborted).toBe(false)
+    c.editSentence('open notes')
+    expect(llm.interprets[0].signal?.aborted).toBe(true)
+    await settle()
+    expect(llm.interprets[1].signal?.aborted).toBe(false)
+    g('fist')
+    expect(llm.interprets[1].signal?.aborted).toBe(true)
+
+    setApp({ mode: 'spell' })
+    sign(letter('K'), letter('R'))
+    g('handsDown')
+    await settle()
+    expect(llm.spells[0].signal?.aborted).toBe(false)
+    g('fist')
+    expect(llm.spells[0].signal?.aborted).toBe(true)
+  })
+
+  it('keeps the call the card is waiting on, and leaves an answered one alone', async () => {
+    const llm = heldLlm()
+    signSentence(...MEETING)
+    await settle()
+    g('thumbsUp') // Understanding... waits on the same call
+    expect(llm.interprets).toHaveLength(1)
+    expect(llm.interprets[0].signal?.aborted).toBe(false)
+    llm.interprets[0].answer({ ok: true, value: intentResult({ intent: 'Open Notes' }) })
+    await settle()
+    expect(viewAs('agentReady').intent).toBe('Open Notes')
+    g('fist')
+    expect(llm.interprets[0].signal?.aborted).toBe(false)
   })
 })

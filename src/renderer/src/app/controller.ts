@@ -360,6 +360,18 @@ export class Controller {
   /** A stream picked in Settings that hasn't shown a frame yet (cameraStatus). */
   private untestedStream = false
   private unsubscribe: (() => void) | null = null
+  /**
+   * The notice a running LLM call put up ("Rate limited, retrying..."), and whether that call is
+   * still the card's. It goes when the call settles or is superseded or cancelled.
+   */
+  private llmStatus: { text: string; current: () => boolean } | null = null
+  /** The last LLM error shown as the notice: a later call's status may take its place. */
+  private llmErrorNotice: string | null = null
+  /**
+   * LLM calls in flight, each with whether it is still the card's. One that stops being the
+   * card's is aborted, in main too, so a rate-limited call doesn't keep retrying for nobody.
+   */
+  private llmCalls = new Map<AbortController, () => boolean>()
 
   constructor(private services: Services) {
     this.subscribe()
@@ -392,6 +404,7 @@ export class Controller {
   setView(view: View): void {
     this.clearTimers()
     setApp({ view, pick: null })
+    this.dropStaleLlmCalls()
   }
 
   private later(ms: number, fn: () => void): void {
@@ -416,6 +429,53 @@ export class Controller {
     }
   }
 
+  /**
+   * Shows a running LLM call's status as the notice, unless the call is stale or another notice
+   * is up. An earlier LLM error ("Gemini is rate limited...") is not another notice: it gives way.
+   */
+  private showLlmStatus(current: () => boolean, text: string): void {
+    if (!current()) return
+    const { notice } = getApp()
+    if (notice !== null && notice !== this.llmStatus?.text && notice !== this.llmErrorNotice) return
+    this.llmStatus = { text, current }
+    setApp({ notice: text })
+  }
+
+  /** Whether the status notice of the call `current` belongs to is on screen. */
+  private showsLlmStatus(current: () => boolean): boolean {
+    return this.llmStatus?.current === current && getApp().notice === this.llmStatus.text
+  }
+
+  /** An LLM call's error as the notice, for the usual 5 s. */
+  private notifyLlmError(text: string): void {
+    this.llmErrorNotice = text
+    this.notify(text)
+  }
+
+  /** Takes down the status notice of the call `current` belongs to (of any call, without it). */
+  private clearLlmStatus(current?: () => boolean): void {
+    const status = this.llmStatus
+    if (!status || (current && status.current !== current)) return
+    this.llmStatus = null
+    if (getApp().notice === status.text) setApp({ notice: null })
+  }
+
+  /** A superseded or cancelled call is aborted, and its status notice goes with it. */
+  private dropStaleLlmCalls(): void {
+    for (const [abort, current] of this.llmCalls) {
+      if (current()) continue
+      this.llmCalls.delete(abort)
+      abort.abort()
+    }
+    if (this.llmStatus && !this.llmStatus.current()) this.clearLlmStatus()
+  }
+
+  /** The pending interpretation is out of date (edited, re-signed, cancelled). */
+  private forgetInterpretation(): void {
+    this.interpretation = null
+    this.dropStaleLlmCalls()
+  }
+
   private idleView(): View {
     if (getApp().mode === 'dictation') return { kind: 'dictation', text: '' }
     // A quick-menu pick keeps waiting for its details, also after a movement that was no sign.
@@ -425,7 +485,7 @@ export class Controller {
 
   private resetPhrase(): void {
     this.tokens = []
-    this.interpretation = null
+    this.forgetInterpretation()
     this.intentPrefix = undefined
     this.signingTask = false
   }
@@ -686,7 +746,7 @@ export class Controller {
     if (view.kind === 'didYouMean' && view.purpose === 'sign') return
     if (!['ready', 'recognizing', 'building', 'sentence'].includes(view.kind)) return
     this.tokens.push(token)
-    this.interpretation = null
+    this.forgetInterpretation()
     if (this.tokens.length === 1 && view.kind !== 'sentence') {
       this.setView({ kind: 'recognizing', token: token.text, isWord: token.kind === 'word' })
       return
@@ -723,6 +783,8 @@ export class Controller {
     // Dictation types as you sign: a question per word would stall it, so it takes the best guess.
     if (getApp().mode === 'dictation') return this.token({ text: options[0], kind: 'word' })
     if (!['ready', 'recognizing', 'building', 'sentence'].includes(this.view.kind)) return
+    // The phrase grows (or is edited): an interpretation of the Sentence card is out of date.
+    this.forgetInterpretation()
     this.setView({ kind: 'didYouMean', variant: 'list', options: options.slice(0, 3), purpose: 'sign' })
   }
 
@@ -749,7 +811,7 @@ export class Controller {
     } else {
       this.tokens.pop()
     }
-    this.interpretation = null
+    this.forgetInterpretation()
     if (!this.tokens.length) return this.cancel()
     if (this.view.kind === 'sentence') {
       this.setView({ kind: 'sentence', sentence: assembleSentence(this.tokens), tokens: [...this.tokens] })
@@ -778,22 +840,37 @@ export class Controller {
     const sentence = assembleSentence(this.tokens)
     const intentPrefix = this.intentPrefix
     const mode = getApp().mode
+    const current = (): boolean => this.interpretation === interpretation
+    const abort = new AbortController()
     const interpretation = (async (): Promise<Interpretation> => {
       const frontmost = await this.services.frontmostApp().catch(() => null)
       const gestures = (await window.fastasl?.getGestures().catch(() => [])) ?? []
       const res = await settled(
-        this.services.interpret({
-          tokens,
-          sentence,
-          mode,
-          intentPrefix,
-          frontmost,
-          gestures: gestures.map((g) => ({ name: g.name, task: g.task }))
-        })
+        this.services.interpret(
+          {
+            tokens,
+            sentence,
+            mode,
+            intentPrefix,
+            frontmost,
+            gestures: gestures.map((g) => ({ name: g.name, task: g.task }))
+          },
+          (status) => this.showLlmStatus(current, status),
+          abort.signal
+        )
       )
-      return res.ok ? { result: res.value, error: null } : { result: null, error: failureText(res) }
+      this.llmCalls.delete(abort)
+      const retrying = this.showsLlmStatus(current)
+      this.clearLlmStatus(current)
+      if (res.ok) return { result: res.value, error: null }
+      const error = failureText(res)
+      // The card said it was retrying: when that fails, it says so now, not only on proceed.
+      if (retrying && current()) this.notifyLlmError(error)
+      return { result: null, error }
     })()
     this.interpretation = interpretation
+    this.llmCalls.set(abort, current)
+    this.dropStaleLlmCalls()
     return interpretation
   }
 
@@ -810,7 +887,7 @@ export class Controller {
     if (this.signingTask) return this.taskSigned(result, error, sentence)
     if (!result) {
       // Claude unavailable: still let the agent try with the raw sentence and the quick-menu pick.
-      if (error) this.notify(error)
+      if (error) this.notifyLlmError(error)
       const intent = this.intentPrefix ? `${this.intentPrefix}: ${sentence}` : sentence
       this.setView({ kind: 'agentReady', intent, variant: 'default', sentence })
       return
@@ -820,7 +897,7 @@ export class Controller {
 
   /** New gesture › Sign a new task: Claude's intent (else the sentence) is the task; then the shape. */
   private taskSigned(result: IntentResult | null, error: string | null, rawSentence: string): void {
-    if (error) this.notify(error)
+    if (error) this.notifyLlmError(error)
     const sentence = result?.sentence || rawSentence
     const task = result?.intent || (this.intentPrefix ? `${this.intentPrefix}: ${sentence}` : sentence)
     this.resetPhrase()
@@ -882,6 +959,7 @@ export class Controller {
       case 'didYouMean':
         if (view.purpose === 'sign') {
           this.tokens.push({ text: choice, kind: 'word' })
+          this.forgetInterpretation()
           this.setView({
             kind: 'building',
             tokens: [...this.tokens],
@@ -906,7 +984,7 @@ export class Controller {
         this.intentPrefix = choice
         // From Context actions › More options: the signed sentence is the details, so interpret it now.
         if (view.fromSentence) {
-          this.interpretation = null
+          this.forgetInterpretation()
           this.setView({ kind: 'sentence', sentence: assembleSentence(this.tokens), tokens: [...this.tokens] })
           void this.proceed()
           return
@@ -939,10 +1017,17 @@ export class Controller {
     const list: View = { kind: 'didYouMean', variant: 'list', options: [letters], purpose: 'spell', quote: letters }
     const pending: View = { ...list, pending: true }
     this.setView(pending)
+    const current = (): boolean => this.view === pending
+    const abort = new AbortController()
+    this.llmCalls.set(abort, current)
     const frontmost = await this.services.frontmostApp().catch(() => null)
-    const res = await settled(this.services.spellSuggest({ letters, frontmost }))
-    if (this.view !== pending) return // picked, edited or cancelled meanwhile
-    if (!res.ok) this.notify(failureText(res))
+    const res = await settled(
+      this.services.spellSuggest({ letters, frontmost }, (status) => this.showLlmStatus(current, status), abort.signal)
+    )
+    this.llmCalls.delete(abort)
+    this.clearLlmStatus(current)
+    if (!current()) return // picked, edited or cancelled meanwhile
+    if (!res.ok) this.notifyLlmError(failureText(res))
     const options = res.ok ? [letters, ...res.value.filter((s) => s !== letters)].slice(0, 3) : [letters]
     this.setView({ ...list, options })
   }
