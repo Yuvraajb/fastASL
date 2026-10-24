@@ -139,7 +139,8 @@ export type AgentEvent =
   | { type: 'started'; runId: string; intent: string }
   | { type: 'step'; runId: string; step: AgentStep }
   | { type: 'confirm'; runId: string; requestId: string; tool: string; details: ConfirmDetails }
-  | { type: 'done'; runId: string; result: AgentResult }
+  /** `complete`: the whole task got done. A declined or half-finished task still ends in 'done' (whatever ran is reported). */
+  | { type: 'done'; runId: string; result: AgentResult; complete: boolean }
   | { type: 'error'; runId: string; message: string; missingKey?: EnvKey }
   | { type: 'stopped'; runId: string }
 

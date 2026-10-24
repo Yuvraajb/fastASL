@@ -135,7 +135,8 @@ export function mockServices(): Services {
               emit({
                 type: 'done',
                 runId,
-                result: { title: 'Cancelled', subtitle: 'No event was created.', evidence: [] }
+                result: { title: 'Nothing was done', subtitle: 'You cancelled it', evidence: [] },
+                complete: false
               })
               return
             }
@@ -150,7 +151,8 @@ export function mockServices(): Services {
             subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
             evidence: [{ tool: 'calendar_create_event', args: { title: 'Team Sync' }, ok: true, result: 'created' }],
             view: { kind: 'openApp', app: 'Calendar' }
-          }
+          },
+          complete: true
         })
       })()
       return { ok: true, value: { runId } }

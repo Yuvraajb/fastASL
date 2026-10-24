@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, session, systemPreferences } from 'electro
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
-import type { Result } from '@shared/types'
+import type { AgentEvent, Result } from '@shared/types'
 import { loadEnv } from './env'
 import { registerIpc, type MainServices } from './ipc'
 import { getSettings } from './store'
@@ -10,7 +10,8 @@ import { createOverlayWindow, createStageWindow, type OverlayWindow } from './wi
 import { registerDevShortcuts, setupTray } from './devtools'
 import { startMjpegProxy, type MjpegProxy } from './camera/mjpegProxy'
 import { createClaudeService } from './claude'
-import { TOOL_CATALOG } from './claude/toolCatalog'
+import { createAgentServices } from './agent'
+import { TOOLS } from './tools'
 import { getFrontmostApp } from './mac/frontmost'
 
 const screenshots = process.env.FASTASL_SCREENSHOTS === '1'
@@ -48,7 +49,17 @@ function devLogged<Req, T>(name: string, call: (req: Req) => Promise<Result<T>>)
   }
 }
 
-const claude = createClaudeService({ tools: () => TOOL_CATALOG })
+/** Dev: one terminal line per agent event, next to the [agent] session logs. */
+function devLoggedEmit(emit: (e: AgentEvent) => void): (e: AgentEvent) => void {
+  if (!dev) return emit
+  return (e) => {
+    console.log(`[agent] ${JSON.stringify(e)}`)
+    emit(e)
+  }
+}
+
+// Claude phrases intents in terms of the agent's real tools.
+const claude = createClaudeService({ tools: () => TOOLS.map(({ name, description }) => ({ name, description })) })
 
 const services: MainServices = {
   interpret: devLogged('interpret', claude.interpret),
@@ -67,6 +78,31 @@ const services: MainServices = {
 
 function forwardConsole(win: BrowserWindow): void {
   win.webContents.on('console-message', ({ level, message }) => console.log(`[renderer:${level}] ${message}`))
+}
+
+/** Longest wait on quit for the droid process to exit before the app goes anyway. */
+const AGENT_DISPOSE_MS = 3000
+
+/**
+ * The Factory Droid agent: one persistent session, opened in the background now so the first
+ * command doesn't wait for it. A missing key or droid CLI is reported when a command is sent.
+ */
+function startAgent(): void {
+  const agent = createAgentServices()
+  services.agentRun = (req, emit) => agent.agentRun(req, devLoggedEmit(emit))
+  services.agentStop = agent.agentStop
+  services.agentRespond = agent.agentRespond
+  services.runShortcut = (gestureId, emit) => agent.runShortcut(gestureId, devLoggedEmit(emit))
+
+  // Hold the quit until the droid process is closed (bounded), so it never outlives the app.
+  let disposed = false
+  app.on('before-quit', (e) => {
+    if (disposed) return
+    disposed = true
+    e.preventDefault()
+    const timeout = new Promise<void>((resolve) => setTimeout(resolve, AGENT_DISPOSE_MS))
+    void Promise.race([agent.dispose().catch(() => undefined), timeout]).then(() => app.quit())
+  })
 }
 
 /** ESP32-CAM streams go through a local CORS proxy so MediaPipe can read the frames. */
@@ -102,6 +138,8 @@ async function boot(): Promise<void> {
     return
   }
 
+  // The renderer uses mock services then, so no droid process is started.
+  if (!mockServices) startAgent()
   await startCameraProxy()
 
   if (process.platform === 'darwin') {

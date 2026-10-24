@@ -5,6 +5,7 @@ import type {
   CustomGesture,
   IntentResult,
   Settings,
+  ShortcutRunResult,
   SignTemplate,
   TemplateStore
 } from '@shared/types'
@@ -220,6 +221,7 @@ describe('gesture gating', () => {
     expect(optionsFor({ kind: 'quickMenu', options: QUICK_MENU })).toEqual(QUICK_MENU)
     expect(optionsFor({ kind: 'settings', settings: { page: 'root' } })).toEqual(SETTINGS_ROOT)
     expect(optionsFor({ kind: 'done', ok: true, title: '', subtitle: '' })).toEqual(['View', 'New command', 'Save as gesture'])
+    expect(optionsFor({ kind: 'done', ok: false, title: '', subtitle: '' })).toEqual(['View', 'New command'])
   })
 })
 
@@ -1245,7 +1247,7 @@ describe('agent run', () => {
     expect(viewAs('working').intent).toBe('Schedule a meeting tomorrow at 3pm with the team')
     await settle()
     expect(respond).toHaveBeenCalledWith(confirm.requestId, false)
-    expect(viewAs('done')).toMatchObject({ ok: false, title: 'Cancelled', subtitle: 'No event was created.' })
+    expect(viewAs('done')).toMatchObject({ ok: false, title: 'Nothing was done', subtitle: 'You cancelled it' })
     // A failed result stays twice as long before collapsing.
     await settle(DONE_AUTO_COLLAPSE_MS)
     viewAs('done')
@@ -1344,13 +1346,42 @@ describe('agent run', () => {
     expect(viewAs('working').steps).toHaveLength(1)
     g('fist')
     await settle()
-    emit({ type: 'done', runId: 'r1', result: { title: 'Cancelled', subtitle: '', evidence: [] } })
+    emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Opening Spotify', status: 'done' } })
+    emit({ type: 'error', runId: 'r1', message: 'Interrupted' })
     emit({ type: 'confirm', runId: 'r1', requestId: 'late', tool: 'x', details: { kind: 'generic', title: 't', lines: [] } })
     expect(viewAs('toast').title).toBe('Stopped')
     // A late confirmation request is denied so the agent never waits forever.
     expect(manual.agentRespond).toHaveBeenCalledWith('late', false)
     await settle(TOAST_MS)
     expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('a stopped run that had already sent something says so instead of "Stopped"', async () => {
+    const { services: manual, emit } = manualAgent(services)
+    useServices(manual)
+    c.setView({ kind: 'agentReady', intent: 'Text Mom on my way', variant: 'default', sentence: 'Text Mom on my way' })
+    g('thumbsUp')
+    await settle()
+    emit({ type: 'step', runId: 'r1', step: { id: 'm', label: 'Messaging Mom', status: 'current' } })
+    g('fist')
+    expect(viewAs('toast')).toMatchObject({ title: 'Stopped', subtitle: 'The agent was interrupted' })
+    // The send was already running: main reports it once it lands.
+    const sent = [{ tool: 'message_send', args: {}, ok: true }]
+    emit({ type: 'done', runId: 'r1', result: { title: 'Message sent', subtitle: 'You stopped the rest', evidence: sent }, complete: false })
+    expect(viewAs('toast')).toMatchObject({ ok: false, title: 'Message sent', subtitle: 'You stopped the rest', returnTo: 'ready' })
+    await settle(TOAST_MS)
+    expect(getApp().view).toEqual({ kind: 'ready' })
+
+    // Once the card has moved on, the report is a notice.
+    c.setView({ kind: 'agentReady', intent: 'Email Sam hi', variant: 'default', sentence: 'Email Sam hi' })
+    g('thumbsUp')
+    await settle()
+    g('fist')
+    await settle(TOAST_MS)
+    signSentence(word('hi'))
+    emit({ type: 'done', runId: 'r1', result: { title: 'Email sent', subtitle: 'You stopped the rest', evidence: sent }, complete: false })
+    expect(getApp().notice).toBe('Email sent before you stopped')
+    expect(getApp().view.kind).not.toBe('toast')
   })
 
   it('a stop before the agent starts never launches it', async () => {
@@ -1403,18 +1434,74 @@ describe('agent run', () => {
     expect(viewAs('done').subtitle).toBe('Spotify is not running')
   })
 
-  it('done without successful evidence is not ok', async () => {
+  it('an unfinished task is not ok, even with successful evidence; a complete one is, despite a failed retry', async () => {
     const { services: manual, emit } = manualAgent(services)
+    useServices(manual)
+    c.setView({ kind: 'agentReady', intent: 'Text Mom hi', variant: 'default', sentence: 'Text Mom hi' })
+    g('thumbsUp')
+    await settle()
+    const sent = [{ tool: 'message_send', args: {}, ok: true }]
+    emit({ type: 'done', runId: 'r1', result: { title: 'Message sent', subtitle: 'Droid process exited', evidence: sent }, complete: false })
+    expect(viewAs('done')).toMatchObject({ ok: false, title: 'Message sent', subtitle: 'Droid process exited' })
+    await settle(DONE_AUTO_COLLAPSE_MS)
+    viewAs('done') // failures stay twice as long
+    // Not a completed task: 3 fingers don't save it, and New gesture doesn't suggest it.
+    expect(optionsFor(getApp().view)).toEqual(['View', 'New command'])
+    fingers(3)
+    await settle()
+    viewAs('done')
+    c.startNewGesture()
+    await settle()
+    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+
+    c.setView({ kind: 'agentReady', intent: 'Play jazz', variant: 'default', sentence: 'Play jazz' })
+    g('thumbsUp')
+    await settle()
+    const retried = [{ tool: 'spotify_play', args: {}, ok: false }, { tool: 'spotify_play', args: {}, ok: true }]
+    emit({ type: 'done', runId: 'r1', result: { title: 'Playing jazz', subtitle: '', evidence: retried }, complete: true })
+    expect(viewAs('done').ok).toBe(true)
+    fingers(3)
+    await settle()
+    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Play jazz', 'Open Notes'] })
+  })
+
+  it('holds events until agentRun replies with the run id, then shows only that run\'s', async () => {
+    const { services: manual, emit } = manualAgent(services)
+    let reply: (value: { ok: true; value: { runId: string } }) => void = () => {}
+    vi.mocked(manual.agentRun).mockImplementation(() => new Promise((resolve) => (reply = resolve)))
     useServices(manual)
     c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
     g('thumbsUp')
     await settle()
-    emit({
-      type: 'done',
-      runId: 'r1',
-      result: { title: 'Partly done', subtitle: '', evidence: [{ tool: 'a', args: {}, ok: true }, { tool: 'b', args: {}, ok: false }] }
-    })
-    expect(viewAs('done').ok).toBe(false)
+    // The previous run's stop and this run's start arrive before the reply: nothing shows yet.
+    emit({ type: 'stopped', runId: 'old' })
+    emit({ type: 'started', runId: 'r2', intent: 'x' })
+    emit({ type: 'step', runId: 'r2', step: { id: 'a', label: 'Thinking', status: 'current' } })
+    emit({ type: 'step', runId: 'old', step: { id: 'b', label: 'Old step', status: 'current' } })
+    emit({ type: 'confirm', runId: 'old', requestId: 'stale', tool: 'x', details: { kind: 'generic', title: 't', lines: [] } })
+    expect(viewAs('working').steps).toEqual([])
+    reply({ ok: true, value: { runId: 'r2' } })
+    await settle()
+    expect(viewAs('working').steps).toEqual([{ id: 'a', label: 'Thinking', status: 'current' }])
+    expect(manual.agentRespond).toHaveBeenCalledWith('stale', false)
+    emit({ type: 'done', runId: 'r2', result: { title: 'Opened', subtitle: '', evidence: [] }, complete: true })
+    expect(viewAs('done').title).toBe('Opened')
+  })
+
+  it('a failed start drops the events it held, declining their confirms', async () => {
+    const { services: manual, emit } = manualAgent(services)
+    let reply: (value: { ok: false; error: string }) => void = () => {}
+    vi.mocked(manual.agentRun).mockImplementation(() => new Promise((resolve) => (reply = resolve)))
+    useServices(manual)
+    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
+    g('thumbsUp')
+    await settle()
+    emit({ type: 'started', runId: 'old', intent: 'y' })
+    emit({ type: 'confirm', runId: 'old', requestId: 'stale', tool: 'x', details: { kind: 'generic', title: 't', lines: [] } })
+    reply({ ok: false, error: 'nope' })
+    await settle()
+    expect(viewAs('done')).toMatchObject({ ok: false, title: "Couldn't start the agent", subtitle: 'nope' })
+    expect(manual.agentRespond).toHaveBeenCalledWith('stale', false)
   })
 
   it('still receives agent events after dispose() (React StrictMode remounts App)', async () => {
@@ -1728,6 +1815,132 @@ describe('shortcuts and toasts', () => {
     c.gesture({ gesture: 'shape', shapeId: 'g2' })
     await settle()
     expect(viewAs('toast').meta).toBeUndefined()
+  })
+
+  describe('shortcut runs on the card', () => {
+    const generic = { kind: 'generic' as const, title: 'Send message', lines: [] }
+
+    /** Manual agent events plus a shortcut whose result the test hands back. */
+    function manualShortcut() {
+      const { services: manual, emit } = manualAgent(services)
+      let finish: (res: ShortcutRunResult) => void = () => {}
+      manual.runShortcut = vi.fn(() => new Promise<ShortcutRunResult>((resolve) => (finish = resolve)))
+      useServices(manual)
+      return { manual, emit, finish: (res: ShortcutRunResult) => finish(res) }
+    }
+
+    it('a replay that needs a confirm shows Working and Confirm; the result is the toast, not a Done card', async () => {
+      const { manual, emit, finish } = manualShortcut()
+      c.setView({ kind: 'collapsed' })
+      c.gesture({ gesture: 'shape', shapeId: 'g2' })
+      emit({ type: 'started', runId: 's1', intent: 'Text Mom hi' })
+      expect(getApp().view).toEqual({ kind: 'working', intent: 'Text Mom hi', steps: [] })
+      emit({ type: 'confirm', runId: 's1', requestId: 'q1', tool: 'message_send', details: generic })
+      g('thumbsUp')
+      expect(manual.agentRespond).toHaveBeenCalledWith('q1', true)
+      emit({ type: 'step', runId: 's1', step: { id: '1', label: 'Sending message', status: 'done' } })
+      expect(viewAs('working').steps).toHaveLength(1)
+      emit({ type: 'done', runId: 's1', result: { title: 'Message sent', subtitle: 'To Mom', evidence: [] }, complete: true })
+      viewAs('working')
+      finish({ ok: true, title: 'Message sent', subtitle: 'To Mom', compiled: true, durationMs: 1200 })
+      await settle()
+      expect(getApp().view).toEqual({
+        kind: 'toast',
+        title: 'Message sent',
+        subtitle: 'To Mom',
+        ok: true,
+        meta: 'compiled · 1.2 s',
+        returnTo: 'collapsed'
+      })
+    })
+
+    it('the agent fallback after a failed replay step is adopted too', async () => {
+      const { manual, emit, finish } = manualShortcut()
+      c.gesture({ gesture: 'shape', shapeId: 'g2' })
+      emit({ type: 'started', runId: 's1', intent: 'Play Motion Sickness' })
+      emit({ type: 'step', runId: 's1', step: { id: '1', label: 'Playing', status: 'error' } })
+      emit({ type: 'started', runId: 's2', intent: 'Play Motion Sickness' })
+      emit({ type: 'step', runId: 's2', step: { id: 'p', label: 'Thinking', status: 'current' } })
+      expect(viewAs('working').steps).toEqual([{ id: 'p', label: 'Thinking', status: 'current' }])
+      emit({ type: 'confirm', runId: 's2', requestId: 'q2', tool: 'message_send', details: generic })
+      viewAs('confirm')
+      expect(manual.agentRespond).not.toHaveBeenCalled()
+      g('fist')
+      expect(manual.agentRespond).toHaveBeenCalledWith('q2', false)
+      emit({ type: 'done', runId: 's2', result: { title: 'Nothing was done', subtitle: 'You cancelled it', evidence: [] }, complete: false })
+      finish({ ok: false, title: 'Nothing was done', subtitle: 'You cancelled it', compiled: false, durationMs: 5000 })
+      await settle()
+      expect(viewAs('toast')).toMatchObject({ ok: false, title: 'Nothing was done', subtitle: 'You cancelled it', meta: undefined })
+    })
+
+    it('a fist stops it at once; the shortcut\'s own "Stopped" result is not toasted again', async () => {
+      const { manual, emit, finish } = manualShortcut()
+      c.gesture({ gesture: 'shape', shapeId: 'g2' })
+      emit({ type: 'started', runId: 's1', intent: 'Play Motion Sickness' })
+      g('fist')
+      expect(manual.agentStop).toHaveBeenCalled()
+      expect(viewAs('toast')).toMatchObject({ title: 'Stopped', subtitle: 'The agent was interrupted' })
+      emit({ type: 'stopped', runId: 's1' })
+      finish({ ok: false, title: 'Stopped', subtitle: 'The shortcut was stopped', compiled: false, durationMs: 300 })
+      await settle()
+      expect(viewAs('toast').subtitle).toBe('The agent was interrupted')
+    })
+
+    it('a command started while a silent shortcut runs replaces it: no toast over the Working card', async () => {
+      const { emit, finish } = manualShortcut()
+      c.gesture({ gesture: 'shape', shapeId: 'g2' })
+      c.setView({ kind: 'agentReady', intent: 'Open Calculator', variant: 'default', sentence: 'Open Calculator' })
+      g('thumbsUp')
+      await settle()
+      finish({ ok: false, title: 'Stopped', subtitle: 'The shortcut was stopped', compiled: true, durationMs: 300 })
+      await settle()
+      expect(viewAs('working').intent).toBe('Open Calculator')
+      // Its runs are no longer adopted either.
+      emit({ type: 'started', runId: 's9', intent: 'Play Motion Sickness' })
+      expect(viewAs('working').intent).toBe('Open Calculator')
+    })
+
+    it('a shortcut\'s fallback that announces itself before the command\'s reply is not taken for the command', async () => {
+      const { manual, emit, finish } = manualShortcut()
+      let reply: (value: { ok: true; value: { runId: string } }) => void = () => {}
+      vi.mocked(manual.agentRun).mockImplementation(() => new Promise((resolve) => (reply = resolve)))
+      c.gesture({ gesture: 'shape', shapeId: 'g2' }) // a silent compiled replay
+      c.setView({ kind: 'agentReady', intent: 'Text Mom on my way', variant: 'default', sentence: 'Text Mom on my way' })
+      g('thumbsUp')
+      await settle()
+      // The replay failed first, so main started its agent fallback; the command then stops it.
+      emit({ type: 'started', runId: 'f', intent: 'Play Motion Sickness' })
+      emit({ type: 'stopped', runId: 'f' })
+      emit({ type: 'started', runId: 'u', intent: 'Text Mom on my way' })
+      emit({ type: 'step', runId: 'u', step: { id: 'p', label: 'Thinking', status: 'current' } })
+      reply({ ok: true, value: { runId: 'u' } })
+      await settle()
+      expect(viewAs('working')).toMatchObject({ intent: 'Text Mom on my way', steps: [{ id: 'p', label: 'Thinking', status: 'current' }] })
+      emit({ type: 'confirm', runId: 'u', requestId: 'q1', tool: 'message_send', details: generic })
+      viewAs('confirm')
+      expect(manual.agentRespond).not.toHaveBeenCalled()
+      finish({ ok: false, title: 'Stopped', subtitle: 'The shortcut was stopped', compiled: false, durationMs: 5000 })
+      await settle()
+      g('thumbsUp')
+      expect(manual.agentRespond).toHaveBeenCalledWith('q1', true)
+      emit({ type: 'done', runId: 'u', result: { title: 'Message sent', subtitle: 'to Mom', evidence: [] }, complete: true })
+      expect(viewAs('done')).toMatchObject({ ok: true, title: 'Message sent', intent: 'Text Mom on my way' })
+    })
+
+    it('a run nobody started is ignored, and its confirm declined', () => {
+      const { manual, emit } = manualShortcut()
+      emit({ type: 'started', runId: 'x', intent: 'Send money' })
+      emit({ type: 'confirm', runId: 'x', requestId: 'qx', tool: 'mail_send', details: generic })
+      expect(getApp().view).toEqual({ kind: 'ready' })
+      expect(manual.agentRespond).toHaveBeenCalledWith('qx', false)
+    })
+
+    it('a shortcut that throws still toasts', async () => {
+      vi.spyOn(services, 'runShortcut').mockRejectedValue(new Error('main crashed'))
+      c.gesture({ gesture: 'shape', shapeId: 'g2' })
+      await settle()
+      expect(viewAs('toast')).toMatchObject({ ok: false, title: 'Shortcut failed', subtitle: 'main crashed' })
+    })
   })
 
   it('shape gestures without an id are ignored', () => {

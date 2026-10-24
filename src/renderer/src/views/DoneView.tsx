@@ -14,7 +14,7 @@ const heldClass = (progress: number | null): string | undefined => (progress !==
 
 /**
  * Reference image 3, panel 8: thumbnail + result, View / New command.
- * Fingers 1 / 2 / 3 pick View / New command / Save as gesture (controller.optionsFor).
+ * Fingers 1 / 2 / 3 pick View / New command / Save as gesture, the last for a completed task only (controller.optionsFor).
  */
 export function DoneView({ view }: Props): React.JSX.Element {
   const instance = useViewInstance(view)

@@ -1,5 +1,16 @@
 import { mergeTemplates } from '@shared/templatePack'
-import type { AgentEvent, AgentStep, CameraSource, EnvKey, IntentResult, Mode, Result, SignTemplate } from '@shared/types'
+import type {
+  AgentEvent,
+  AgentResult,
+  AgentStep,
+  CameraSource,
+  EnvKey,
+  IntentResult,
+  Mode,
+  Result,
+  ShortcutRunResult,
+  SignTemplate
+} from '@shared/types'
 import { getApp, setApp } from './store'
 import type { Services } from './services'
 import type { SettingsPage, Token, View } from './types'
@@ -60,6 +71,19 @@ const isMoreAction = (action: string): boolean => /\bmore\b/i.test(action)
 function contextActionsFor(suggested: string[]): string[] {
   const own = suggested.filter((a) => !isInsertAction(a) && !isMoreAction(a)).slice(0, MAX_SUGGESTED_ACTIONS)
   return [INSERT_TEXT, ...own, MORE_OPTIONS]
+}
+
+/** The agent run on the card. Only its events are shown; anything else is stale. */
+interface AgentRunState {
+  /**
+   * A command's run is null until agentRun replies; its events wait in `held` until then. A 'started'
+   * can't name it: a run main queued earlier (a shortcut's agent fallback) may announce itself first.
+   */
+  runId: string | null
+  intent: string
+  /** Run by a gesture shortcut: the shortcut's toast shows the result, not the Done card. */
+  shortcut: boolean
+  held: AgentEvent[]
 }
 
 /** Outcome of one Claude interpretation. Errors are carried per request, never shared. */
@@ -187,7 +211,8 @@ export function optionsFor(view: View): string[] {
     case 'quickMenu':
       return view.options
     case 'done':
-      return ['View', 'New command', 'Save as gesture']
+      // Only a completed task can become a gesture shortcut.
+      return view.ok ? ['View', 'New command', 'Save as gesture'] : ['View', 'New command']
     case 'settings':
       return settingsOptions(view.settings)
     default:
@@ -242,9 +267,12 @@ export class Controller {
   private intentPrefix: string | undefined
   private interpretation: Promise<Interpretation> | null = null
   private steps: AgentStep[] = []
-  private runIntent = ''
-  /** True from runAgent until done / error / stop. Agent events outside a run are stale. */
-  private agentActive = false
+  /** From runAgent (or a shortcut's run starting) until done / error / stop. */
+  private agentRun: AgentRunState | null = null
+  /** The shortcut waiting on the main process; a newer run or a stop abandons it (no toast). */
+  private shortcut: Promise<ShortcutRunResult> | null = null
+  /** The run behind the Stopped toast: main still reports a write it had already made. */
+  private stopped: { runId: string; toast: View } | null = null
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private lastCompleted: { intent: string; title: string } | null = null
   private unsubscribe: (() => void) | null = null
@@ -384,7 +412,7 @@ export class Controller {
         else if (g === 'swipeLeft') this.change()
         return
       case 'working':
-        if (g === 'fist') void this.stopAgent()
+        if (g === 'fist') this.stopAgent()
         return
       case 'confirm':
         if (g === 'thumbsUp') void this.respondConfirm(true)
@@ -452,7 +480,7 @@ export class Controller {
     if (target === 'settings') return this.openSettings()
     if (target === 'option' && index !== undefined) return this.pickOption(index)
     if (target === 'close') {
-      if (view.kind === 'working') void this.stopAgent()
+      if (view.kind === 'working') this.stopAgent()
       else if (view.kind === 'confirm') void this.respondConfirm(false)
       else if (view.kind === 'settings') this.settingsBack()
       else if (view.kind === 'toast') this.leaveToast(view.returnTo)
@@ -777,38 +805,85 @@ export class Controller {
     // The run uses up the phrase, however it ends: Done, Settings and Ready start a new one.
     this.resetPhrase()
     this.steps = []
-    this.runIntent = intent
-    this.agentActive = true
+    // One run at a time: the main process stops whatever ran before, a pending shortcut included.
+    this.shortcut = null
+    const run: AgentRunState = { runId: null, intent, shortcut: false, held: [] }
+    this.agentRun = run
     this.setView({ kind: 'working', intent, steps: [] })
     const frontmost = await this.services.frontmostApp().catch(() => null)
-    if (!this.agentActive) return // stopped before the agent started
+    if (this.agentRun !== run) return // stopped before the agent started
     const res = await settled(this.services.agentRun({ intent, sentence, frontmost }))
-    if (res.ok || !this.agentActive) return
-    this.agentActive = false
-    this.setView({ kind: 'done', ok: false, title: "Couldn't start the agent", subtitle: failureText(res), intent })
-    this.later(DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
+    if (this.agentRun !== run) return // stopped meanwhile (clearRun released what it held)
+    if (!res.ok) {
+      this.clearRun()
+      this.setView({ kind: 'done', ok: false, title: "Couldn't start the agent", subtitle: failureText(res), intent })
+      this.later(DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
+      return
+    }
+    run.runId = res.value.runId
+    // The held events can be told apart now: this run's are shown, the others dropped.
+    for (const e of run.held.splice(0)) this.onAgentEvent(e)
   }
 
-  private async stopAgent(): Promise<void> {
-    this.agentActive = false
-    await this.services.agentStop().catch(() => undefined)
-    this.agentStopped()
+  /** Takes the run off the card. Events held for a run that was never named are then another run's. */
+  private clearRun(): void {
+    const held = this.agentRun?.held ?? []
+    this.agentRun = null
+    for (const e of held) this.onAgentEvent(e)
   }
 
-  private agentStopped(): void {
+  /** Fist or X while working: the card leaves at once; the main process interrupts the run. */
+  private stopAgent(): void {
+    const runId = this.agentRun?.runId ?? null
+    this.shortcut = null
+    this.clearRun()
+    this.agentStopped(runId)
+    void this.services.agentStop().catch(() => undefined)
+  }
+
+  private agentStopped(runId: string | null): void {
     this.toast('Stopped', 'The agent was interrupted', false)
+    this.stopped = runId ? { runId, toast: this.view } : null
+  }
+
+  /**
+   * Main reports a stopped run only when a write had already gone through (a sent message, say,
+   * possibly finishing after the stop). The card says so, or the user might send it again.
+   */
+  private reportStopped(result: AgentResult): void {
+    const toast = this.stopped?.toast
+    this.stopped = null
+    if (this.view === toast) this.toast(result.title, result.subtitle, false)
+    else this.notify(`${result.title} before you stopped`)
   }
 
   private async respondConfirm(approved: boolean): Promise<void> {
     const view = this.view
     if (view.kind !== 'confirm') return
-    this.setView({ kind: 'working', intent: this.runIntent, steps: [...this.steps] })
+    this.setView({ kind: 'working', intent: this.agentRun?.intent ?? '', steps: [...this.steps] })
     await this.services.agentRespond(view.requestId, approved)
   }
 
+  /**
+   * Every run opens with 'started'. A pending shortcut takes its runs on the card this way
+   * (a replay that needs a confirm, then maybe the agent fallback).
+   */
+  private adopt(e: Extract<AgentEvent, { type: 'started' }>): void {
+    if (!this.shortcut || (this.agentRun && !this.agentRun.shortcut)) return
+    this.agentRun = { runId: e.runId, intent: e.intent, shortcut: true, held: [] }
+    this.setView({ kind: 'working', intent: e.intent, steps: [] })
+  }
+
   private onAgentEvent(e: AgentEvent): void {
-    if (!this.agentActive) {
-      // Late event from a stopped or finished run. Never leave an agent waiting on an answer.
+    if (e.type === 'started') this.adopt(e)
+    if (this.agentRun?.runId === null) {
+      this.agentRun.held.push(e) // until agentRun's reply names the command's run
+      return
+    }
+    if (e.type === 'done' && e.runId === this.stopped?.runId) return this.reportStopped(e.result)
+    const run = this.agentRun?.runId === e.runId ? this.agentRun : null
+    if (!run) {
+      // Late event from a stopped, finished or replaced run. Never leave an agent waiting on an answer.
       if (e.type === 'confirm') void this.services.agentRespond(e.requestId, false)
       return
     }
@@ -827,38 +902,31 @@ export class Controller {
       case 'confirm':
         this.setView({ kind: 'confirm', requestId: e.requestId, details: e.details })
         return
-      case 'done': {
-        this.agentActive = false
-        const ok = e.result.evidence.some((ev) => ev.ok) || e.result.title.toLowerCase() !== 'cancelled'
-        this.lastCompleted = { intent: this.runIntent, title: e.result.title }
-        const success = ok && e.result.evidence.every((ev) => ev.ok)
+      case 'done':
+      case 'error':
+      case 'stopped':
+        this.agentRun = null
+        // A shortcut's result is its toast (runShortcut), which says the same thing.
+        if (run.shortcut) return
+        if (e.type === 'stopped') return this.agentStopped(run.runId) // stopped by the main process, not the user
+        if (e.type === 'error') {
+          const subtitle = failureText({ error: e.message, missingKey: e.missingKey })
+          this.setView({ kind: 'done', ok: false, title: "Couldn't finish", subtitle, intent: run.intent })
+          this.later(DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
+          return
+        }
+        // Title and subtitle come from tool results; an unfinished task says why in the subtitle.
+        if (e.complete) this.lastCompleted = { intent: run.intent, title: e.result.title }
         this.setView({
           kind: 'done',
-          ok: success,
+          ok: e.complete,
           title: e.result.title,
           subtitle: e.result.subtitle,
           view: e.result.view,
-          intent: this.runIntent
+          intent: run.intent
         })
         // Failures stay twice as long (matches the DoneView progress line).
-        this.later(success ? DONE_AUTO_COLLAPSE_MS : DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
-        return
-      }
-      case 'error':
-        this.agentActive = false
-        this.setView({
-          kind: 'done',
-          ok: false,
-          title: "Couldn't finish",
-          subtitle: failureText({ error: e.message, missingKey: e.missingKey }),
-          intent: this.runIntent
-        })
-        this.later(DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
-        return
-      case 'stopped':
-        // Stopped by the main process rather than by the user.
-        this.agentActive = false
-        this.agentStopped()
+        this.later(e.complete ? DONE_AUTO_COLLAPSE_MS : DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
         return
     }
   }
@@ -871,7 +939,22 @@ export class Controller {
   }
 
   async runShortcut(gestureId: string, returnTo: 'collapsed' | 'ready'): Promise<void> {
-    const res = await this.services.runShortcut(gestureId)
+    this.subscribe() // its runs can show Working and Confirm
+    // The main process stops any run on the card for the shortcut.
+    this.clearRun()
+    const pending = this.services.runShortcut(gestureId).catch(
+      (err: unknown): ShortcutRunResult => ({
+        ok: false,
+        title: 'Shortcut failed',
+        subtitle: errorText(err),
+        compiled: false,
+        durationMs: 0
+      })
+    )
+    this.shortcut = pending
+    const res = await pending
+    if (this.shortcut !== pending) return // stopped, or replaced by a newer run
+    this.shortcut = null
     const meta = res.ok && res.compiled ? `compiled · ${(res.durationMs / 1000).toFixed(1)} s` : undefined
     this.showToast({ kind: 'toast', title: res.title, subtitle: res.subtitle, ok: res.ok, meta, returnTo })
   }
