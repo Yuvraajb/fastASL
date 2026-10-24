@@ -1,13 +1,15 @@
 import { CameraPipeline } from '../engine/camera/pipeline'
 import type { FrameSample } from '../engine/types'
+import type { Controller } from './controller'
+import { connectGestures } from './gestureInput'
 import { live } from './live'
 import { getApp, useApp } from './store'
 
 /**
- * The single owner of the camera pipeline (and, from Phase 3, the gesture and
- * recognition engines). App starts it on launch, except in screenshot / ?mock=1
- * mode where the feed keeps its mock hand. Camera settings flow in through the
- * store: controller.toggleCamera sets cameraOn, controller.setCameraSource sets cameraSource.
+ * The single owner of the camera pipeline and the engines fed by it (gestures; recognition
+ * from Phase 4). App starts it on launch, except in screenshot / ?mock=1 mode where the feed
+ * keeps its mock hand. Camera settings flow in through the store: controller.toggleCamera sets
+ * cameraOn, controller.setCameraSource sets cameraSource. Engine output goes to the controller.
  */
 const camera = new CameraPipeline()
 
@@ -17,8 +19,9 @@ export function subscribeFrames(fn: (frame: FrameSample) => void): () => void {
 }
 
 /** Starts the camera with the store's settings and follows later changes. Returns a stop function. */
-export function startEngines(): () => void {
+export function startEngines(controller: Controller): () => void {
   const { cameraOn, cameraSource } = getApp()
+  const stopGestures = connectGestures(controller, subscribeFrames)
   void camera.setEnabled(cameraOn)
   void camera.start(cameraSource)
   const unsubscribe = useApp.subscribe((s, prev) => {
@@ -30,6 +33,7 @@ export function startEngines(): () => void {
     unsubscribe()
     stopLog?.()
     camera.stop()
+    stopGestures()
   }
 }
 

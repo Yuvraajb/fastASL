@@ -26,7 +26,7 @@ export default function App(): React.JSX.Element {
     void window.fastasl?.getEnvStatus().then((keyStatus) => setApp({ keyStatus }))
     void window.fastasl?.getSettings().then((s) => {
       setApp({ mode: s.mode, sensitivity: s.sensitivity, cameraOn: s.cameraEnabled, cameraSource: s.cameraSource })
-      if (liveCamera && !disposed) stopEngines = startEngines()
+      if (liveCamera && !disposed) stopEngines = startEngines(controller)
     })
     return () => {
       disposed = true
