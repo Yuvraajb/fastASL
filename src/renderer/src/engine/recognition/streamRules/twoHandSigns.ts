@@ -37,7 +37,9 @@ export const TUNING = {
     strokes: 2,
     strokesMax: 3,
     /** The window's first `onsetMs` must show the shake starting (a hand out of view, or both still). */
-    onsetMs: 250
+    onsetMs: 250,
+    /** It commits only while a hand still moves: this far (hand lengths) in the last 150 ms. */
+    fresh: 0.1
   },
   time: {
     ms: 1000,
@@ -54,7 +56,9 @@ export const TUNING = {
     near: 1.2,
     /** Fingertip strokes up / down of at least `tap`: 2 = one tap (down and back up). */
     tap: 0.25,
-    strokes: 1
+    strokes: 1,
+    /** It commits only while the hand still moves: this far (hand lengths) in the last 150 ms. */
+    fresh: 0.1
   },
   open: {
     ms: 900,
@@ -101,7 +105,9 @@ export const TUNING = {
     twistDeg: 15,
     shake: 0.25,
     strokes: 2,
-    strokesMax: 3
+    strokesMax: 3,
+    /** It commits only while a hand still moves: this far (hand lengths) in the last 150 ms. */
+    fresh: 0.1
   },
   please: {
     ms: 1400,
@@ -148,12 +154,11 @@ export const TUNING = {
     baseUpright: -0.5,
     /** The base moves less than this. */
     baseStill: 0.8,
-    /** The fingertip ends within `near` of the base hand, having travelled `slide` relative to it; the hand's net move toward the base is at least `toward`. */
+    /** The fingertip ends within `near` of the base hand, having travelled `slide` relative to it. */
     near: 1.2,
     slide: 1.1,
-    toward: -10,
-    /** The fingertip's travel across the base (x) is at least this × its travel up / down. */
-    across: 0
+    /** Median mean finger extension of the base hand at least this: a C, O or flat hand, not a fist. */
+    baseOpen: 0.3
   }
 }
 
@@ -406,6 +411,18 @@ function smooth(values: readonly number[]): number[] {
 
 const last = <T>(xs: readonly T[]): T => xs[xs.length - 1]
 
+/**
+ * Whether the hand is moving now: over the last `ms`, its wrist or a fingertip (thumb, index,
+ * pinky) moved at least `dist` hand lengths. A word commits during its movement, never later on a
+ * window of old strokes (once a cooldown ends, say).
+ */
+function movingNow(hands: readonly Hand[], L: number, ms: number, distance: number): boolean {
+  const now = hands[hands.length - 1]
+  const before = [...hands].reverse().find((h) => now.t - h.t >= ms)
+  if (!before) return true
+  return [0, 4, 8, 20].some((i) => Math.hypot(now.pts[i].x - before.pts[i].x, now.pts[i].y - before.pts[i].y) / L >= distance)
+}
+
 /** Whether a track jumps (moves faster than `maxSpeed` hand lengths / s between sightings) from time t0 on. */
 function jumps(track: readonly (Hand | null)[], t0: number, L: number, maxSpeed: number): boolean {
   let prev: Hand | null = null
@@ -516,6 +533,7 @@ function musicFires(history: readonly FrameSample[], { aspect }: StreamContext):
  * PLAY: both hands in Y, twisting or shaking at the wrist. Fires once each hand has gone back and
  * forth (in thumb-to-pinky angle or position) at least twice while both hold the Y.
  */
+/** A hand's back-and-forth strokes: twist, sideways or small up / down shake, whichever has most. */
 function twistStrokes(hands: readonly Hand[], L: number): number {
   const P = TUNING.play
   const angle: number[] = []
@@ -549,7 +567,8 @@ function playFires(history: readonly FrameSample[], { aspect }: StreamContext): 
   if (Math.abs(end.a.x - end.b.x) / L < P.gap) return false
   const ta = twistStrokes(a, L)
   const tb = twistStrokes(b, L)
-  return Math.min(ta, tb) >= P.strokes && Math.max(ta, tb) >= P.strokesMax
+  if (Math.min(ta, tb) < P.strokes || Math.max(ta, tb) < P.strokesMax) return false
+  return movingNow(a, L, 150, P.fresh) || movingNow(b, L, 150, P.fresh)
 }
 
 // ----------------------------------------------------------------------------------- STOP
@@ -625,6 +644,7 @@ function timeFires(history: readonly FrameSample[], { aspect }: StreamContext): 
     if (near > P.near) continue
     const ty = smooth(d.map((h) => h.pts[8].y / L))
     if (strokeCount(ty, P.tap) < P.strokes) continue
+    if (!movingNow(d, L, 150, P.fresh)) continue
     return true
   }
   return false
@@ -649,10 +669,14 @@ function emailFires(history: readonly FrameSample[], { aspect }: StreamContext):
     const b = present(base)
     if (d.length < 5 || b.length < 5) continue
     const L = unit(d)
+    // The index stays out through the slide and at its end: a hand closing into a fist (the
+    // cancel gesture) passes through a pointing shape but does not end in one.
     if (fraction(d, pointing) < P.pointShare) continue
+    if (!d.slice(-3).every(pointing)) continue
     if (fraction(b, pointing) > P.basePointing) continue
-    // The base hand stands up (C / O or flat, fingers up), and holds still.
+    // The base hand stands up (C / O or flat, fingers up), holds still, and is no fist.
     if (median(b.map((h) => h.dy)) > P.baseUpright) continue
+    if (median(b.map((h) => (h.ext[1] + h.ext[2] + h.ext[3] + h.ext[4]) / 4)) < P.baseOpen) continue
     const bx = b.map((h) => h.x)
     const by = b.map((h) => h.y)
     if (Math.max(Math.max(...bx) - Math.min(...bx), Math.max(...by) - Math.min(...by)) / L > P.baseStill) continue
@@ -671,11 +695,6 @@ function emailFires(history: readonly FrameSample[], { aspect }: StreamContext):
     const rx = Math.max(...rel.map((p) => p.x)) - Math.min(...rel.map((p) => p.x))
     const ry = Math.max(...rel.map((p) => p.y)) - Math.min(...rel.map((p) => p.y))
     if (Math.max(rx, ry) < P.slide) continue
-    // WHAT's other form brushes the index down the palm: mostly vertical. EMAIL goes through, across.
-    if (rx < P.across * ry) continue
-    const start = d[0]
-    const toward = Math.sign(bb.x - start.x)
-    if ((toward * (now.x - start.x)) / L < P.toward) continue
     return true
   }
   return false
@@ -709,8 +728,10 @@ function whatFires(history: readonly FrameSample[], { aspect }: StreamContext): 
   const sa = strokeCount(smooth(a.map((h) => h.x / L)), P.amp)
   const sb = strokeCount(smooth(b.map((h) => h.x / L)), P.amp)
   if (Math.min(sa, sb) < P.strokes || Math.max(sa, sb) < P.strokesMax) return false
-  // The shake must start inside the window, so one long shake is one WHAT (the matcher clears the
-  // history when a word fires): before it, the hands were close (from > 0), out of view, or still.
+  if (!movingNow(a, L, 150, P.fresh) && !movingNow(b, L, 150, P.fresh)) return false
+  // The shake must start inside the window (the matcher clears the history when a word fires, so
+  // a shake that goes on does not fire again at once): before it, the hands were close
+  // (from > 0), out of view, or still.
   if (from > 0) return true
   const t0 = pair.t[0]
   const early = pair.t.map((t, i) => (t - t0 <= P.onsetMs ? i : -1)).filter((i) => i >= 0)
