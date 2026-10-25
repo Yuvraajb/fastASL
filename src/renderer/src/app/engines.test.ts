@@ -578,6 +578,22 @@ describe('sign recognition', () => {
     expect(views).toEqual([{ kind: 'recognizing', token: 'L', isWord: false }])
   })
 
+  it('CALL, then D and W held with nothing taught: "Call DW" (the initials spotter)', () => {
+    setApp({ templates: TEMPLATES, contactAliases: { dw: 'Darren Wu' } })
+    stop = startEngines(controller)
+    controller.token({ text: 'call', kind: 'word' })
+    play([rest, hold('D', 1500, 906), rest, hold('W', 1500, 907)])
+    expect(getApp().composing.tokens.map((t) => t.text)).toEqual(['call', 'D', 'W'])
+    expect(getApp().view).toMatchObject({ kind: 'building', sentence: 'Call DW' })
+  })
+
+  it('no CALL or MEETING before them: a held D or W is no letter', () => {
+    setApp({ templates: TEMPLATES, contactAliases: { dw: 'Darren Wu' } })
+    stop = startEngines(controller)
+    play([rest, hold('D', 1500, 906), rest, hold('W', 1500, 907)])
+    expect(getApp().composing.tokens).toEqual([])
+  })
+
   it('Command mode: D and W, once taught, arrive as letters and make one spelled word (CALL D W)', () => {
     setApp({ templates: [...TEMPLATES, ...teach('D', 'letter', seeds(5, 11).map((s) => hold('D', 900, s))), ...teach('W', 'letter', seeds(5, 12).map((s) => hold('W', 900, s)))] })
     stop = startEngines(controller)

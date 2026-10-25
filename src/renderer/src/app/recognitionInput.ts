@@ -8,6 +8,7 @@ import { Segmenter } from '../engine/recognition/segmenter'
 import { RecognitionSession, type Movement, type RecognitionEvent } from '../engine/recognition/session'
 import { STREAM_RULES } from '../engine/recognition/streamRules'
 import { supersede } from '../engine/recognition/streamRules/supersede'
+import { InitialsSpotter, INITIAL_SHAPES } from '../engine/recognition/initials'
 import type { Classification } from '../engine/recognition/recognizer'
 import { TEACH_REASONS, TeachSession } from '../engine/recognition/teach'
 import { decide, describeTop, ISLR_MAX_RANK, withTaught, yieldToGesture, type FinalDecision, type TaughtDecision } from '../engine/model/decide'
@@ -74,6 +75,28 @@ export function signLike(m: Pick<Movement, 'entered' | 'left' | 'durationMs'>): 
   if (m.durationMs < GUESS_MIN_MS) return 'short'
   if (m.durationMs > GUESS_MAX_MS) return 'long'
   return 'yes'
+}
+
+/** Words after which a contact's initials are spelled: CALL D W, MEETING D W. */
+const NAMES_FOLLOW = /^(call|facetime|meeting)$/i
+
+/**
+ * The letters the initials spotter may give now: right after CALL / FACETIME / MEETING (and the
+ * letters spelled since), the next letter of a nickname that is initials (dw -> D, then W), if
+ * the spotter knows its shape. Command mode only; empty everywhere else.
+ */
+export function nextInitials(s: Pick<AppState, 'mode' | 'composing' | 'contactAliases'>): string[] {
+  if (s.mode !== 'command') return []
+  const tokens = s.composing.tokens
+  let i = tokens.length - 1
+  while (i >= 0 && tokens[i].kind === 'letter') i--
+  if (i < 0 || !NAMES_FOLLOW.test(tokens[i].text)) return []
+  const spelled = tokens.slice(i + 1).map((t) => t.text.toUpperCase()).join('')
+  const next = Object.keys(s.contactAliases)
+    .map((k) => k.toUpperCase())
+    .filter((k) => k.length <= 3 && k.length > spelled.length && k.startsWith(spelled))
+    .map((k) => k[spelled.length])
+  return [...new Set(next)].filter((l) => INITIAL_SHAPES[l] !== undefined)
 }
 
 /** A recognition event as routed: a streamed word may replace the one before it (supersede). */
@@ -222,6 +245,7 @@ export function connectRecognition(
   const history: FrameSample[] = []
   /** Streaming words that came while the model was judging an earlier movement: they follow its word. */
   let queued: Routed[] = []
+  const initials = new InitialsSpotter()
   /** The last streamed word and its frame time (see supersede: FRIEND over TIME). */
   let lastStreamed: { word: string; t: number } | null = null
   /** Dev: when the streaming matcher's state was last logged. */
@@ -609,6 +633,14 @@ export function connectRecognition(
         }
         route(e, e.type === 'rejected' ? rec.rejectedMovement : null)
         if ((e.type === 'token' || e.type === 'ambiguous') && (e.kind === 'word' || lettersOnly)) shown = true
+      }
+      // Untaught initials (D, W) for a contact nickname, right after CALL / MEETING (initials.ts).
+      const next = nextInitials(getApp())
+      const letter = next.length ? initials.update(frame, aspect, next) : (initials.reset(), null)
+      if (letter) {
+        log(`[initials] ${letter}`)
+        route({ type: 'token', text: letter, kind: 'letter' })
+        shown = true
       }
       listenTick(frame.t)
       if (pendingGuess && frame.t >= pendingGuess.at) {
