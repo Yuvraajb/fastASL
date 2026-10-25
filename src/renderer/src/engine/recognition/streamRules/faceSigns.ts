@@ -45,12 +45,21 @@ export const FACE_SIGN_PARAMS = {
     tipV: [0.0, 0.8] as [number, number],
     /** Fingers point up at least this much (pointing.y is -1 straight up). */
     upAtContact: -0.25,
+    /** At the contact the fingers slant in toward the face's midline by at least this much (pointing.x). */
+    inward: 0.2,
     /** While moving away: still not pointing sideways or down (BAD turns the palm down). */
     upWhileMoving: -0.1,
+    /** When it fires, the fingers still point clearly up (BAD has turned them sideways by then). */
+    upAtEnd: -0.55,
+    /** Require the back of the hand toward the camera at the contact (the wake palm faces it). */
+    backOfHand: true,
+    /** The fingertips pause at the lips this long (ms), moving less than `pause` (fh). */
+    pauseMs: 100,
+    pause: 0.1,
     /** The contact is at most this old. */
     contactMs: 900,
     /** Palm drop (fh) and fingertip travel (fh) from the contact. */
-    drop: 0.3,
+    drop: 0.4,
     travel: 0.35
   },
   tomorrow: {
@@ -75,8 +84,15 @@ export const FACE_SIGN_PARAMS = {
     /** ... and must still be above this face height at the end. */
     thumbEndV: 0.5
   },
-  mom: { thumbU: 0.45, thumbV: [0.2, 0.75] as [number, number] },
-  dad: { thumbU: 0.55, thumbV: [-0.85, -0.15] as [number, number] },
+  /**
+   * MOM / DAD: thumb tip zone, and how squarely the palm may face the camera (|palmFacing|, only
+   * when the landmarks have depth). The sign's palm faces sideways; a wake palm faces the camera
+   * (real open palms: median 0.94), and so do most C hands at the mouth (DRINK).
+   */
+  mom: { thumbU: 0.45, thumbV: [0.2, 0.75] as [number, number], facingMax: 0.85 },
+  dad: { thumbU: 0.55, thumbV: [-0.85, -0.15] as [number, number], facingMax: 0.9 },
+  /** Landmark z spread (wrist-relative units) above which the hand has real depth and palmFacing means something. */
+  depthMin: 0.01,
   fiveAtFace: {
     /** Fingers up at least this much. */
     up: -0.4,
@@ -186,7 +202,7 @@ export function twoFingers(s: HandShape): boolean {
 function contactThenMove(
   track: Track,
   contactMs: number,
-  contact: (f: HandFeat) => boolean,
+  contact: (f: HandFeat, i: number) => boolean,
   keep: (f: HandFeat) => boolean,
   moved: (from: HandFeat, now: HandFeat) => boolean
 ): boolean {
@@ -195,7 +211,7 @@ function contactThenMove(
   for (let i = track.length - 2; i >= 0; i--) {
     const f = track[i]
     if (now.t - f.t > contactMs) break
-    if (contact(f) && moved(f, now)) return true
+    if (contact(f, i) && moved(f, now)) return true
     if (!keep(f) && (missed += track[i + 1].t - f.t) > P.flickerMs) break
   }
   return false
@@ -238,6 +254,47 @@ function arriveAndDwell(
   return false
 }
 
+/**
+ * The back of the hand faces the camera (the palm faces the signer), for a hand beside the face.
+ * Label-free: MediaPipe's handedness labels assume a mirrored image and have flipped between
+ * releases, so the hand is taken from its side of the face (in the raw image the signer's right
+ * hand is on the left), and the palm side from the winding of wrist, index and pinky knuckles.
+ */
+export function backToCamera(f: HandFeat, face: FaceBox, aspect: number): boolean {
+  const lm = f.hand.landmarks
+  const ax = (lm[5].x - lm[0].x) * aspect
+  const ay = lm[5].y - lm[0].y
+  const bx = (lm[17].x - lm[0].x) * aspect
+  const by = lm[17].y - lm[0].y
+  const winding = ax * by - ay * bx
+  // A right hand with its palm to the camera winds negative (y down); the back of it, positive.
+  const rightHand = onFace(f.palm, face).u < 0
+  return rightHand ? winding > 0 : winding < 0
+}
+
+/** Whether the middle fingertip stayed within `within` (image height units) for `ms` up to track[i]. */
+function pausedBefore(track: Track, i: number, ms: number, within: number, aspect: number): boolean {
+  if (ms <= 0) return true
+  const at = track[i]
+  for (let j = i - 1; j >= 0; j--) {
+    const f = track[j]
+    if (dist(f.middle, at.middle, aspect) > within) return false
+    if (at.t - f.t >= ms) return true
+  }
+  return false
+}
+
+/** Whether the hand's landmarks carry real depth (MediaPipe tasks do; flattened recordings don't). */
+function hasDepth(f: HandFeat): boolean {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const p of f.hand.landmarks) {
+    if (p.z < lo) lo = p.z
+    if (p.z > hi) hi = p.z
+  }
+  return hi - lo >= P.depthMin
+}
+
 const inRange = (x: number, [lo, hi]: readonly [number, number]): boolean => x >= lo && x <= hi
 
 // ---------------------------------------------------------------------------------------------
@@ -265,15 +322,21 @@ export const thankYou: StreamRule = {
       contactThenMove(
         track,
         c.contactMs,
-        (f) => {
+        (f, i) => {
           if (!straightFingers(f.shape) || f.shape.pointing.y > c.upAtContact) return false
+          // The hand comes from the side, fingers slanting in toward the mouth, back of the hand to the camera.
+          const side = onFace(f.palm, face).u < 0 ? 1 : -1
+          if (side * f.shape.pointing.x < c.inward) return false
+          if (c.backOfHand && !backToCamera(f, face, ctx.aspect)) return false
           const tip = onFace(f.index.y < f.middle.y ? f.index : f.middle, face)
-          return Math.abs(tip.u) <= c.tipU && inRange(tip.v, c.tipV)
+          if (Math.abs(tip.u) > c.tipU || !inRange(tip.v, c.tipV)) return false
+          // The fingertips rest at the lips for a moment before the hand moves off.
+          return pausedBefore(track, i, c.pauseMs, c.pause * face.h, ctx.aspect)
         },
         (f) => straightFingers(f.shape) && f.shape.pointing.y <= c.upWhileMoving,
         (from, now) =>
           straightFingers(now.shape) &&
-          now.shape.pointing.y <= c.upWhileMoving &&
+          now.shape.pointing.y <= c.upAtEnd &&
           (now.palm.y - from.palm.y) / face.h >= c.drop &&
           faceDist(now.middle, from.middle, face, ctx.aspect) >= c.travel
       )
@@ -312,7 +375,7 @@ export const tomorrow: StreamRule = {
   }
 }
 
-function fiveAtFace(zone: () => { thumbU: number; thumbV: readonly [number, number] }) {
+function fiveAtFace(zone: () => { thumbU: number; thumbV: readonly [number, number]; facingMax: number }) {
   return (history: readonly FrameSample[], ctx: StreamContext): boolean =>
     withFace(history, ctx, (track, face, since) =>
       arriveAndDwell(
@@ -327,7 +390,8 @@ function fiveAtFace(zone: () => { thumbU: number; thumbV: readonly [number, numb
           if (dist(f.index, f.thumb, ctx.aspect) < c.gap * f.scale || (f.thumb.y - f.index.y) / face.h < c.rise) return false
           const th = onFace(f.thumb, face)
           const z = zone()
-          return Math.abs(th.u) <= z.thumbU && inRange(th.v, z.thumbV)
+          if (Math.abs(th.u) > z.thumbU || !inRange(th.v, z.thumbV)) return false
+          return !hasDepth(f) || Math.abs(f.shape.palmFacing) <= z.facingMax
         },
         (f) => f.thumb
       )

@@ -155,12 +155,8 @@ describe('RecognitionSession: streaming signs first, settle after them', () => {
 })
 
 describe('control gestures are never streaming signs', () => {
-  /**
-   * Known clashes in the merged rules, to fix in their files: an open palm (or 5) raised beside
-   * the forehead reads as DAD. In the views that take signs an open palm is no control gesture,
-   * so it only costs a stray word there.
-   */
-  const KNOWN = new Set(['dad'])
+  /** Known clashes in the merged rules, to fix in their files (none now: DAD's open-palm clash is fixed by a palm-facing cap). */
+  const KNOWN = new Set<string>([])
 
   it('no dictionary sign fires on any of them', () => {
     const fired = controlGestureClips().flatMap((clip) => replayStream(clip, { dictionary: DEFAULT_DICTIONARY }).map((h) => `${clip.name}: ${h.word}`))
