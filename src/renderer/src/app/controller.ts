@@ -366,7 +366,7 @@ export const DEMO_TASKS = [
   'List the three newest files on my Desktop.',
   'Fetch https://wttr.in/Los+Angeles?format=3 and read me the weather.',
   'Remember that my preferred meeting time is 10am.',
-  'Read the newest message in Slack channel C0CBX5R1MLN, tell me what it says, then reply that I am on my way.'
+  'Read the newest message in Slack channel C0CBX5R1MLN. Quote its text in your reply, then reply that I am on my way.'
 ] as const
 
 export function settingsOptions(page: SettingsPage): string[] {

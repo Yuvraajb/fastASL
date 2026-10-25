@@ -2,7 +2,7 @@
    The card grows with the transcript up to --chat-max (the whole card, border included),
    then the transcript scrolls. The other rows never shrink. */
 .chatcard {
-  --chat-max: 560px;
+  --chat-max: 760px;
   max-height: calc(var(--chat-max) - 2 * var(--card-pad) - 2px);
 }
 
@@ -387,7 +387,7 @@
   line-height: 20px;
   letter-spacing: -0.01em;
   color: var(--text);
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
 }
 
