@@ -43,13 +43,15 @@ export const SIGN_VOCABULARY: readonly SignWord[] = [
   { word: 'go', islr: 'go', citizen: ['GO'], enabled: false },
   { word: 'bye', islr: 'bye', citizen: ['BYE'], enabled: true },
   { word: 'see', islr: 'see', citizen: ['SEE'], enabled: true },
-  { word: 'look', islr: 'look', citizen: ['LOOKAT'], enabled: true },
+  // Off: a K (two fingers up, spread) raised near the face is LOOK, and it fired between the words of "meeting KC".
+  { word: 'look', islr: 'look', citizen: ['LOOKAT'], enabled: false },
   { word: 'listen', islr: 'listen', citizen: ['LISTEN'], enabled: true },
   { word: 'home', islr: 'home', citizen: ['HOME'], enabled: true },
   { word: 'close', islr: 'close', citizen: ['CLOSE'], enabled: true },
   { word: 'who', islr: 'who', citizen: ['WHO'], enabled: true },
   { word: 'why', islr: 'why', citizen: ['WHY'], enabled: true },
-  { word: 'drink', islr: 'drink', citizen: ['DRINK1', 'DRINK2'], enabled: true },
+  // Off: a C hand raised to the face is DRINK, so fingerspelling C near the mouth read as a word.
+  { word: 'drink', islr: 'drink', citizen: ['DRINK1', 'DRINK2'], enabled: false },
   { word: 'happy', islr: 'happy', citizen: ['HAPPY'], enabled: true },
   // Off: with ASL Citizen on, FINE took 10 of the signs left out of the list.
   { word: 'fine', islr: 'fine', citizen: ['FINE1', 'FINE2'], enabled: false },

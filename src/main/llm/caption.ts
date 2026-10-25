@@ -13,6 +13,7 @@ export const CAPTION_SYSTEM = [
   'The glosses are signs in ASL order: time words come first, then the topic, and question words often come last.',
   'Write what the signer is saying as one natural English sentence, in their own voice (first person).',
   'Keep the meaning and every signed word. Do not add names, facts or details that were not signed.',
+  'A short run of capital letters (KC, JB) is a person\'s name or initials: keep it exactly as written, never read it as a place or an abbreviation.',
   'Without a time sign (YESTERDAY, TOMORROW, ...), use the present tense. Add a question mark for questions.',
   'Reply with JSON: {"sentence": "..."}.'
 ].join('\n')
@@ -22,7 +23,9 @@ const SHOTS: [string, string][] = [
   ['TOMORROW MEETING WHAT TIME', 'What time is the meeting tomorrow?'],
   ['ME STORE GO YESTERDAY', 'I went to the store yesterday.'],
   ['YOU NAME WHAT', "What's your name?"],
-  ['YES PLEASE', 'Yes, please.']
+  ['YES PLEASE', 'Yes, please.'],
+  ['MEETING KC TOMORROW', 'Meeting with KC tomorrow.'],
+  ['HELLO KC', 'Hello, KC.']
 ]
 
 const FORMAT = {

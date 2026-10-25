@@ -33,15 +33,21 @@ describe('system prompt', () => {
     expect(SYSTEM_PROMPT).toMatch(/one ongoing conversation/)
   })
 
-  it('walks a meeting with a person through contact, calendar, an email offer, then mail', () => {
+  it('does a meeting with a person end to end: contact, free slot, event, then the email', () => {
     const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Meeting with a person'))
     expect(rule).toBeDefined()
-    const order = ['contacts_find', 'calendar_list_events', 'calendar_create_event', 'Want me to email', 'mail_send'].map((t) => rule!.indexOf(t))
+    const order = ['contacts_find', 'calendar_list_events', 'first free one-hour slot', 'calendar_create_event', 'mail_send'].map((t) => rule!.indexOf(t))
     expect(order.every((i) => i >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((a, b) => a - b))
     expect(rule).toContain('titled exactly "Meeting with <their first name>"')
-    expect(rule).toContain('do NOT send anything yet')
-    expect(rule).toContain('If they say no, or the event was cancelled, send nothing')
+    expect(rule).toContain('Do not ask whether to email')
+    expect(rule).toContain('If the event was cancelled, send nothing')
+  })
+
+  it('tells the agent how to expand a few signed keywords into a whole job', () => {
+    expect(SYSTEM_PROMPT).toContain('Reading the signs:')
+    expect(SYSTEM_PROMPT).toContain('MEETING (plus a person, a day, a time) means set the meeting up on the calendar and tell the person by email')
+    expect(SYSTEM_PROMPT).toContain('YES and NO answer your last question')
   })
 
   it('reads spelled letters as a person, without naming anyone', () => {

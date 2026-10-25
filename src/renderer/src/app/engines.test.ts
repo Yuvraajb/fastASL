@@ -16,7 +16,7 @@ import {
 } from '../engine/recognition/synthetic'
 import { staticFeatures } from '../engine/recognition/features'
 import { TeachSession } from '../engine/recognition/teach'
-import { GestureEngine } from '../engine/gestures/engine'
+import { GestureEngine, HANDS_DOWN_MS } from '../engine/gestures/engine'
 import { RecognitionSession } from '../engine/recognition/session'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
 import { Controller, QUICK_MENU } from './controller'
@@ -513,18 +513,18 @@ describe('sign recognition', () => {
     stop = startEngines(controller)
     play([sign(WORDS.HELLO, 902)], 600)
     expect(getApp().view).toEqual({ kind: 'recognizing', token: 'hello', isWord: true })
-    play([sign(WORDS.PLAY, 903)], 1500)
+    play([sign(WORDS.PLAY, 903)], HANDS_DOWN_MS + 500)
     expect(getApp().view).toEqual({ kind: 'conversation', phase: 'understanding', said: 'Hello play', steps: [] })
   })
 
   it("a sign on the agent's reply starts the next phrase, which hands down sends too", async () => {
     vi.useFakeTimers()
     stop = startEngines(controller)
-    play([sign(WORDS.HELLO, 902)], 1500)
+    play([sign(WORDS.HELLO, 902)], HANDS_DOWN_MS + 500)
     expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: 'Hello' })
     await vi.advanceTimersByTimeAsync(1200)
     expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'reply', said: 'Hello.', answer: { text: 'Hello! What can I do for you?' } })
-    play([sign(WORDS.PLAY, 903)], 1500)
+    play([sign(WORDS.PLAY, 903)], HANDS_DOWN_MS + 500)
     expect(views).toContainEqual({ kind: 'recognizing', token: 'play', isWord: true })
     expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: 'Play' })
   })
@@ -697,7 +697,7 @@ describe('sign recognition', () => {
   it('Spell mode: lowering the hands offers the letters at once, then the spellings', async () => {
     setApp({ mode: 'spell' })
     stop = startEngines(controller)
-    play([rest, spell('LSLS', 700, 700, 972)], 1500)
+    play([rest, spell('LSLS', 700, 700, 972)], HANDS_DOWN_MS + 500)
     expect(getApp().view).toEqual({
       kind: 'didYouMean',
       options: ['LSLS'],

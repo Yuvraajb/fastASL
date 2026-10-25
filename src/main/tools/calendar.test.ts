@@ -3,9 +3,11 @@ import { readDefault } from '../mac/exec'
 import { SEP, runAppleScript } from '../mac/osascript'
 import {
   calendarCreateEvent,
+  calendarListEvents,
   createEventScript,
   createdSubtitle,
   eventConfirmDetails,
+  forgetCalendarCache,
   formatEvent,
   listEventsScript,
   parseCreatedEvent,
@@ -220,5 +222,69 @@ describe('calendar_create_event run', () => {
     const outcome = await calendarCreateEvent.run({ ...args, end_iso: '2026-10-25T09:00:00' })
     expect(outcome).toEqual({ ok: false, text: 'end_iso must be after start_iso' })
     expect(runMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('calendar_list_events keeps the next days in a cache', () => {
+  const listing = [
+    record('Study group', '2026-10-24T16:00:00', '2026-10-24T17:00:00', 'Personal', 'false'),
+    record('Lab', '2026-10-25T10:00:00', '2026-10-25T11:00:00', 'College', 'false'),
+    record('Dinner', '2026-10-24T19:00:00', '2026-10-24T20:00:00', 'Personal', 'false')
+  ].join(SEP.record)
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(now)
+    forgetCalendarCache()
+    runMock.mockReset()
+    runMock.mockResolvedValue(listing)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('asks Calendar once per day, then answers the same day from memory', async () => {
+    await calendarListEvents.run({ range: 'today' })
+    const again = await calendarListEvents.run({ range: 'today' })
+    expect(runMock).toHaveBeenCalledTimes(1)
+    expect(again.text).toContain('Study group')
+    await calendarListEvents.run({ range: 'tomorrow' })
+    expect(runMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows a recurring event on the day asked about, not on its first date', async () => {
+    runMock.mockResolvedValue(record('Class', '2026-10-17T13:00:00', '2026-10-17T14:00:00', 'College', 'false'))
+    const out = await calendarListEvents.run({ range: 'today' })
+    expect(out.text).toContain('Today · 1:00 – 2:00 PM · Class (College)')
+  })
+
+  it('shares one slow query between calls for the same day that overlap', async () => {
+    const [a, b] = await Promise.all([calendarListEvents.run({ range: 'today' }), calendarListEvents.run({ range: 'today' })])
+    expect(runMock).toHaveBeenCalledTimes(1)
+    expect(a.ok && b.ok).toBe(true)
+  })
+
+  it('asks again once a listing is stale', async () => {
+    await calendarListEvents.run({ range: 'today' })
+    vi.setSystemTime(new Date(now.getTime() + 11 * 60_000))
+    await calendarListEvents.run({ range: 'today' })
+    expect(runMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('falls back to a direct query when the background one fails', async () => {
+    runMock.mockRejectedValueOnce(new Error('Calendar took too long to respond'))
+    const out = await calendarListEvents.run({ range: 'today' })
+    expect(runMock).toHaveBeenCalledTimes(2)
+    expect(out.ok).toBe(true)
+  })
+
+  it('a created event shows in the next listing without another query', async () => {
+    await calendarListEvents.run({ range: 'tomorrow' })
+    runMock.mockResolvedValueOnce(
+      record('Meeting with Mary', '2026-10-25T15:00:00', '2026-10-25T16:00:00', '0', 'Personal').replace(/^/, '')
+    )
+    await calendarCreateEvent.run({ title: 'Meeting with Mary', start_iso: '2026-10-25T15:00:00', end_iso: '2026-10-25T16:00:00', attendees: [], notes: '' })
+    const calls = runMock.mock.calls.length
+    const out = await calendarListEvents.run({ range: 'tomorrow' })
+    expect(runMock.mock.calls.length).toBe(calls)
+    expect(out.text).toContain('Meeting with Mary')
   })
 })

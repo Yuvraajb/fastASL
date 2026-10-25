@@ -128,6 +128,87 @@ export function formatEvent(ev: CalendarEvent, now: Date): string {
 
 const MAX_LISTED = 40
 
+/** How long a day's listing stays good: the agent plans around it, and a created event is added to it. */
+const CACHE_TTL_MS = 10 * 60_000
+/** Slow on a real Mac (about 45 s with 16 calendars and subscribed holidays), plus launching Calendar when it is closed. */
+const LIST_TIMEOUT_MS = 150_000
+
+interface Listing {
+  range: { start: Date; end: Date }
+  at: number
+  events: CalendarEvent[]
+}
+/** Listings by their exact range. A recurring event reports its first date, so a window wider than a day can't say which day it falls on. */
+const listings = new Map<string, Listing>()
+const loading = new Map<string, Promise<Listing | null>>()
+const keyOf = (range: { start: Date; end: Date }): string => `${range.start.getTime()}-${range.end.getTime()}`
+
+/** One slow Calendar query for `range`, shared by everyone asking for it meanwhile. Never throws; null when Calendar can't be read. */
+function load(range: { start: Date; end: Date }): Promise<Listing | null> {
+  const key = keyOf(range)
+  const pending = loading.get(key)
+  if (pending) return pending
+  const query = runAppleScript(listEventsScript(range), { app: 'Calendar', launch: true, timeoutMs: LIST_TIMEOUT_MS })
+    .then((out): Listing => {
+      const listing = { range, at: Date.now(), events: parseEvents(out) }
+      listings.set(key, listing)
+      return listing
+    })
+    .catch(() => null)
+    .finally(() => loading.delete(key))
+  loading.set(key, query)
+  return query
+}
+
+/**
+ * Starts today's and tomorrow's listings in the background (at app start), one after the other, so the
+ * agent's first look at the calendar is instant instead of tens of seconds.
+ */
+export function warmCalendar(now = new Date()): void {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  void load({ start: today, end: addDays(today, 1) }).then(() => load({ start: addDays(today, 1), end: addDays(today, 2) }))
+}
+
+/** Forgets every cached listing (tests, and a Calendar that changed behind our back). */
+export function forgetCalendarCache(): void {
+  listings.clear()
+  loading.clear()
+}
+
+const overlaps = (ev: CalendarEvent, range: { start: Date; end: Date }): boolean => ev.start < range.end && ev.end > range.start
+
+/**
+ * A recurring event reports its first occurrence, so on a one-day listing an instance from an earlier
+ * day is shown on the listed day at its time (the day the user asked about), not on the old date.
+ */
+function onTheListedDay(ev: CalendarEvent, range: { start: Date; end: Date }): CalendarEvent {
+  const dayMs = 24 * 3_600_000
+  const oneDay = range.end.getTime() - range.start.getTime() <= dayMs + 3_600_000
+  if (!oneDay || ev.allDay || ev.start >= range.start || ev.end.getTime() - ev.start.getTime() >= dayMs) return ev
+  const shifted = new Date(range.start.getFullYear(), range.start.getMonth(), range.start.getDate(), ev.start.getHours(), ev.start.getMinutes())
+  return { ...ev, start: shifted, end: new Date(shifted.getTime() + (ev.end.getTime() - ev.start.getTime())) }
+}
+
+/** The events in `range`: from the listing kept for it while fresh, else asked from Calendar (which can take a while). */
+async function eventsIn(range: { start: Date; end: Date }): Promise<CalendarEvent[]> {
+  const kept = listings.get(keyOf(range))
+  const fresh = kept && Date.now() - kept.at < CACHE_TTL_MS ? kept : null
+  const listing = fresh ?? (await load(range))
+  const events = listing
+    ? listing.events
+    : parseEvents(await runAppleScript(listEventsScript(range), { app: 'Calendar', launch: true, timeoutMs: LIST_TIMEOUT_MS }))
+  return events.map((ev) => onTheListedDay(ev, range))
+}
+
+/** A created event joins the kept listings it falls in, so a later look at the calendar sees it without another slow query. */
+function rememberCreated(ev: CalendarEvent): void {
+  for (const [key, listing] of listings) {
+    if (overlaps(ev, listing.range)) {
+      listings.set(key, { ...listing, events: [...listing.events, ev].sort((a, b) => a.start.getTime() - b.start.getTime()) })
+    }
+  }
+}
+
 export const calendarListEvents = defineTool({
   name: 'calendar_list_events',
   description:
@@ -144,8 +225,7 @@ export const calendarListEvents = defineTool({
     const now = new Date()
     const range = resolveRange(args, now)
     if (typeof range === 'string') return fail(range)
-    // ~17 s on a Mac with a subscribed holiday calendar, plus launching Calendar when it is closed.
-    const events = parseEvents(await runAppleScript(listEventsScript(range), { app: 'Calendar', launch: true, timeoutMs: 60_000 }))
+    const events = await eventsIn(range)
     if (!events.length) {
       const title = `No events ${range.phrase}`
       return { ok: true, text: `${title}.`, title, subtitle: 'Your calendar is clear' }
@@ -311,6 +391,7 @@ export const calendarCreateEvent = defineTool({
     })
     const created = parseCreatedEvent(await runAppleScript(script, { app: 'Calendar', launch: true, timeoutMs: 30_000 }))
     if (!created) return fail('Calendar did not confirm the new event')
+    rememberCreated({ title: created.title, start: created.start, end: created.end, calendar: created.calendar, allDay: false })
 
     const now = new Date()
     const missing = args.attendees.length - created.guests
