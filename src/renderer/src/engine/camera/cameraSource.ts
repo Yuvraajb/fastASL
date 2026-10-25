@@ -63,7 +63,11 @@ export function pickBuiltinCamera(devices: readonly Pick<MediaDeviceInfo, 'kind'
   return (real.find((d) => BUILT_IN_CAMERA.test(d.label)) ?? real[0])?.deviceId
 }
 
-async function openBuiltin(requested?: string): Promise<CameraHandle> {
+/**
+ * The webcam as a stream: the Mac's own camera, even when macOS has made a virtual one the default.
+ * Shared by the agent card (openBuiltin) and the caption window.
+ */
+export async function openRealCameraStream(requested?: string): Promise<MediaStream> {
   const open = (deviceId?: string, exact = false): Promise<MediaStream> =>
     navigator.mediaDevices.getUserMedia({
       video: {
@@ -75,24 +79,29 @@ async function openBuiltin(requested?: string): Promise<CameraHandle> {
       },
       audio: false
     })
+  let stream = await open(requested)
+  const opened = stream.getVideoTracks()[0]?.label ?? ''
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+  if (window.fastasl?.isDev) {
+    const names = devices.filter((d) => d.kind === 'videoinput').map((d) => d.label || '(no name)')
+    console.log(`[camera] opened "${opened}" of: ${names.join(' | ')}`)
+  }
+  // With no camera chosen the system default opens, and macOS can make a virtual one the default
+  // (OBS's stays installed even when OBS is closed). Names are only readable once a camera is open.
+  if (!requested && isVirtualCamera(opened)) {
+    const real = pickBuiltinCamera(devices)
+    if (real) {
+      for (const track of stream.getTracks()) track.stop()
+      stream = await open(real, true).catch(() => open(real))
+    }
+  }
+  return stream
+}
+
+async function openBuiltin(requested?: string): Promise<CameraHandle> {
   let stream: MediaStream
   try {
-    stream = await open(requested)
-    const opened = stream.getVideoTracks()[0]?.label ?? ''
-    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
-    if (window.fastasl?.isDev) {
-      const names = devices.filter((d) => d.kind === 'videoinput').map((d) => d.label || '(no name)')
-      console.log(`[camera] opened "${opened}" of: ${names.join(' | ')}`)
-    }
-    // With no camera chosen the system default opens, and macOS can make a virtual one the default
-    // (OBS's stays installed even when OBS is closed). Names are only readable once a camera is open.
-    if (!requested && isVirtualCamera(opened)) {
-      const real = pickBuiltinCamera(devices)
-      if (real) {
-        for (const track of stream.getTracks()) track.stop()
-        stream = await open(real, true).catch(() => open(real))
-      }
-    }
+    stream = await openRealCameraStream(requested)
   } catch (err) {
     throw new Error(cameraErrorMessage(err))
   }
