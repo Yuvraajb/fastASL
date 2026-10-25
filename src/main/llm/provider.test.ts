@@ -296,4 +296,10 @@ describe('LLM_PROVIDER=droid', () => {
     expect(await llm.spellSuggest({ letters: 'KRIS', frontmost: null })).toEqual({ ok: true, value: [] })
     expect((await llm.identifySign({ frames: [], motion: '', mode: 'command', known: [] })).ok).toBe(false)
   })
+
+  it('sends spelled letters as one word, so "K C" is searched as KC and not as two words', async () => {
+    const llm = createLlmService({ tools: () => [], provider: { ok: true, value: 'droid' } })
+    const res = await llm.interpret({ tokens: ['meeting', 'K', 'C', 'tomorrow', 'J', 'B'], sentence: '', mode: 'command', frontmost: null, gestures: [] })
+    expect(res).toMatchObject({ ok: true, value: { sentence: 'Meeting KC tomorrow JB', intent: '(ASL glosses, in signing order) meeting KC tomorrow JB' } })
+  })
 })
