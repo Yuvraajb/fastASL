@@ -14,7 +14,7 @@ import type {
   SignTemplate
 } from '@shared/types'
 import { CAPTURE_REASONS, type ShapeCapture } from '../engine/gestures/customShapes'
-import { getApp, setApp, type ChatState } from './store'
+import { getApp, setApp, type ChatAgent, type ChatState } from './store'
 import type { Services } from './services'
 import type { SettingsPage, Token, View } from './types'
 import { live } from './live'
@@ -201,8 +201,8 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
     case 'dictation':
       return new Set(['fist', 'swipeLeft', 'swipeRight', 'swipeUp'])
     case 'chat':
-      // Thumbs up sends, a swipe left deletes the last word, a fist stops a reply or leaves.
-      return new Set(['thumbsUp', 'fist', 'swipeLeft'])
+      // Thumbs up sends (or confirms), fingers answer a question, a swipe left deletes a word, a fist cancels, stops or leaves.
+      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'fingers'])
     case 'toast':
       return new Set(['fist'])
     case 'settings':
@@ -367,6 +367,8 @@ export class Controller {
   private untestedStream = false
   private unsubscribe: (() => void) | null = null
   private unsubscribeChat: (() => void) | null = null
+  /** The agent run started from the chat, if any. Its events fill that message, not the Working/Confirm/Done views. */
+  private chatRun: { id: string; runId: string | null; held: AgentEvent[] } | null = null
   /**
    * The notice a running LLM call put up ("Rate limited, retrying..."), and whether that call is
    * still the card's. It goes when the call settles or is superseded or cancelled.
@@ -616,6 +618,12 @@ export class Controller {
   /** A recognized word or number joins the draft. Letters are ignored here: they come from Spell mode. */
   private chatToken(token: Token): void {
     if (token.kind !== 'word') return
+    // While the agent waits for an answer, a signed number picks that option.
+    const ask = this.chatAsk()
+    if (ask) {
+      const picked = /^[1-9]$/.test(token.text) ? Number(token.text) - 1 : ask.options.findIndex((o) => o.toLowerCase() === token.text.toLowerCase())
+      if (picked >= 0 && picked < ask.options.length) return this.chatAnswer(picked)
+    }
     const { draft } = getApp().chat
     this.setChat({ draft: draft ? `${draft} ${token.text}` : token.text })
   }
@@ -632,9 +640,15 @@ export class Controller {
   }
 
   chatSend(): void {
+    const text = getApp().chat.draft.replace(/\s+/g, ' ').trim()
+    if (!text) return
+    this.chatSubmit(text)
+  }
+
+  /** Sends `text` to the agent as the next message (a typed or signed message, or the answer to its question). */
+  private chatSubmit(text: string): void {
     const chat = getApp().chat
-    const text = chat.draft.replace(/\s+/g, ' ').trim()
-    if (!text || chat.busy) return
+    if (chat.busy) return
     this.subscribe()
     const id = crypto.randomUUID()
     this.setChat({
@@ -643,21 +657,129 @@ export class Controller {
       messages: [
         ...chat.messages,
         { id: `${id}:you`, role: 'user', text },
-        { id, role: 'assistant', text: '', status: 'streaming' }
+        { id, role: 'assistant', text: '', status: 'streaming', agent: { steps: [], ask: null, confirm: null, result: null } }
       ]
     })
-    void this.services.chatSend(id, text).then((res) => {
-      if (!res.ok) this.finishChat(id, 'error', res.error)
+    const run = { id, runId: null as string | null, held: [] as AgentEvent[] }
+    this.chatRun = run
+    void (async () => {
+      const frontmost = await this.services.frontmostApp().catch(() => null)
+      if (this.chatRun !== run) return
+      const res = await settled(this.services.agentRun({ intent: text, sentence: text, frontmost }))
+      if (this.chatRun !== run) return
+      if (!res.ok) {
+        this.chatRun = null
+        return this.finishChat(id, 'error', failureText(res))
+      }
+      run.runId = res.value.runId
+      for (const e of run.held.splice(0)) this.onChatAgentEvent(e)
+    })()
+  }
+
+  /** The agent's open question of the latest message, if it is waiting for an answer. */
+  private chatAsk(): { question: string; options: string[] } | null {
+    const last = getApp().chat.messages.at(-1)
+    return last?.role === 'assistant' && !getApp().chat.busy ? (last.agent?.ask ?? null) : null
+  }
+
+  /** Answers the agent's question with option `index` (0-based): the option's text goes as the next message. */
+  chatAnswer(index: number): void {
+    const option = this.chatAsk()?.options[index]
+    if (option) this.chatSubmit(option)
+  }
+
+  /** Click on Go / Cancel under a pending confirmation (the gestures are thumbs up and fist). */
+  chatRespond(approved: boolean): void {
+    this.chatConfirm(approved)
+  }
+
+  private chatConfirm(approved: boolean): boolean {
+    const last = getApp().chat.messages.at(-1)
+    const confirm = last?.agent?.confirm
+    if (!last || !confirm) return false
+    this.patchAgent(last.id, { confirm: null })
+    void this.services.agentRespond(confirm.requestId, approved)
+    return true
+  }
+
+  private patchAgent(id: string, patch: Partial<ChatAgent>): void {
+    this.setChat({
+      messages: getApp().chat.messages.map((m) => (m.id === id && m.agent ? { ...m, agent: { ...m.agent, ...patch } } : m))
     })
   }
 
+  /** Events of the run started from the chat. Returns true when the event was the chat's. */
+  private onChatAgentEvent(e: AgentEvent): boolean {
+    const run = this.chatRun
+    if (!run) return false
+    if (run.runId === null) {
+      run.held.push(e) // until agentRun's reply names the run
+      return true
+    }
+    if (e.runId !== run.runId) {
+      // A late event from another run. Never leave the agent waiting on an answer.
+      if (e.type === 'confirm') void this.services.agentRespond(e.requestId, false)
+      return false
+    }
+    const message = getApp().chat.messages.find((m) => m.id === run.id)
+    const agent = message?.agent
+    if (!message || !agent) return true
+    switch (e.type) {
+      case 'step': {
+        const steps = [...agent.steps]
+        const i = steps.findIndex((s) => s.id === e.step.id)
+        if (i >= 0) steps[i] = e.step
+        else steps.push(e.step)
+        this.patchAgent(run.id, { steps })
+        return true
+      }
+      case 'confirm':
+        this.patchAgent(run.id, { confirm: { requestId: e.requestId, details: e.details } })
+        return true
+      case 'ask':
+        this.patchAgent(run.id, { steps: [], ask: { question: e.question, options: e.options } })
+        this.chatRun = null
+        this.finishChat(run.id, 'done', undefined, e.question)
+        return true
+      case 'text':
+        this.chatRun = null
+        this.patchAgent(run.id, { steps: [] }) // the "Thinking" step is over
+        this.finishChat(run.id, 'done', undefined, e.text)
+        return true
+      case 'done': {
+        // A question or plain answer already ended the message (its event comes first).
+        if (message.status !== 'streaming') return true
+        this.chatRun = null
+        this.patchAgent(run.id, { result: { ok: e.complete, title: e.result.title, subtitle: e.result.subtitle } })
+        this.finishChat(run.id, 'done')
+        if (e.complete && e.result.view) void this.services.openTarget(e.result.view)
+        return true
+      }
+      case 'error':
+        this.chatRun = null
+        this.finishChat(run.id, 'error', failureText({ error: e.message, missingKey: e.missingKey }))
+        return true
+      case 'stopped':
+        this.chatRun = null
+        this.finishChat(run.id, 'done', undefined, 'Stopped.')
+        return true
+      default:
+        return true
+    }
+  }
+
   chatStop(): void {
-    void this.services.chatStop()
+    const run = this.chatRun
+    if (!run) return
+    this.chatRun = null
+    void this.services.agentStop().catch(() => undefined)
+    this.finishChat(run.id, 'done', undefined, 'Stopped.')
   }
 
   /** A new conversation: the model forgets, the list empties. */
   chatClear(): void {
-    void this.services.chatReset()
+    if (this.chatRun) void this.services.agentStop().catch(() => undefined)
+    this.chatRun = null
     this.setChat({ messages: [], draft: '', busy: false })
   }
 
@@ -674,12 +796,12 @@ export class Controller {
     else this.finishChat(e.id, 'error', e.message)
   }
 
-  private finishChat(id: string, status: 'done' | 'error', error?: string): void {
+  private finishChat(id: string, status: 'done' | 'error', error?: string, text?: string): void {
     const chat = getApp().chat
     this.setChat({
       busy: false,
       messages: chat.messages.map((m) =>
-        m.id === id ? { ...m, status, text: status === 'error' ? error ?? 'Something went wrong' : m.text } : m
+        m.id === id ? { ...m, status, text: status === 'error' ? error ?? 'Something went wrong' : (text ?? m.text) } : m
       )
     })
   }
@@ -749,9 +871,13 @@ export class Controller {
         if (g === 'fist') this.leaveToast(view.returnTo)
         return
       case 'chat':
-        if (g === 'thumbsUp') this.chatSend()
-        else if (g === 'swipeLeft') this.chatDeleteLastWord()
+        if (g === 'fingers' && input.count) {
+          if (this.chatAsk()) this.chatAnswer(input.count - 1)
+        } else if (g === 'thumbsUp') {
+          if (!this.chatConfirm(true)) this.chatSend()
+        } else if (g === 'swipeLeft') this.chatDeleteLastWord()
         else if (g === 'fist') {
+          if (this.chatConfirm(false)) return
           if (getApp().chat.busy) this.chatStop()
           else this.chatLeave()
         }
@@ -1251,6 +1377,7 @@ export class Controller {
   }
 
   private onAgentEvent(e: AgentEvent): void {
+    if (this.onChatAgentEvent(e)) return
     if (e.type === 'started') this.adopt(e)
     if (this.agentRun?.runId === null) {
       this.agentRun.held.push(e) // until agentRun's reply names the command's run

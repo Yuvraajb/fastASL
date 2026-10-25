@@ -11,6 +11,8 @@ import {
   makeAgent,
   makeTools,
   reply,
+  callViaScript,
+  scriptUse,
   request,
   resultMessage,
   toolUse,
@@ -70,6 +72,47 @@ describe('AgentService', () => {
     expect(prompt).toContain('America/Los_Angeles')
     expect(prompt).toContain('Frontmost app: Messages')
     expect(prompt).toContain('Task: Remind me tomorrow')
+  })
+
+  it('turns an ASK: reply into a question for the user, with no tool run', async () => {
+    const ctx = makeAgent([reply('ASK: 1 AM or 1 PM? | 1 AM | 1 PM')])
+    const result = await ctx.agent.run(request('meeting 1'), ctx.emit)
+    expect(result.ok).toBe(true)
+    await vi.waitFor(() => expect(ofType(ctx.events, 'ask')).toHaveLength(1))
+    expect(ofType(ctx.events, 'ask')[0]).toMatchObject({ question: '1 AM or 1 PM?', options: ['1 AM', '1 PM'] })
+    expect(ctx.runs).toEqual([])
+  })
+
+  it('sends a plain answer as text when no tool is needed', async () => {
+    const ctx = makeAgent([reply('Two plus two is four.')])
+    await ctx.agent.run(request('what is 2 plus 2'), ctx.emit)
+    await vi.waitFor(() => expect(ofType(ctx.events, 'text')).toHaveLength(1))
+    expect(ofType(ctx.events, 'text')[0]).toMatchObject({ text: 'Two plus two is four.' })
+  })
+
+  it('calls a tool through droid\'s Script tool: the same confirm card, then the tool runs', async () => {
+    const ctx = makeAgent([callViaScript('send_message', { to: 'Mom', text: 'On my way' })])
+    const { completion } = await startRun(ctx)
+    const confirm = await waitForConfirm(ctx.events)
+    expect(confirm).toMatchObject({ tool: 'send_message', details: { kind: 'message', to: 'Mom', text: 'On my way' } })
+    expect(ctx.runs).toEqual([])
+    await ctx.agent.respond(confirm.requestId, true)
+    await completion
+    expect(ctx.runs).toEqual(['send_message'])
+    expect(ofType(ctx.events, 'done')[0]).toMatchObject({ complete: true, result: { title: 'Message sent' } })
+  })
+
+  it('cancels a Script that does anything but call fastasl tools', async () => {
+    const evil = async function* (session: import('./testing/fakes').FakeSession) {
+      const script = 'require("child_process").exec("rm -rf ~"); await tools.fastasl.take_screenshot({})'
+      const info = scriptUse(script, [{ name: 'take_screenshot', input: {} }])
+      yield* (await session.callTool('take_screenshot', {}, info)) === 'cancelled' ? [resultMessage('interrupted', '')] : [resultMessage('success', 'ran')]
+    }
+    const ctx = makeAgent([evil])
+    const { completion } = await startRun(ctx)
+    await completion
+    expect(ctx.runs).toEqual([])
+    expect(ofType(ctx.events, 'confirm')).toHaveLength(0)
   })
 
   it('asks before a write tool and runs it once approved', async () => {

@@ -70,6 +70,37 @@ export function toolUse(name: string, input: Record<string, unknown>, serverName
   }
 }
 
+/** A Script permission request as this droid sends it: the code, and the tool calls it contains. */
+export function scriptUse(script: string, calls: { name: string; input: Record<string, unknown> }[]): ToolConfirmationInfo {
+  return {
+    toolUse: { type: 'tool_use' as ToolConfirmationInfo['toolUse']['type'], id: 'use-script', name: 'Script', input: { script } },
+    confirmationType: ToolConfirmationType.Script,
+    details: {
+      type: ToolConfirmationType.Script,
+      impactLevel: 'high',
+      calls: calls.map((c, i) => ({
+        toolName: `fastasl___${c.name}`,
+        line: i + 1,
+        column: 1,
+        toolInput: c.input,
+        confirmation: { type: ToolConfirmationType.McpTool, toolName: `fastasl___${c.name}`, impactLevel: 'high', serverName: 'fastasl', actualToolName: c.name }
+      }))
+    }
+  } as unknown as ToolConfirmationInfo
+}
+
+/** Droid calling a tool the way this version does: through its Script tool. */
+export function callViaScript(name: string, input: Record<string, unknown>, claim = 'All done!'): TurnScript {
+  return async function* (session) {
+    const script = `text(await tools.fastasl.${name}(${JSON.stringify(input)}));`
+    if ((await session.callTool(name, input, scriptUse(script, [{ name, input }]))) === 'cancelled') {
+      yield resultMessage('interrupted', claim)
+      return
+    }
+    yield resultMessage('success', claim)
+  }
+}
+
 type ResultSubtype = 'success' | 'interrupted' | 'error_during_execution'
 
 export function resultMessage(subtype: ResultSubtype, text = ''): DroidResultMessage {

@@ -61,6 +61,10 @@
   --dot-idle: rgba(255, 255, 255, 0.36);
 
   --green: #5ec27c;
+  /* The one accent: the AI at work (pipeline strip, glow ring, asks). Everything else stays monochrome. */
+  --accent: #6ee7ff;
+  --accent-2: #a78bfa;
+  --accent-glow: rgba(110, 231, 255, 0.35);
   --red: #ff453a;
 
   --dur-fast: 120ms;

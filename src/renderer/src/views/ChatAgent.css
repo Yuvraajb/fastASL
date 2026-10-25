@@ -1,0 +1,258 @@
+/* Pipeline strip: SIGN -> ENGLISH -> ACTION */
+.pipeline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-3);
+}
+
+.pipeline__stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition:
+    color var(--dur) var(--ease-out),
+    background-color var(--dur) var(--ease-out),
+    border-color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out);
+}
+
+.pipeline__stage:not(:last-child)::after {
+  content: '›';
+  margin-left: 8px;
+  color: var(--text-3);
+  letter-spacing: 0;
+}
+
+.pipeline__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.pipeline__stage--past {
+  color: var(--text-2);
+}
+
+.pipeline__stage--live {
+  color: var(--accent);
+  background: rgba(110, 231, 255, 0.1);
+  border-color: rgba(110, 231, 255, 0.35);
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+
+.pipeline__stage--live .pipeline__dot {
+  opacity: 1;
+  animation: fa-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes fa-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 var(--accent-glow);
+  }
+  50% {
+    transform: scale(1.25);
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+/* The agent's work inside the assistant bubble */
+.agent {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.agent--live::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 14px;
+  padding: 1px;
+  background: conic-gradient(from var(--fa-spin, 0deg), transparent 0 60%, var(--accent) 80%, var(--accent-2) 92%, transparent);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: fa-ring 2.4s linear infinite;
+  pointer-events: none;
+}
+
+@property --fa-spin {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes fa-ring {
+  to {
+    --fa-spin: 360deg;
+  }
+}
+
+.agent__steps .steps__row--current .steps__label {
+  background: linear-gradient(90deg, var(--text) 0%, var(--accent) 50%, var(--text) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: fa-shimmer 1.6s linear infinite;
+}
+
+@keyframes fa-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* The question: big numbered options, answered by signing the number */
+.agent__ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  border: 1px solid rgba(110, 231, 255, 0.4);
+  border-radius: 999px;
+  background: rgba(110, 231, 255, 0.08);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 0 16px rgba(110, 231, 255, 0.18);
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+.agent__option:hover {
+  background: rgba(110, 231, 255, 0.16);
+}
+
+.agent__num {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #06161a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.agent__askhint {
+  flex-basis: 100%;
+  color: var(--text-3);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* One-line confirm and the result */
+.agent__confirm,
+.agent__result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+.agent__confirm {
+  border: 1px solid rgba(110, 231, 255, 0.4);
+  box-shadow: 0 0 18px rgba(110, 231, 255, 0.2);
+}
+
+.agent__ficon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(110, 231, 255, 0.12);
+  color: var(--accent);
+}
+
+.agent__ftext {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.agent__ftitle {
+  overflow: hidden;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent__fsub {
+  overflow: hidden;
+  font-size: var(--fs-small);
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent__go {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #06161a;
+  font: inherit;
+  font-size: var(--fs-small);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.agent__result {
+  border: 1px solid rgba(94, 194, 124, 0.45);
+  box-shadow: 0 0 18px rgba(94, 194, 124, 0.2);
+}
+
+.agent__result--fail {
+  border-color: var(--border, rgba(255, 255, 255, 0.12));
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent--live::before,
+  .pipeline__stage--live .pipeline__dot,
+  .agent__steps .steps__row--current .steps__label {
+    animation: none;
+  }
+}

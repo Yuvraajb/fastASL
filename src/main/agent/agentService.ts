@@ -8,11 +8,12 @@ import {
 } from '@factory/droid-sdk/node'
 import type { AgentEvent, AgentRunRequest, CompletedTask, Result, ToolCallRecord } from '@shared/types'
 import type { ToolDef } from '../tools/types'
+import { parseAsk } from './ask'
 import { callsComplete, confirmDetailsFor, errorText, parseArgs, performCall, summarize, type ToolArgs } from './calls'
 import { buildDroidTools } from './droidTools'
 import { SYSTEM_PROMPT, turnPrompt } from './prompt'
 import { Run } from './run'
-import { matchPermissionTool } from './toolNames'
+import { matchPermissionTool, scriptCalls } from './toolNames'
 import type { DroidSessionLike, RunOutcome, SessionFactory, ToolRunner } from './types'
 
 /** How long a stopped turn may take to wind down before the session is replaced. */
@@ -230,7 +231,22 @@ export class AgentService {
       run.emit({ type: 'error', runId: run.runId, message: error })
       return { kind: 'failed', message: error }
     }
+    // No tool ran: the turn was a clarifying question or a plain answer, not an action.
+    if (!error && !run.declined && run.calls.length === 0 && result?.text.trim()) {
+      const ask = parseAsk(result.text)
+      if (ask) return this.speak(run, { type: 'ask', runId: run.runId, ...ask }, ask.question)
+      run.emit({ type: 'text', runId: run.runId, text: result.text.trim() })
+    }
     return this.finish(run, { finished: result?.success === true, error })
+  }
+
+  /** Ends a run that asked a question: the question event, then a Done the chat ignores. */
+  private speak(run: Run, event: AgentEvent, question: string): RunOutcome {
+    const result = { title: 'Question', subtitle: question, evidence: [] }
+    run.emit(event)
+    run.emit({ type: 'done', runId: run.runId, result, complete: false })
+    this.lastCalls = []
+    return { kind: 'done', result, complete: false, succeeded: [] }
   }
 
   private async replaySteps(run: Run, calls: readonly ToolCallRecord[]): Promise<RunOutcome> {
@@ -298,6 +314,16 @@ export class AgentService {
 
     const matched: [ToolDef, ToolArgs][] = []
     for (const use of toolUses) {
+      // Droid calls MCP tools through its Script tool: vet the script, then treat each call as the tool request.
+      const scripted = scriptCalls(use, this.deps.tools)
+      if (scripted === null) {
+        console.warn('[agent] cancelled a script that is not just fastasl tool calls:', JSON.stringify(use.toolUse.input).slice(0, 300))
+        return cancel
+      }
+      if (scripted) {
+        for (const { def, input } of scripted) matched.push([def, input as ToolArgs])
+        continue
+      }
       const def = matchPermissionTool(use, this.deps.tools)
       if (!def) {
         console.warn('[agent] cancelled a non-fastasl tool:', use.toolUse.name, use.details)

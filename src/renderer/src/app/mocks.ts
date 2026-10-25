@@ -1,5 +1,5 @@
 import type { Mode } from '@shared/types'
-import type { PickProgress } from './store'
+import type { ChatState, PickProgress } from './store'
 import type { View } from './types'
 import { cameraFallbackNotice, QUICK_MENU } from './controller'
 import type { MockPose } from './live'
@@ -12,6 +12,8 @@ export interface MockScene {
   holdProgress?: number
   pick?: PickProgress | null
   pose?: MockPose
+  /** Chat messages and draft for the chat scenes. */
+  chat?: ChatState
   /** Camera error shown in the feed (live.error); screenshots only, where the camera never runs. */
   error?: string
 }
@@ -340,6 +342,97 @@ export const MOCK_SCENES: Record<string, MockScene> = {
 }
 
 /** Ordered list for `npm run screens` -> docs/screens/NN-<id>.png */
+
+const chatAgent = { steps: [], ask: null, confirm: null, result: null }
+const MEETING_ASK = [
+  { id: 'a:you', role: 'user' as const, text: 'meeting 1' },
+  {
+    id: 'a',
+    role: 'assistant' as const,
+    text: '1 AM or 1 PM?',
+    status: 'done' as const,
+    agent: { ...chatAgent, ask: { question: '1 AM or 1 PM?', options: ['1 AM', '1 PM'] } }
+  }
+]
+const MEETING_PM = [
+  { id: 'a:you', role: 'user' as const, text: 'meeting 1' },
+  { id: 'a', role: 'assistant' as const, text: '1 AM or 1 PM?', status: 'done' as const, agent: chatAgent },
+  { id: 'b:you', role: 'user' as const, text: '1 PM' }
+]
+
+MOCK_SCENES.chatAsk = { view: { kind: 'chat' }, pose: 'point', chat: { messages: MEETING_ASK, draft: '', busy: false } }
+MOCK_SCENES.chatConfirm = {
+  view: { kind: 'chat' },
+  pose: 'thumbsUp',
+  chat: {
+    draft: '',
+    busy: true,
+    messages: [
+      ...MEETING_PM,
+      {
+        id: 'b',
+        role: 'assistant',
+        text: '',
+        status: 'streaming',
+        agent: {
+          ...chatAgent,
+          steps: [{ id: 's1', label: 'Opening Calendar', status: 'done' }],
+          confirm: { requestId: 'r', details: { kind: 'event', title: 'Meeting', dateLabel: 'Today', timeLabel: '1:00 – 2:00 PM' } }
+        }
+      }
+    ]
+  }
+}
+MOCK_SCENES.chatWorking = {
+  view: { kind: 'chat' },
+  pose: 'palm',
+  chat: {
+    draft: '',
+    busy: true,
+    messages: [
+      ...MEETING_PM,
+      {
+        id: 'b',
+        role: 'assistant',
+        text: '',
+        status: 'streaming',
+        agent: {
+          ...chatAgent,
+          steps: [
+            { id: 's1', label: 'Opening Calendar', status: 'done' },
+            { id: 's2', label: 'Creating event', status: 'current' }
+          ]
+        }
+      }
+    ]
+  }
+}
+MOCK_SCENES.chatDone = {
+  view: { kind: 'chat' },
+  pose: 'palm',
+  chat: {
+    draft: '',
+    busy: false,
+    messages: [
+      ...MEETING_PM,
+      {
+        id: 'b',
+        role: 'assistant',
+        text: '',
+        status: 'done',
+        agent: {
+          ...chatAgent,
+          steps: [
+            { id: 's1', label: 'Opening Calendar', status: 'done' },
+            { id: 's2', label: 'Creating event', status: 'done' }
+          ],
+          result: { ok: true, title: 'Meeting created', subtitle: 'Today at 1:00 PM' }
+        }
+      }
+    ]
+  }
+}
+
 export const SCREENSHOT_ORDER: string[] = [
   'collapsed',
   'palmHold',
@@ -383,5 +476,9 @@ export const SCREENSHOT_ORDER: string[] = [
   'toastGestureSaved',
   'settingsCameraUrl',
   'settingsCameraError',
-  'settingsCameraLost'
+  'settingsCameraLost',
+  'chatAsk',
+  'chatWorking',
+  'chatConfirm',
+  'chatDone'
 ]

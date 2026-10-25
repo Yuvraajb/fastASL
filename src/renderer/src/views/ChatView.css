@@ -96,3 +96,21 @@
   color: var(--text-3);
   font-size: 10px;
 }
+
+.chat__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat__item--user {
+  align-items: flex-end;
+}
+
+.chat__item--assistant {
+  align-items: stretch;
+}
+
+.chat__log {
+  max-height: 190px;
+}

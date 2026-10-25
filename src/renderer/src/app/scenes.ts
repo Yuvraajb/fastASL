@@ -12,7 +12,8 @@ export function applyScene(id: string): boolean {
     mode: scene.mode ?? 'command',
     notice: scene.notice ?? null,
     holdProgress: scene.holdProgress ?? 0,
-    pick: scene.pick ?? null
+    pick: scene.pick ?? null,
+    chat: scene.chat ?? { messages: [], draft: '', busy: false }
   })
   live.mockPose = scene.pose ?? 'palm'
   // The pipeline owns live.error wherever a camera can run.

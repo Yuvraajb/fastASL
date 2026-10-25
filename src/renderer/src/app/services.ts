@@ -151,6 +151,30 @@ export function mockServices(): Services {
     async agentRun(req) {
       const runId = `mock-${Date.now()}`
       stopped = false
+      const said = req.intent
+      const hasMeridiem = /\b(am|pm)\b/i.test(said)
+      const bareHour = /\bmeeting\b\D*(\d{1,2})\b/i.exec(said)?.[1]
+      const answered = /^(\d{1,2})\s*(am|pm)$/i.exec(said.trim())
+      if (!answered && !hasMeridiem && bareHour) {
+        // "meeting 1": the agent can't guess AM or PM, so it asks (the answer comes back as the next message).
+        void (async () => {
+          emit({ type: 'started', runId, intent: said })
+          await wait(900)
+          emit({ type: 'ask', runId, question: `${bareHour} AM or ${bareHour} PM?`, options: [`${bareHour} AM`, `${bareHour} PM`] })
+          emit({ type: 'done', runId, result: { title: 'Question', subtitle: '', evidence: [] }, complete: false })
+        })()
+        return { ok: true, value: { runId } }
+      }
+      if (/\?\s*$|^(what|who|how|why|when|where|tell|hello|hi)\b/i.test(said.trim())) {
+        void (async () => {
+          emit({ type: 'started', runId, intent: said })
+          await wait(900)
+          emit({ type: 'text', runId, text: `Demo reply: you said "${said}". Add FACTORY_API_KEY to .env for a real answer.` })
+          emit({ type: 'done', runId, result: { title: 'Answered', subtitle: '', evidence: [] }, complete: false })
+        })()
+        return { ok: true, value: { runId } }
+      }
+      const when = answered ? `${answered[1]}:00 ${answered[2].toUpperCase()}` : 'now'
       void (async () => {
         emit({ type: 'started', runId, intent: req.intent })
         const steps = ['Opening Calendar', 'Creating event', 'Adding attendees', 'Adding meeting link']
@@ -169,11 +193,10 @@ export function mockServices(): Services {
                 tool: 'calendar_create_event',
                 details: {
                   kind: 'event',
-                  title: 'Team Sync',
-                  dateLabel: 'Tomorrow, Oct 25',
-                  timeLabel: '10:00 – 11:00 AM',
-                  guestsLabel: '4 guests',
-                  videoLabel: 'Google Meet'
+                  title: answered ? 'Meeting' : 'Team Sync',
+                  dateLabel: answered ? 'Today' : 'Tomorrow, Oct 25',
+                  timeLabel: answered ? `${when} – 1 hour` : '10:00 – 11:00 AM',
+                  ...(answered ? {} : { guestsLabel: '4 guests', videoLabel: 'Google Meet' })
                 }
               })
             })
@@ -196,7 +219,7 @@ export function mockServices(): Services {
           runId,
           result: {
             title: 'Meeting created',
-            subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
+            subtitle: answered ? `Today at ${when}` : 'Tomorrow at 10:00 AM with 4 guests.',
             evidence: [{ tool: 'calendar_create_event', args: { title: 'Team Sync' }, ok: true, result: 'created' }],
             view: { kind: 'openApp', app: 'Calendar' }
           },

@@ -2985,8 +2985,9 @@ describe('LLM status notice (rate limits)', () => {
   })
 })
 
-describe('chat', () => {
+describe('chat (talks to the agent)', () => {
   const chat = () => getApp().chat
+  const last = () => chat().messages.at(-1)!
 
   it('opens from the tap, and signed words build an editable draft', () => {
     c.tap('chat')
@@ -2994,7 +2995,6 @@ describe('chat', () => {
     sign(word('hello'), word('how'), word('2'))
     expect(chat().draft).toBe('hello how 2')
     c.chatEdit('hello how are you')
-    expect(chat().draft).toBe('hello how are you')
     c.token(letter('A'))
     expect(chat().draft).toBe('hello how are you')
   })
@@ -3009,57 +3009,102 @@ describe('chat', () => {
     expect(chat().draft).toBe('')
   })
 
-  it('thumbs up sends the draft and the reply streams in', async () => {
+  it('thumbs up sends the draft to the agent and a plain answer comes back as text', async () => {
+    const run = vi.spyOn(services, 'agentRun')
     c.openChat()
-    sign(word('hello'), word('there'))
+    sign(word('what'), word('is'), word('this'))
     g('thumbsUp')
     expect(chat().draft).toBe('')
     expect(chat().busy).toBe(true)
-    expect(chat().messages.map((m) => [m.role, m.text])).toEqual([
-      ['user', 'hello there'],
-      ['assistant', '']
-    ])
-    await settle(3000)
+    await settle(2000)
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'what is this', sentence: 'what is this' }))
+    expect(chat().messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(last()).toMatchObject({ status: 'done' })
+    expect(last().text).toContain('Demo reply')
     expect(chat().busy).toBe(false)
-    const reply = chat().messages[1]
-    expect(reply.status).toBe('done')
-    expect(reply.text).toContain('You said: hello there')
+    viewAs('chat') // the Working / Done views never take over a chat run
   })
 
-  it('does not send an empty draft or a second message while one is being answered', async () => {
-    const send = vi.spyOn(services, 'chatSend')
+  it('does not send an empty draft or a second message while the agent is busy', async () => {
+    const run = vi.spyOn(services, 'agentRun')
     c.openChat()
     g('thumbsUp')
-    expect(send).not.toHaveBeenCalled()
-    sign(word('one'))
+    expect(run).not.toHaveBeenCalled()
+    sign(word('what'))
     g('thumbsUp')
-    sign(word('two'))
+    sign(word('how'))
     g('thumbsUp')
-    expect(send).toHaveBeenCalledTimes(1)
-    expect(chat().draft).toBe('two')
-    await settle(3000)
+    await settle(0)
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(chat().draft).toBe('how')
+    await settle(2000)
   })
 
-  it('shows why a message failed', async () => {
-    useServices({ ...services, chatSend: vi.fn(async () => ({ ok: false as const, error: 'Add FACTORY_API_KEY to .env' })) })
+  it('shows why the agent could not start', async () => {
+    useServices({ ...services, agentRun: vi.fn(async () => ({ ok: false as const, error: 'Add FACTORY_API_KEY to .env' })) })
     c.openChat()
     sign(word('hi'))
     g('thumbsUp')
     await settle(0)
-    const reply = chat().messages[1]
-    expect(reply).toMatchObject({ status: 'error', text: 'Add FACTORY_API_KEY to .env' })
+    expect(last()).toMatchObject({ status: 'error', text: 'Add FACTORY_API_KEY to .env' })
     expect(chat().busy).toBe(false)
   })
 
-  it('fist stops a reply being written, then leaves; new chat clears everything', async () => {
+  it('"meeting 1": the agent asks AM or PM, signing 2 answers, thumbs up confirms, the event is created', async () => {
     c.openChat()
-    sign(word('hi'))
+    sign(word('meeting'), word('1'))
     g('thumbsUp')
-    const stop = vi.spyOn(services, 'chatStop')
+    await settle(1500)
+    expect(last().agent?.ask).toEqual({ question: '1 AM or 1 PM?', options: ['1 AM', '1 PM'] })
+    expect(chat().busy).toBe(false)
+
+    sign(word('2')) // a signed number picks the option
+    expect(chat().messages.at(-2)).toMatchObject({ role: 'user', text: '1 PM' })
+    await settle(1500)
+    const confirm = last().agent?.confirm
+    expect(confirm?.details).toMatchObject({ kind: 'event', title: 'Meeting', timeLabel: expect.stringContaining('1:00 PM') })
+
+    g('thumbsUp') // goes ahead
+    await settle(4000)
+    expect(last().agent?.confirm).toBeNull()
+    expect(last().agent?.result).toMatchObject({ ok: true, title: 'Meeting created' })
+    expect(last().status).toBe('done')
+    viewAs('chat')
+  })
+
+  it('fingers answer the question too, and a fist at the confirmation cancels it', async () => {
+    c.openChat()
+    sign(word('meeting'), word('3'))
+    g('thumbsUp')
+    await settle(1500)
+    fingers(1)
+    await settle(1500)
+    expect(last().agent?.confirm).not.toBeNull()
+    g('fist')
+    await settle(2000)
+    expect(last().agent?.result).toMatchObject({ ok: false, title: 'Nothing was done' })
+  })
+
+  it('a number that is not an option is just part of the next message', async () => {
+    c.openChat()
+    sign(word('meeting'), word('1'))
+    g('thumbsUp')
+    await settle(1500)
+    sign(word('7'))
+    expect(chat().draft).toBe('7')
+    expect(chat().busy).toBe(false)
+  })
+
+  it('fist stops the agent while it works, then leaves; new chat clears everything', async () => {
+    c.openChat()
+    sign(word('meeting'), word('1'), word('pm'))
+    g('thumbsUp')
+    await settle(100)
+    const stop = vi.spyOn(services, 'agentStop')
     g('fist')
     expect(stop).toHaveBeenCalled()
+    expect(chat().busy).toBe(false)
     viewAs('chat')
-    await settle(3000)
     c.chatClear()
     expect(chat()).toEqual({ messages: [], draft: '', busy: false })
     g('fist')
@@ -3068,12 +3113,40 @@ describe('chat', () => {
 
   it('takes signs and its own gestures only', () => {
     expect(takesSigns({ kind: 'chat' })).toBe(true)
-    expect([...activeGestures({ kind: 'chat' })].sort()).toEqual(['fist', 'swipeLeft', 'thumbsUp'])
+    expect([...activeGestures({ kind: 'chat' })].sort()).toEqual(['fingers', 'fist', 'swipeLeft', 'thumbsUp'])
+  })
+
+  it('sends the signed sentence, edited or not, to the agent from the Sentence card', async () => {
+    signSentence(word('what'), word('is'), word('1'))
+    const run = vi.spyOn(services, 'agentRun')
+    c.tap('chat')
+    viewAs('chat')
+    await settle(0)
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'What is 1' }))
+    await settle(2000)
+
+    c.chatClear()
+    c.chatLeave()
+    signSentence(word('what'), word('2'))
+    c.editSentence('what is two')
+    c.tap('chat')
+    await settle(0)
+    expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ intent: 'what is two' }))
+    await settle(2000)
+  })
+
+  it('still receives the reply after dispose() (React StrictMode runs it on start-up)', async () => {
+    c.dispose()
+    c.openChat()
+    sign(word('what'))
+    g('thumbsUp')
+    await settle(2000)
+    expect(last()).toMatchObject({ role: 'assistant', status: 'done' })
   })
 })
 
 describe('hand-shape shortcuts while signing', () => {
-  it('does not fire the peace-sign shortcut while the mic is held, and does otherwise', () => {
+  it('does not fire the peace-sign shortcut while listening, and does otherwise', () => {
     const run = vi.spyOn(services, 'runShortcut')
     setApp({ pushToListen: true, listening: true })
     c.gesture({ gesture: 'shape', shapeId: 'builtin-peace' })
@@ -3081,39 +3154,5 @@ describe('hand-shape shortcuts while signing', () => {
     setApp({ listening: false })
     c.gesture({ gesture: 'shape', shapeId: 'builtin-peace' })
     expect(run).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('sending the signed sentence to chat', () => {
-  it('sends the sentence as the next chat message', async () => {
-    signSentence(word('1'), word('2'), word('3'))
-    const send = vi.spyOn(services, 'chatSend')
-    c.tap('chat')
-    viewAs('chat')
-    expect(send).toHaveBeenCalledWith(expect.any(String), '1 2 3')
-    expect(getApp().chat.messages[0]).toMatchObject({ role: 'user', text: '1 2 3' })
-    expect(getApp().chat.draft).toBe('')
-    await settle(3000)
-  })
-
-  it('sends the edited sentence', async () => {
-    signSentence(word('1'), word('2'))
-    c.editSentence('hello there')
-    const send = vi.spyOn(services, 'chatSend')
-    c.tap('chat')
-    expect(send).toHaveBeenCalledWith(expect.any(String), 'hello there')
-    await settle(3000)
-  })
-})
-
-describe('chat replies after the controller was disposed and re-mounted', () => {
-  it('still receive the reply (React StrictMode runs dispose() on start-up)', async () => {
-    c.dispose()
-    c.openChat()
-    sign(word('hi'))
-    g('thumbsUp')
-    await settle(3000)
-    expect(getApp().chat.messages[1]).toMatchObject({ role: 'assistant', status: 'done' })
-    expect(getApp().chat.messages[1].text).toContain('You said: hi')
   })
 })

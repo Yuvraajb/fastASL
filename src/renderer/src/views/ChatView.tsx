@@ -3,6 +3,7 @@ import { ArrowUp, Plus, Square, X } from 'lucide-react'
 import { controller } from '../app/context'
 import { useApp } from '../app/store'
 import { Feed, Footer, Header, IconButton, Notice, Stack } from '../ui'
+import { AgentBubble, PipelineStrip } from './ChatAgent'
 import './ChatView.css'
 
 /**
@@ -28,16 +29,22 @@ export function ChatView(): React.JSX.Element {
   return (
     <Stack>
       <Header view={{ kind: 'chat' }} />
-      <Feed />
+      <Feed aspect={2.9} brackets />
+      <PipelineStrip />
       <div className="chat">
         <div className="chat__log" ref={log} aria-live="polite">
           {chat.messages.length === 0 ? (
             <p className="chat__empty">Hold the mic and sign. Your words appear below.</p>
           ) : (
             chat.messages.map((m) => (
-              <p key={m.id} className={`chat__msg chat__msg--${m.role}${m.status === 'error' ? ' chat__msg--error' : ''}`}>
-                {m.text || (m.status === 'streaming' ? <span className="chat__dots" aria-label="Thinking">...</span> : null)}
-              </p>
+              <div key={m.id} className={`chat__item chat__item--${m.role}`}>
+                {m.text || (m.status === 'streaming' && !m.agent?.steps.length && !m.agent?.confirm) || m.status === 'error' ? (
+                  <p className={`chat__msg chat__msg--${m.role}${m.status === 'error' ? ' chat__msg--error' : ''}`}>
+                    {m.text || <span className="chat__dots" aria-label="Thinking">...</span>}
+                  </p>
+                ) : null}
+                {m.agent ? <AgentBubble agent={m.agent} live={m.status === 'streaming'} /> : null}
+              </div>
             ))
           )}
         </div>
@@ -80,7 +87,7 @@ export function ChatView(): React.JSX.Element {
         </div>
         <div className="chat__row">
           <IconButton icon={Plus} label="New chat" size={26} iconSize={15} onClick={() => controller.chatClear()} />
-          <span className="chat__hint">thumbs up send · swipe ← delete word · fist leave</span>
+          <span className="chat__hint">thumbs up send / go · 1-3 answer · fist cancel</span>
           <IconButton icon={X} label="Close chat" size={26} iconSize={15} onClick={() => controller.tap('close')} />
         </div>
       </div>

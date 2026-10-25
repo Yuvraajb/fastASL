@@ -169,6 +169,10 @@ export type AgentEvent =
   | { type: 'done'; runId: string; result: AgentResult; complete: boolean }
   | { type: 'error'; runId: string; message: string; missingKey?: EnvKey }
   | { type: 'stopped'; runId: string }
+  /** The agent needs one detail it cannot guess (a bare hour: AM or PM?). The answer is sent as the next message. */
+  | { type: 'ask'; runId: string; question: string; options: string[] }
+  /** The agent answered in plain words and ran no tool (a question, not a command). */
+  | { type: 'text'; runId: string; text: string }
 
 export interface AgentRunRequest {
   intent: string

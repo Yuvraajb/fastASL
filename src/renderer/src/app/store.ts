@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { CameraSource, CustomGesture, KeyStatus, Mode, Sensitivity, SignTemplate } from '@shared/types'
+import type { AgentStep, CameraSource, ConfirmDetails, CustomGesture, KeyStatus, Mode, Sensitivity, SignTemplate } from '@shared/types'
 import type { View } from './types'
 
 export interface PickProgress {
@@ -9,12 +9,25 @@ export interface PickProgress {
   progress: number
 }
 
+/** What the agent is doing for one chat message: the live steps, a question, a confirmation, the result. */
+export interface ChatAgent {
+  steps: AgentStep[]
+  /** The agent needs one detail (AM or PM?): sign the option's number, or click it. */
+  ask: { question: string; options: string[] } | null
+  /** A write waiting for thumbs up (go) or a fist (cancel). */
+  confirm: { requestId: string; details: ConfirmDetails } | null
+  /** How the run ended, built from tool results. */
+  result: { ok: boolean; title: string; subtitle: string } | null
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
   /** Assistant only: still being written, finished, or failed (then `text` is the reason). */
   status?: 'streaming' | 'done' | 'error'
+  /** Assistant only: the agent run behind this message. */
+  agent?: ChatAgent
 }
 
 export interface ChatState {
