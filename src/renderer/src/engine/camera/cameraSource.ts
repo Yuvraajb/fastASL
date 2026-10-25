@@ -47,11 +47,30 @@ export function streamErrorMessage(status: number, contentType: string | null, b
   return type.startsWith('multipart/') || type.startsWith('image/') ? null : STREAM_NOT_MJPEG
 }
 
+/**
+ * Cameras that show another app's picture. OBS Virtual Camera shows the caption camera window,
+ * so opening it by default films fastASL's own output: a black loop with no hands in it.
+ */
+const VIRTUAL_CAMERA = /virtual|\bobs\b|camtwist|snap camera|mmhmm|\bndi\b/i
+const BUILT_IN_CAMERA = /facetime|built-in/i
+
+/** The camera to use when none was picked: the built-in one first, any other real one next, never a virtual one. */
+export function pickDefaultCamera(devices: readonly Pick<MediaDeviceInfo, 'kind' | 'label' | 'deviceId'>[]): string | undefined {
+  const real = devices.filter((d) => d.kind === 'videoinput' && !VIRTUAL_CAMERA.test(d.label))
+  return (real.find((d) => BUILT_IN_CAMERA.test(d.label)) ?? real[0])?.deviceId || undefined
+}
+
+export async function defaultCameraId(): Promise<string | undefined> {
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+  return pickDefaultCamera(devices)
+}
+
 export function openCamera(source: CameraSource): Promise<CameraHandle> {
   return source.kind === 'builtin' ? openBuiltin(source.deviceId) : openMjpeg(source.url)
 }
 
-async function openBuiltin(deviceId?: string): Promise<CameraHandle> {
+async function openBuiltin(chosen?: string): Promise<CameraHandle> {
+  const deviceId = chosen ?? (await defaultCameraId())
   let stream: MediaStream
   try {
     stream = await navigator.mediaDevices.getUserMedia({

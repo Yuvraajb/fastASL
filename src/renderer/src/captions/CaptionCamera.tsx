@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CaptionState } from '@shared/types'
+import { defaultCameraId } from '../engine/camera/cameraSource'
 import './CaptionCamera.css'
 
 /** How long the last sent message stays up after the hands drop. */
@@ -20,8 +21,14 @@ export function CaptionCamera(): React.JSX.Element {
     document.title = 'fastASL Captions'
     let stream: MediaStream | null = null
     let stopped = false
-    navigator.mediaDevices
-      .getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
+    // The real camera, never OBS Virtual Camera: that one shows this very window.
+    defaultCameraId()
+      .then((deviceId) =>
+        navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) },
+          audio: false
+        })
+      )
       .then((s) => {
         if (stopped) return s.getTracks().forEach((t) => t.stop())
         stream = s

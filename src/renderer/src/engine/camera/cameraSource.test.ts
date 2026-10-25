@@ -52,3 +52,14 @@ describe('streamErrorMessage', () => {
     )
   })
 })
+
+describe('pickDefaultCamera', () => {
+  const cam = (label: string, deviceId: string) => ({ kind: 'videoinput' as MediaDeviceKind, label, deviceId })
+  it('takes the built-in camera, never OBS Virtual Camera (it shows the caption window itself)', async () => {
+    const { pickDefaultCamera } = await import('./cameraSource')
+    expect(pickDefaultCamera([cam('OBS Virtual Camera', 'obs'), cam("KC's iPhone Camera", 'phone'), cam('FaceTime HD Camera', 'ft')])).toBe('ft')
+    expect(pickDefaultCamera([cam('OBS Virtual Camera', 'obs'), cam("KC's iPhone Camera", 'phone')])).toBe('phone')
+    expect(pickDefaultCamera([cam('OBS Virtual Camera', 'obs')])).toBeUndefined()
+    expect(pickDefaultCamera([])).toBeUndefined()
+  })
+})
