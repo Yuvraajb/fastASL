@@ -45,12 +45,14 @@ export interface HandTracker {
  * live pose jumped between the signer and people in the background (shoulder width 0.58 one
  * frame, 0.06 the next), which threw both sign models off.
  */
-const CANDIDATES = 3
+const CANDIDATES = 2
 const KEEP_HANDS = 2
 
 const TASK_OPTIONS = {
   runningMode: 'VIDEO',
-  numHands: 4,
+  // 2, not more: looking for 4 hands in a busy room made each hand call ~5x slower (7 -> 35 ms)
+  // and dropped the camera to ~15 fps, which broke segmentation.
+  numHands: 2,
   minHandDetectionConfidence: 0.6,
   minHandPresenceConfidence: 0.5,
   minTrackingConfidence: 0.5

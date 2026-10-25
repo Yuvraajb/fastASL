@@ -65,7 +65,7 @@ describe('createHandTracker', () => {
     expect(options).toMatchObject({
       baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/hand_landmarker.task', delegate: 'GPU' },
       runningMode: 'VIDEO',
-      numHands: 4
+      numHands: 2
     })
   })
 
@@ -190,8 +190,8 @@ describe('face and pose tracking for the sign model', () => {
     tracker.detect(element, 20, { face: true, pose: true }) // an odd frame: starts loading the pose
     tracker.detect(element, 30, { face: true, pose: true }) // an even frame: starts loading the face
     await settle()
-    expect(mp.createFace.mock.calls[0][1]).toMatchObject({ baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/face_landmarker.task', delegate: 'GPU' }, runningMode: 'VIDEO', numFaces: 3 })
-    expect(mp.createPose.mock.calls[0][1]).toMatchObject({ baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/pose_landmarker_lite.task' }, numPoses: 3 })
+    expect(mp.createFace.mock.calls[0][1]).toMatchObject({ baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/face_landmarker.task', delegate: 'GPU' }, runningMode: 'VIDEO', numFaces: 2 })
+    expect(mp.createPose.mock.calls[0][1]).toMatchObject({ baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/pose_landmarker_lite.task' }, numPoses: 2 })
     const a = tracker.detect(element, 40, { face: true, pose: true }) // the pose's turn
     expect(a.pose).toHaveLength(33)
     expect(a.face).toBeUndefined()
