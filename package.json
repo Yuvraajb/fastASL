@@ -8,6 +8,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:captions": "FASTASL_CAPTIONS=1 electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
@@ -17,7 +18,8 @@
     "setup:citizen": "node scripts/setup-asl-citizen.mjs",
     "postinstall": "node scripts/fetch-assets.mjs",
     "mock:mjpeg": "node scripts/mock-mjpeg.mjs",
-    "templates": "node scripts/templates.mjs"
+    "templates": "node scripts/templates.mjs",
+    "obs": "node --experimental-websocket scripts/obs-captions.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

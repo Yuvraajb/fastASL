@@ -33,8 +33,30 @@ import {
   type View
 } from './types'
 import { live } from './live'
+import { assembleSentence, dictationChunk, isCallPhrase, localIso, MEETING_TIMES, meetingRequest, phraseWords, type MeetingRequest } from './phrase'
+import {
+  activeGestures,
+  collectsPhrase,
+  GESTURE_PAGE,
+  guessView,
+  isCapturingShape,
+  isListening,
+  optionsFor,
+  QUICK_MENU,
+  settingsOptions,
+  showsSign,
+  takesSigns,
+  teachLabels,
+  TEACH_PAGE,
+  type GestureInput,
+  type HoldPage,
+  type TapTarget
+} from './viewRules'
 
-type HoldPage = Extract<SettingsPage, { page: 'newGestureHold' }>
+// The phrase helpers and the view rules live in their own modules; importers of the controller keep them.
+export * from './phrase'
+export * from './viewRules'
+
 
 /** A chat message before the controller gives it an id. */
 type WithoutId<M> = M extends unknown ? Omit<M, 'id'> : never
@@ -59,41 +81,6 @@ export const CANCELLED_NOTE = 'Cancelled'
 /** Chat message ids, unique for the session (the transcript outlives a controller swapped in tests). */
 let chatSeq = 0
 
-/** Hands-only control gestures produced by the gesture engine (Phase 3) or dev hotkeys. */
-export type GestureName =
-  | 'palmHold'
-  | 'swipeLeft'
-  | 'swipeRight'
-  | 'swipeUp'
-  | 'thumbsUp'
-  | 'fist'
-  | 'fingers'
-  | 'handsDown'
-  | 'shape'
-
-export interface GestureInput {
-  gesture: GestureName
-  /** For 'fingers': 1..5. */
-  count?: number
-  /** For 'shape': the custom gesture id. */
-  shapeId?: string
-}
-
-/** Mouse / trackpad taps on card controls map onto the same actions as gestures. */
-export type TapTarget =
-  | 'primary'
-  | 'secondary'
-  | 'close'
-  | 'collapse'
-  | 'expand'
-  | 'camera'
-  | 'proceed'
-  | 'option'
-  | 'settings'
-  | 'captions'
-
-export const QUICK_MENU = ['Create event', 'Send message', 'Search web', 'Take notes', 'Open app']
-export const SETTINGS_ROOT = ['Teach a sign', 'New gesture', 'My gestures', 'Camera source', 'Sensitivity']
 const MODES: Mode[] = ['command', 'dictation', 'spell']
 
 /** A toast's countdown; one with a screenshot thumbnail stays long enough for a thumbs up to open it. */
@@ -120,8 +107,6 @@ const CAPTURE_TIMEOUT_MS = 2500
 const SIGN_TASK_HINT = 'Sign the task for your gesture'
 /** Ready's hint while the caption camera is open. */
 const CAPTIONS_HINT = 'Captions on: what you sign goes to the call, not the agent'
-/** Gestures per page of My gestures (two-line rows). */
-export const GESTURE_PAGE = 4
 /** What Settings › Camera source accepts as a stream URL (the proxy checks the rest). */
 const STREAM_URL = /^https?:\/\/\S+$/i
 /** Why a stream gave way to the MacBook camera: long enough to read. */
@@ -135,10 +120,6 @@ export const SIGN_GUESS_COOLDOWN_MS = 3000
 export const SIGN_GUESS_ERROR_EVERY_MS = 60_000
 /** The notice while the LLM looks at a movement. */
 export const IDENTIFYING = 'Identifying sign...'
-/** Teach a sign: the first option on every page of the list. */
-export const SHOW_ME = 'Show me a sign'
-/** Teach › Show me a sign: after the guesses, the list-based teaching. */
-export const NONE_OF_THESE = 'None of these: pick from list'
 export const NOT_A_SIGN = "That didn't look like a sign. Try again."
 
 /**
@@ -237,245 +218,6 @@ function settled<T>(call: Promise<Result<T>>): Promise<Result<T>> {
   return call.catch((err: unknown) => ({ ok: false as const, error: errorText(err) }))
 }
 
-/** Join recognized tokens into display text. Consecutive letters form one word. */
-export function assembleSentence(tokens: Token[]): string {
-  const text = phraseWords(tokens).join(' ').trim()
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
-}
-
-/** MEETING FRIEND's time choices: hold up 1-4 fingers. */
-export const MEETING_TIMES = ['1 PM', '2 PM', '3 PM', '4 PM'] as const
-
-export interface MeetingRequest {
-  /** The contact's full name in Contacts. */
-  name: string
-  day: 'today' | 'tomorrow'
-}
-
-/**
- * MEETING plus a contact nickname (FRIEND), maybe TODAY or TOMORROW, in any order and nothing
- * else: set up a meeting with that contact. Anything more (TOMORROW MEETING WHAT TIME) is a
- * message, as before.
- */
-export function meetingRequest(words: readonly string[], aliases: Readonly<Record<string, string>>): MeetingRequest | null {
-  const lower = words.map((w) => w.toLowerCase())
-  if (!lower.includes('meeting')) return null
-  const rest = lower.filter((w) => w !== 'meeting' && w !== 'today' && w !== 'tomorrow')
-  const name = rest.length === 1 ? aliases[rest[0]] : undefined
-  if (!name || lower.length > 3) return null
-  return { name, day: lower.includes('tomorrow') ? 'tomorrow' : 'today' }
-}
-
-/** Local ISO 8601 with no offset ("2026-10-25T14:00:00"): main reads it in the local time zone. */
-export function localIso(d: Date): string {
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`
-}
-
-/**
- * CALL plus one word (CALL FRIEND): a command even while the caption camera is open, so a call
- * can be started by sign during a captioned session. Main runs it with no model when the word is
- * a contact nickname (src/main/agent/directCommands.ts).
- */
-export function isCallPhrase(words: readonly string[]): boolean {
-  return words.length === 2 && words.some((w) => /^(call|facetime)$/i.test(w))
-}
-
-/** The phrase's words: each sign, and each run of spelled letters as one word. */
-export function phraseWords(tokens: Token[]): string[] {
-  const words: string[] = []
-  let spelled = ''
-  for (const t of tokens) {
-    if (t.kind === 'letter') {
-      spelled += t.text
-      continue
-    }
-    if (spelled) words.push(spelled)
-    spelled = ''
-    words.push(t.text)
-  }
-  if (spelled) words.push(spelled)
-  return words
-}
-
-/**
- * What Dictation types for a sign, given the kind of sign typed before it (null for the first).
- * Words are separated by a space and a run of letters is one word. The space goes before a
- * word, never after it, so punctuation typed by hand lands right after the last word.
- */
-export function dictationChunk(previous: Token['kind'] | null, token: Token): string {
-  const joined = previous === null || (previous === 'letter' && token.kind === 'letter')
-  return joined ? token.text : ` ${token.text}`
-}
-
-/** Listening: a movement started in Ready and nothing is recognized yet. */
-function isListening(view: View): boolean {
-  return view.kind === 'recognizing' && view.token === null
-}
-
-/** Command and Spell mode's views where a recognized sign joins (or starts) the phrase. */
-function collectsPhrase(view: View): boolean {
-  return view.kind === 'ready' || view.kind === 'recognizing' || view.kind === 'building' || isReply(view)
-}
-
-/**
- * Where a guessed sign can start and land: the views that add a recognized sign to the phrase
- * (or type it, in Dictation), the agent's reply included. Not while the agent works on one.
- */
-function guessView(view: View): boolean {
-  switch (view.kind) {
-    case 'ready':
-    case 'recognizing':
-    case 'building':
-    case 'dictation':
-      return true
-    case 'conversation':
-      return view.phase === 'reply'
-    default:
-      return false
-  }
-}
-
-/** Teach › Show me a sign, waiting for (or hearing) its one repetition. */
-export function showsSign(view: View): boolean {
-  if (view.kind !== 'settings' || view.settings.page !== 'teachShow') return false
-  return view.settings.phase === 'waiting' || view.settings.phase === 'listening'
-}
-
-/** Which gestures make sense in each view (and mode). The gesture engine ignores the rest. */
-export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureName> {
-  switch (view.kind) {
-    case 'collapsed':
-      return new Set(['palmHold', 'shape'])
-    case 'ready':
-      // The quick menu prefixes commands: Spell mode has none (and an ASL A is close to a thumbs up).
-      if (mode === 'spell') return new Set(['fist', 'swipeLeft', 'swipeRight', 'swipeUp', 'shape'])
-      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'swipeUp', 'shape'])
-    case 'recognizing':
-      // Raising a hand to make a control gesture is a movement too: Listening keeps Ready's gestures.
-      if (isListening(view)) return activeGestures({ kind: 'ready' }, mode)
-      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
-    case 'building':
-      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
-    case 'conversation':
-      // The reply stays ready for the next message: Ready's gestures (thumbs up opens the result).
-      if (view.phase === 'reply') return activeGestures({ kind: 'ready' }, mode)
-      return new Set(['fist'])
-    case 'working':
-      return new Set(['fist'])
-    case 'confirm':
-      return new Set(['thumbsUp', 'fist'])
-    case 'didYouMean':
-      // A meeting time is picked by fingers only: a thumbs up would quietly mean 1 PM.
-      if (view.purpose === 'meeting') return new Set(['fingers', 'fist'])
-      // Swipe left edits what a spelling list was made from: the spelled letters.
-      if (view.purpose === 'sign' || view.purpose === 'learn') return new Set(['fingers', 'fist', 'thumbsUp'])
-      return new Set(['fingers', 'fist', 'thumbsUp', 'swipeLeft'])
-    case 'quickMenu':
-      return new Set(['fingers', 'fist'])
-    case 'dictation':
-      return new Set(['fist', 'swipeLeft', 'swipeRight', 'swipeUp'])
-    case 'toast':
-      // A screenshot's thumbnail: thumbs up opens it in Preview.
-      return new Set(view.thumb && view.view ? ['thumbsUp', 'fist'] : ['fist'])
-    case 'settings':
-      switch (view.settings.page) {
-        case 'teachSpell':
-          return new Set(['thumbsUp', 'fist', 'swipeLeft'])
-        case 'teachRecord':
-          // Letters are held still and S, T, M, N read as a fist: a swipe goes back instead.
-          return new Set([view.settings.kind === 'letter' ? 'swipeLeft' : 'fist'])
-        case 'teachShow':
-          // The sign itself may show fingers or a thumbs up: those pick only once there are guesses.
-          return new Set(view.settings.phase === 'guess' ? ['fingers', 'thumbsUp', 'fist'] : ['fist'])
-        case 'newGestureHold':
-          // The new shape may read as a fist (or a thumbs up) while it is formed: until a recording
-          // is refused, only a swipe goes back.
-          return new Set(view.settings.reason ? ['thumbsUp', 'fist', 'swipeLeft'] : ['swipeLeft'])
-        case 'camera':
-          // Hands typing the URL can read as a fist or a finger count: while the field is open,
-          // only a swipe closes it.
-          return new Set(view.settings.editing ? ['swipeLeft'] : ['fingers', 'fist', 'swipeLeft', 'swipeRight'])
-        default:
-          return new Set(['fingers', 'fist', 'swipeLeft', 'swipeRight'])
-      }
-  }
-}
-
-/**
- * The screen a view counts as when a new one must not inherit a gesture already shown
- * (gestureInput spends them). Listening is still Ready, so a fist raised into view, which
- * starts a movement and shows Listening, can still collapse the card. A refused shape is
- * its own screen: the shape (a thumbs up, a fist) is often still held as the reason appears.
- */
-export function gestureScreen(view: View): string {
-  if (isListening(view)) return 'ready'
-  if (view.kind === 'settings' && view.settings.page === 'newGestureHold') {
-    return view.settings.reason ? 'shapeRefused' : 'shapeHold'
-  }
-  // The guesses come up while the hand may still hold the sign's last shape (two fingers, say).
-  if (view.kind === 'settings' && view.settings.page === 'teachShow') return `teachShow:${view.settings.phase}`
-  // The reply brings Ready's gestures: a thumbs up or fist already up while the agent worked must be made again.
-  if (view.kind === 'conversation') return `conversation:${view.phase}`
-  return view.kind
-}
-
-/** New gesture › hold is recording the shape (app/shapeInput feeds it the camera frames). */
-export function isCapturingShape(view: View): view is { kind: 'settings'; settings: HoldPage } {
-  return view.kind === 'settings' && view.settings.page === 'newGestureHold' && view.settings.countdown === 0 && !view.settings.reason
-}
-
-/** Views that take signs from recognition. Teach › record feeds its own recorder instead. */
-export function takesSigns(view: View): boolean {
-  switch (view.kind) {
-    case 'ready':
-    case 'recognizing':
-    case 'building':
-    case 'dictation':
-      return true
-    case 'conversation':
-      // The reply: the next sign starts the next message.
-      return view.phase === 'reply'
-    case 'settings':
-      return view.settings.page === 'teachSpell'
-    default:
-      return false
-  }
-}
-
-/** Options listed (and numbered) in the current view, for finger-count picking. */
-export function optionsFor(view: View): string[] {
-  switch (view.kind) {
-    case 'didYouMean':
-      return view.options
-    case 'quickMenu':
-      return view.options
-    case 'settings':
-      return settingsOptions(view.settings)
-    default:
-      return []
-  }
-}
-
-export const STARTER_WORDS = [
-  'YES', 'NO', 'HELLO', 'MEETING', 'TOMORROW', 'TIME', 'NEXT', 'WHAT',
-  'SEND', 'EMAIL', 'TEXT', 'FRIEND', 'PLAY', 'MUSIC', 'CALENDAR', 'GOOD'
-]
-export const LETTERS = 'ABCDEFGHIKLMNOPQRSTUVWXY'.split('')
-/**
- * The teach list: the letters of contact nicknames that are initials (DW for Darren Wu: D, W)
- * first, since CALL D W and MEETING D W need those two taught, then the starter words and the rest
- * of the alphabet.
- */
-export function teachLabels(aliases: Readonly<Record<string, string>> = getApp().contactAliases): string[] {
-  const initials = Object.keys(aliases)
-    .filter((word) => word.length <= 3 && [...word.toUpperCase()].every((l) => LETTERS.includes(l)))
-    .flatMap((word) => [...word.toUpperCase()])
-  const first = [...new Set(initials)]
-  return [...first, ...STARTER_WORDS, ...LETTERS.filter((l) => !first.includes(l))]
-}
-/** Signs per page of the teach list: with Show me a sign and Spell a new word, five rows (fingers 1-5). */
-export const TEACH_PAGE = 3
 /** Repetitions recorded per sign (TeachSession defaults). */
 const TEACH_REPS = { word: 5, letter: 5 } as const
 const MAX_TEACH_WORD = 32
@@ -488,29 +230,6 @@ export function countSigns(templates: readonly SignTemplate[]): Record<string, n
 }
 
 const hasLetters = (templates: readonly SignTemplate[]): boolean => templates.some((t) => t.kind === 'letter')
-
-export function settingsOptions(page: SettingsPage): string[] {
-  switch (page.page) {
-    case 'root':
-      return SETTINGS_ROOT
-    case 'teachPick':
-      return [SHOW_ME, ...teachLabels().slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
-    case 'teachShow':
-      return page.phase === 'guess' ? [...(page.guesses ?? []), NONE_OF_THESE] : []
-    case 'newGesturePick':
-      return [...page.tasks.slice(0, 4), 'Sign a new task']
-    case 'gestures':
-      return page.gestures.slice(page.offset, page.offset + GESTURE_PAGE).map((g) => g.name)
-    case 'gestureDetail':
-      return page.gesture.builtin ? ['Test it'] : ['Test it', 'Delete']
-    case 'camera':
-      return ['MacBook camera', 'ESP32-CAM stream', 'Edit stream URL']
-    case 'sensitivity':
-      return ['Low', 'Medium', 'High']
-    default:
-      return []
-  }
-}
 
 /** "Gesture 2", "Gesture 3"…: the first number no saved gesture uses (the peace sign is gesture 1). */
 export function nextGestureName(gestures: readonly Pick<CustomGesture, 'name'>[]): string {

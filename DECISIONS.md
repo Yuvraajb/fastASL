@@ -1098,3 +1098,10 @@ Decisions made while building, in the order they came up. Each entry: what, why,
 
 230. **A gesture made for a suggested task is saved already compiled.** "Open 6 Claude Code terminals" carries its exact call (`claude_code_open`, count 6) in SUGGESTED_CALLS, saved as the gesture's `compiled` sequence, so the first run replays it like every later one: no Droid round trip, nothing for a model to misread. (Before, the first run went through the agent and only then was compiled, entry 223.)
 
+## Tidy-up before main
+
+231. **Refactor without behaviour change, the OBS setup in the repo, and a README.**
+    - `controller.ts` (2,212 lines) kept the controller class and lost its plain helpers to two modules: `app/phrase.ts` (the phrase as words, CALL / MEETING detection, local ISO times) and `app/viewRules.ts` (what each card state accepts: active gestures, takesSigns, options, Settings lists, the teach list). The controller re-exports both, so no importer changed. 1,325 tests pass unchanged.
+    - `scripts/obs-captions.mjs` (`npm run obs`, `npm run obs -- --repoint`) replaces the session-only OBS scripts: canvas 1280x720 at 30 fps, the caption window captured and fitted with its title bar cropped (computed from the window's size), OBS Virtual Camera on. The password comes from OBS_WS_PASSWORD in .env. `npm run dev:captions` starts fastASL with the caption window.
+    - `.env.example` documents `LLM_PROVIDER=droid` (the demo setting) and that the captions always use Ollama. README rewritten: what it does, how it works, setup, permissions, running with captions, signs and gestures, layout, licences.
+
