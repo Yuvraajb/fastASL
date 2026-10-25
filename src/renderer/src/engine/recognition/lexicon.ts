@@ -268,7 +268,9 @@ export class LexiconMatcher {
     const shapeOk = handshapeMatches(sign.move, sa, a, aspect) && handshapeMatches(sign.move, sb, b, aspect)
     // The gap closes from where both hands showed the start shape (MEETING: open hands).
     const widest = Math.max(0, ...this.gaps.filter((g) => g.start).map((g) => g.gap))
-    this.debugTwo = `${sign.gloss}: both hands ${shapeOk ? 'flat-O' : 'not flat-O'} gap ${gap.toFixed(2)} widest ${widest.toFixed(2)} need close by ${sign.movement.closeByHandLengths} to <= ${sign.movement.endGapHandLengths}`
+    // The pinch of each hand (fingertips to thumb, palm sizes), for tuning flat-O on a real signer.
+    const pinches = [fingertipPinch(a, aspect) / sa.palmSize, fingertipPinch(b, aspect) / sb.palmSize].map((v) => v.toFixed(2)).join('/')
+    this.debugTwo = `${sign.gloss}: both hands ${shapeOk ? 'flat-O' : 'not flat-O'} (pinch ${pinches}) gap ${gap.toFixed(2)} widest ${widest.toFixed(2)} need close by ${sign.movement.closeByHandLengths} to <= ${sign.movement.endGapHandLengths}`
     if (frame.t < (this.cooldownUntil.get(sign.gloss) ?? -Infinity) || !shapeOk) return null
     if (widest - gap >= sign.movement.closeByHandLengths && gap <= sign.movement.endGapHandLengths) {
       this.gaps = []

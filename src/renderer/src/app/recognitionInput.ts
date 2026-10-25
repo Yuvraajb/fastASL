@@ -35,8 +35,12 @@ const GESTURE_SUSPEND_MS = 600
  * settling, a twitch or the start of a gesture leaves the card as it is instead of flashing it.
  */
 const LISTEN_DELAY_MS = 400
-/** Once shown, "Listening..." stays at least this long, so a rejected movement doesn't make it flicker. */
-const LISTEN_MIN_MS = 700
+/**
+ * After a movement that was no sign, "Listening..." stays up until this long has passed with no
+ * new movement. At 0.7 s it dropped between tries, so a sign that didn't land the first time
+ * (MEETING) read as the app switching off and on in a loop.
+ */
+export const LISTEN_LINGER_MS = 2500
 /** Held shapes that are signing, not commands, while both hands are in view (see gesture()). */
 const TWO_HAND_SIGN_SHAPES: ReadonlySet<GestureName> = new Set(['fist', 'thumbsUp'])
 const SWIPES: ReadonlySet<GestureName> = new Set(['swipeLeft', 'swipeRight', 'swipeUp'])
@@ -256,13 +260,14 @@ export function connectRecognition(
     judging = null
   }
 
-  // "Listening..." on the card, debounced by frame time (LISTEN_DELAY_MS, LISTEN_MIN_MS).
+  // "Listening..." on the card, debounced by frame time (LISTEN_DELAY_MS, LISTEN_LINGER_MS).
   /** A movement started and Listening isn't up yet: when (frame time). */
   let movingSince: number | null = null
   /** When Listening went up (controller.signStart); null while it isn't. */
   let listeningSince: number | null = null
-  /** The movement got no outcome while Listening was up for less than LISTEN_MIN_MS: hide it later. */
+  /** The last movement got no outcome: Listening goes LISTEN_LINGER_MS after this, unless another starts. */
   let hidePending = false
+  let rejectedAt = 0
   const listenStart = (t: number): void => {
     // A new movement while Listening is still up keeps it up.
     if (listeningSince !== null) hidePending = false
@@ -274,16 +279,14 @@ export function connectRecognition(
       listeningSince = t
       controller.signStart()
     }
-    if (hidePending && listeningSince !== null && t - listeningSince >= LISTEN_MIN_MS) listenEnd()
+    if (hidePending && listeningSince !== null && t - rejectedAt >= LISTEN_LINGER_MS) listenEnd()
   }
-  /** The movement got no outcome: Listening goes (now, or once it has been up LISTEN_MIN_MS). */
+  /** The movement got no outcome: Listening stays a while for the next try (LISTEN_LINGER_MS). */
   const listenRejected = (): void => {
     movingSince = null
-    if (listeningSince !== null && lastT - listeningSince < LISTEN_MIN_MS) {
-      hidePending = true
-      return
-    }
-    listenEnd()
+    if (listeningSince === null) return listenEnd()
+    hidePending = true
+    rejectedAt = lastT
   }
   /** Listening goes now (a gesture acted, the camera went away). */
   const listenEnd = (): void => {

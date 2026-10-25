@@ -1090,3 +1090,8 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - The chat card's hints no longer say "fist = hide": in Command mode a fist doesn't hide the card any more (entry 219).
     - Tests: controller (button off / on / opens the window), publish (nothing shown when off).
 
+## Listening holds between tries
+
+229. **After a movement that was no sign, "Listening" stays up for 2.5 s (LISTEN_LINGER_MS), not 0.7.** Live, a MEETING that didn't land the first time flipped the card out of Listening and back on each try (21 start/rejected pairs in one run), which read as the app switching off and on in a loop. Now it stays up while you retry and goes 2.5 s after the last movement with no new one. A movement that never showed Listening (under 0.4 s) still leaves the card alone.
+    - **MEETING thresholds unchanged, on purpose.** On the recorded clips, current flat-O (pinch <= 0.45) and gap (<= 2.5 hand lengths): recall 9/12 tracked, 26/29 Holistic, false 0.2% / 1.4%. Pinch 0.55: recall 11/12, 27/29, but false 1.4% / 3.5%, from OPEN, GO, MAIL, WHAT and EMAIL, which are in the demo phrases. A gap of 3.0 changed little. Live, MEETING mostly failed on "not flat-O", so the debug line now prints each hand's pinch to tune on the user's own hands next.
+

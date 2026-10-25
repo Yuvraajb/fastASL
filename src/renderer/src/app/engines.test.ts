@@ -20,7 +20,7 @@ import { GestureEngine, HANDS_DOWN_MS } from '../engine/gestures/engine'
 import { RecognitionSession } from '../engine/recognition/session'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
 import { Controller, QUICK_MENU } from './controller'
-import { GUESS_MAX_MS, GUESS_MIN_MS, GUESS_WAIT_MS, SHOW_SETTLE_MS, signLike } from './recognitionInput'
+import { GUESS_MAX_MS, GUESS_MIN_MS, GUESS_WAIT_MS, LISTEN_LINGER_MS, SHOW_SETTLE_MS, signLike } from './recognitionInput'
 import { startEngines, subscribeFrames } from './engines'
 import { live } from './live'
 import { mockServices, type Services } from './services'
@@ -505,7 +505,8 @@ describe('sign recognition', () => {
 
   it('a movement that is no sign: Listening, then back to Ready', () => {
     stop = startEngines(controller)
-    play([sign(UNKNOWN.reach, 901)])
+    // Listening stays for the next try (LISTEN_LINGER_MS), then goes.
+    play([sign(UNKNOWN.reach, 901, { restAfterMs: LISTEN_LINGER_MS + 500 })])
     expect(listens).toEqual([true, false])
     expect(views).toEqual([]) // the card never changed
   })
@@ -530,9 +531,15 @@ describe('sign recognition', () => {
     expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: 'Play' })
   })
 
+  it('Listening holds between tries: a second try within LISTEN_LINGER_MS keeps it up, no off-on flicker', () => {
+    stop = startEngines(controller)
+    play([sign(UNKNOWN.reach, 901, { restAfterMs: 1200 }), sign(UNKNOWN.reach, 908, { restAfterMs: LISTEN_LINGER_MS + 500 })])
+    expect(listens).toEqual([true, false])
+  })
+
   it('a twitch never shows Listening, and Listening does not flash for a movement that is no sign', () => {
     stop = startEngines(controller)
-    play([sign(UNKNOWN.scratch, 905)])
+    play([sign(UNKNOWN.scratch, 905, { restAfterMs: LISTEN_LINGER_MS + 500 })])
     expect(listens.filter(Boolean).length).toBeLessThanOrEqual(1)
     expect(views).toEqual([])
     expect(getApp().signing).toBe(false)
@@ -827,7 +834,7 @@ describe('sign recognition', () => {
     it('without an LLM a movement nothing matched is rejected as before, and nothing is asked', () => {
       guessing('Add GEMINI_API_KEY to .env')
       stop = startEngines(controller)
-      play([sign(UNKNOWN.reach, 1007, { restAfterMs: 2500 })])
+      play([sign(UNKNOWN.reach, 1007, { restAfterMs: LISTEN_LINGER_MS + 500 })])
       expect(listens).toEqual([true, false])
       expect(views).toEqual([])
       expect(identify).not.toHaveBeenCalled()
