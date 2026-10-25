@@ -56,6 +56,8 @@ export interface AppState {
    * for the agent (the quick menu still sends one). See Controller.endPhrase.
    */
   captioning: boolean
+  /** On a video call (captions apply): the card is the compact pill, and signing carries on behind it. */
+  onCall: boolean
 }
 
 export const useApp = create<AppState>(() => ({
@@ -84,7 +86,8 @@ export const useApp = create<AppState>(() => ({
   modelWords: [],
   chat: [],
   composing: { tokens: [] },
-  captioning: false
+  captioning: false,
+  onCall: false
 }))
 
 export const getApp = (): AppState => useApp.getState()

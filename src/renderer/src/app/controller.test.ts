@@ -2038,6 +2038,21 @@ describe('the caption camera (captioning)', () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
+  it('on a call (captions apply) the card is the compact pill, and it comes back when FaceTime is not in front', async () => {
+    c.setCaptioning(true)
+    await settle(1100)
+    expect(getApp().onCall).toBe(true)
+    expect(getApp().view.kind).toBe('ready') // the view is unchanged: signing is still read
+    front = { name: 'Code' }
+    await settle(1100)
+    expect(getApp().onCall).toBe(false)
+    front = { name: 'FaceTime' }
+    await settle(1100)
+    expect(getApp().onCall).toBe(true)
+    c.setCaptioning(false)
+    expect(getApp().onCall).toBe(false)
+  })
+
   it('an app it cannot read keeps the last answer, and closing the window stops the checking', async () => {
     const check = vi.spyOn(services, 'frontmostApp')
     c.setCaptioning(true)

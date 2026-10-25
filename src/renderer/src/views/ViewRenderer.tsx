@@ -19,6 +19,9 @@ import { SettingsView } from './SettingsView'
  */
 export function ViewRenderer({ view }: { view: View }): React.JSX.Element {
   const mode = useApp((s) => s.mode)
+  const onCall = useApp((s) => s.onCall)
+  // On a video call the agent card is the compact pill; the view underneath is unchanged, so signing is still read.
+  if (onCall && isChatCard(view, mode)) return <CollapsedView view={{ kind: 'collapsed' }} />
   if (isChatCard(view, mode)) return <ChatView view={view as ChatCardView} />
   switch (view.kind) {
     case 'collapsed':

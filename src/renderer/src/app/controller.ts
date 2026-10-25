@@ -673,6 +673,7 @@ export class Controller {
     setApp({ captioning: open })
     if (open) this.startFrontAppCheck()
     else this.stopFrontAppCheck()
+    this.syncOnCall()
     // Captions are Command mode's streamed words (Spell mode reads letters, Dictation types them),
     // and the mode stays Command while the window is open (see cycleMode).
     if (open && getApp().mode !== 'command') return this.switchMode('command')
@@ -694,11 +695,18 @@ export class Controller {
       const inFront = isFaceTime(app)
       if (inFront === this.faceTimeInFront) return
       this.faceTimeInFront = inFront
+      this.syncOnCall()
       // Ready's hint says where signing goes.
       if (this.view.kind === 'ready' && !this.intentPrefix && !this.signingTask) this.setView(this.idleView())
     }
     void check()
     this.frontAppTimer = setInterval(() => void check(), FRONT_APP_CHECK_MS)
+  }
+
+  /** On a call the card shrinks to the pill (the view stays the same, so signing is still read). */
+  private syncOnCall(): void {
+    const onCall = this.captionsApply()
+    if (getApp().onCall !== onCall) setApp({ onCall })
   }
 
   private stopFrontAppCheck(): void {

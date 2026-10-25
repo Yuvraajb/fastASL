@@ -29,10 +29,12 @@ export function CardShell({ view, stage, children }: Props): React.JSX.Element {
   }, [stage])
 
   const mode = useApp((s) => s.mode)
-  const fixedWidth = view.kind === 'collapsed' ? undefined : cardWidth(view, mode)
+  const onCall = useApp((s) => s.onCall)
+  const compact = onCall && isChatCard(view, mode) // on a video call the card is the pill
+  const fixedWidth = view.kind === 'collapsed' || compact ? undefined : cardWidth(view, mode)
   // Command mode's chat card stays mounted through its phases (Ready, signing, working, Confirm,
   // reply): no fade-in, feed restart or scroll reset as each word or step arrives.
-  const layout = isChatCard(view, mode) ? 'chat' : view.kind
+  const layout = compact ? 'collapsed' : isChatCard(view, mode) ? 'chat' : view.kind
   return (
     <div
       ref={ref}
