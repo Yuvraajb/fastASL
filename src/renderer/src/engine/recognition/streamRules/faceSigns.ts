@@ -93,6 +93,8 @@ export const FACE_SIGN_PARAMS = {
   dad: { thumbU: 0.55, thumbV: [-0.85, -0.15] as [number, number], facingMax: 0.9 },
   /** Landmark z spread (wrist-relative units) above which the hand has real depth and palmFacing means something. */
   depthMin: 0.01,
+  /** With depth, the back of the hand faces the camera when palmFacing is at most minus this. */
+  backFacing: 0.3,
   fiveAtFace: {
     /** Fingers up at least this much. */
     up: -0.4,
@@ -260,7 +262,10 @@ function arriveAndDwell(
  * releases, so the hand is taken from its side of the face (in the raw image the signer's right
  * hand is on the left), and the palm side from the winding of wrist, index and pinky knuckles.
  */
-export function backToCamera(f: HandFeat, face: FaceBox, aspect: number): boolean {
+export function backToCamera(f: HandFeat, face: FaceBox, aspect: number, rightHand = isRightHand(f, face)): boolean {
+  // With real depth, MediaPipe's palmFacing is reliable (camera-facing palms read about +0.9 in
+  // tracked ASL Citizen clips, THANK YOU's contact about -0.9) and needs no guess at which hand.
+  if (hasDepth(f)) return f.shape.palmFacing <= -P.backFacing
   const lm = f.hand.landmarks
   const ax = (lm[5].x - lm[0].x) * aspect
   const ay = lm[5].y - lm[0].y
@@ -268,8 +273,12 @@ export function backToCamera(f: HandFeat, face: FaceBox, aspect: number): boolea
   const by = lm[17].y - lm[0].y
   const winding = ax * by - ay * bx
   // A right hand with its palm to the camera winds negative (y down); the back of it, positive.
-  const rightHand = onFace(f.palm, face).u < 0
   return rightHand ? winding > 0 : winding < 0
+}
+
+/** The signer's right hand, judged by its side of the face (left in the raw image). */
+export function isRightHand(f: HandFeat, face: FaceBox): boolean {
+  return onFace(f.palm, face).u < 0
 }
 
 /** Whether the middle fingertip stayed within `within` (image height units) for `ms` up to track[i]. */
@@ -318,16 +327,18 @@ export const thankYou: StreamRule = {
   hands: 1,
   fires(history, ctx) {
     const c = P.thankYou
-    return withFace(history, ctx, (track, face) =>
-      contactThenMove(
+    return withFace(history, ctx, (track, face) => {
+      // Which hand it is, from where it touched the face (it may cross the midline as it moves off).
+      let right = false
+      return contactThenMove(
         track,
         c.contactMs,
         (f, i) => {
           if (!straightFingers(f.shape) || f.shape.pointing.y > c.upAtContact) return false
           // The hand comes from the side, fingers slanting in toward the mouth, back of the hand to the camera.
-          const side = onFace(f.palm, face).u < 0 ? 1 : -1
-          if (side * f.shape.pointing.x < c.inward) return false
-          if (c.backOfHand && !backToCamera(f, face, ctx.aspect)) return false
+          right = isRightHand(f, face)
+          if ((right ? 1 : -1) * f.shape.pointing.x < c.inward) return false
+          if (c.backOfHand && !backToCamera(f, face, ctx.aspect, right)) return false
           const tip = onFace(f.index.y < f.middle.y ? f.index : f.middle, face)
           if (Math.abs(tip.u) > c.tipU || !inRange(tip.v, c.tipV)) return false
           // The fingertips rest at the lips for a moment before the hand moves off.
@@ -337,10 +348,12 @@ export const thankYou: StreamRule = {
         (from, now) =>
           straightFingers(now.shape) &&
           now.shape.pointing.y <= c.upAtEnd &&
+          // BAD starts the same way, then turns the palm down: from the front the palm flips to the camera.
+          (!c.backOfHand || backToCamera(now, face, ctx.aspect, right)) &&
           (now.palm.y - from.palm.y) / face.h >= c.drop &&
           faceDist(now.middle, from.middle, face, ctx.aspect) >= c.travel
       )
-    )
+    })
   }
 }
 
@@ -509,7 +522,7 @@ export const no: StreamRule = {
  * The validated face signs, most specific first (the streaming matcher takes the first rule that
  * fires). Rules are added here once they pass faceSigns.eval.test.ts.
  */
-export const FACE_RULES: StreamRule[] = [tomorrow, call, mom, dad]
+export const FACE_RULES: StreamRule[] = [tomorrow, call, thankYou, mom, dad]
 
 /** Every rule in this file, validated or not (for the eval and the tests). */
 export const ALL_FACE_RULES: StreamRule[] = [thankYou, tomorrow, mom, dad, call, no, yes]
