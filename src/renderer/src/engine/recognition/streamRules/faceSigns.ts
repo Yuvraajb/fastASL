@@ -11,14 +11,21 @@ import type { FaceBox, StreamContext, StreamRule } from './types'
  *
  * Every rule needs a movement or a contact, never a held shape alone, because held shapes are
  * fastASL's control gestures (fist, open palm, finger counts, thumbs up, peace):
- *  - THANK YOU, TOMORROW: a contact at the face, then the hand leaves it (down / forward).
- *  - MOM, DAD, CALL: the hand arrives at the face from elsewhere and the contact holds briefly.
- *  - YES: the fist nods (goes down and up again) at least twice.
- *  - NO: two straight fingers snap shut onto the thumb.
+ *  - THANK YOU: flat hand, back of the hand out, fingertips pause at the lips, then the hand
+ *    drops away with the fingers still up and the back still out (BAD turns the palm over).
+ *  - TOMORROW: A hand, thumb on the cheek, then the fist pivots forward on the thumb: the palm
+ *    drops, the thumb tip doesn't (just lowering the fist drops both).
+ *  - MOM, DAD, CALL: the hand arrives at the face and the contact holds briefly (5 hand, thumb on
+ *    the chin / forehead, palm not squared to the camera; Y hand, thumb by the ear, pinky by the
+ *    mouth).
+ *  - YES: an S fist nods at the wrist twice (down, up, down), staying in place.
+ *  - NO: index and middle snap shut onto the thumb out in front of the hand, not into a fist.
+ *  - No other hand nearby: two-handed signs bring the hands together.
  *
  * Positions at the face are in face units (faceBox: ±0.5 at the box edges, v down: chin ≈ +0.5,
  * mouth ≈ +0.25, eyes ≈ -0.1, forehead top ≈ -0.5). Either hand works: left/right offsets use
- * |u|. Measured on ASL Citizen clips; faceSigns.eval.test.ts has the numbers.
+ * |u|. Tuned on ASL Citizen clips, both MediaPipe Holistic recordings (flat z) and the app's own
+ * tracker re-run on the videos (real z); faceSigns.eval.test.ts reports the numbers.
  */
 
 /** Tuning constants, in face heights (fh), palm lengths (pl) or ms. */
@@ -51,8 +58,6 @@ export const FACE_SIGN_PARAMS = {
     upWhileMoving: -0.1,
     /** When it fires, the fingers still point clearly up (BAD has turned them sideways by then). */
     upAtEnd: -0.55,
-    /** Require the back of the hand toward the camera at the contact (the wake palm faces it). */
-    backOfHand: true,
     /** The fingertips pause at the lips this long (ms), moving less than `pause` (fh). */
     pauseMs: 100,
     pause: 0.1,
@@ -98,7 +103,7 @@ export const FACE_SIGN_PARAMS = {
   fiveAtFace: {
     /** Fingers up at least this much. */
     up: -0.4,
-    /** Thumb extension: at least half out. */
+    /** Thumb extension: not folded flat (pressed to the face, an out thumb often reads half bent). */
     thumb: 0.15,
     /** A spread 5: the index tip at least this far from the thumb tip (palm lengths) ... */
     gap: 0.6,
@@ -135,8 +140,6 @@ export const FACE_SIGN_PARAMS = {
     windowMs: 1200,
     /** Share of the window's frames that must be a fist. */
     fistShare: 0.8,
-    /** Measure the knuckles relative to the wrist (a nod), not in the image (any up and down). */
-    relative: true,
     /** Over the last stillMs the palm stays within `travel` palm lengths of where it is now. */
     stillMs: 600,
     travel: 0.5,
@@ -158,7 +161,9 @@ export const FACE_SIGN_PARAMS = {
      */
     reach: 1.05,
     /** Open, the thumb is out (NO starts like an ASL 3), not folded over ring and pinky (peace, 2). */
-    openThumb: 0.3
+    openThumb: 0.3,
+    /** The shut pinch shows on this many consecutive frames (a closing fist only passes through it). */
+    shutFrames: 2
   }
 }
 
@@ -352,7 +357,7 @@ export const thankYou: StreamRule = {
           // The hand comes from the side, fingers slanting in toward the mouth, back of the hand to the camera.
           right = isRightHand(f, face)
           if ((right ? 1 : -1) * f.shape.pointing.x < c.inward) return false
-          if (c.backOfHand && !backToCamera(f, face, ctx.aspect, right)) return false
+          if (!backToCamera(f, face, ctx.aspect, right)) return false
           const tip = onFace(f.index.y < f.middle.y ? f.index : f.middle, face)
           if (Math.abs(tip.u) > c.tipU || !inRange(tip.v, c.tipV)) return false
           // The fingertips rest at the lips for a moment before the hand moves off.
@@ -363,7 +368,7 @@ export const thankYou: StreamRule = {
           straightFingers(now.shape) &&
           now.shape.pointing.y <= c.upAtEnd &&
           // BAD starts the same way, then turns the palm down: from the front the palm flips to the camera.
-          (!c.backOfHand || backToCamera(now, face, ctx.aspect, right)) &&
+          backToCamera(now, face, ctx.aspect, right) &&
           (now.palm.y - from.palm.y) / face.h >= c.drop &&
           faceDist(now.middle, from.middle, face, ctx.aspect) >= c.travel
       )
@@ -458,9 +463,9 @@ export const call: StreamRule = {
 }
 
 /**
- * YES: a fist whose knuckles go down and up (the wrist nodding, or the whole fist bobbing). The
- * knuckle height is measured in the track's largest palm length, so a fist tipping toward the
- * camera (which shortens the palm in the image) still reads as a nod.
+ * YES: an S fist nodding at the wrist: the knuckles' height relative to the wrist goes down, up,
+ * down (so raising or lowering the whole fist doesn't count), measured in the track's largest
+ * palm length so a fist tipping toward the camera still reads as a nod. The fist stays in place.
  */
 export const yes: StreamRule = {
   word: 'yes',
@@ -477,7 +482,7 @@ export const yes: StreamRule = {
       if (recent.filter((f) => ext(f.shape, 'thumb') > c.thumb).length > (1 - c.fistShare) * recent.length) return false
       const unit = Math.max(...recent.map((f) => f.scale))
       // Knuckles relative to the wrist: the wrist nodding, not the arm raising or lowering the fist.
-      const nod = recent.map((f) => (c.relative ? f.knuckles.y - f.wrist.y : f.knuckles.y) / unit)
+      const nod = recent.map((f) => (f.knuckles.y - f.wrist.y) / unit)
       if (swings(nod, c.swing) < c.swings) return false
       // A nod keeps the fist in place; TOMORROW, YESTERDAY or a fist being lowered travel.
       const still = recent.filter((f) => now.t - f.t <= c.stillMs)
@@ -517,8 +522,10 @@ export function swings(values: readonly number[], amount: number): number {
 
 /**
  * NO: the index and middle fingers, straight and together, snap shut onto the thumb. Fires on the
- * first snap: open (index tip well away from the thumb tip) to shut (index and middle tips at the
- * thumb tip) within snapMs, ring and pinky bent throughout, the palm roughly in place.
+ * first snap: open (index and middle straight, thumb out, index tip well away from the thumb tip)
+ * to shut (index and middle tips at the thumb tip, out in front of the hand, for two frames)
+ * within snapMs, ring and pinky bent throughout, the palm roughly in place. Peace or 2 closing
+ * into a fist is not NO: their thumb is folded and a fist tucks the fingertips into the palm.
  */
 export const no: StreamRule = {
   word: 'no',
@@ -526,20 +533,26 @@ export const no: StreamRule = {
   fires(history, ctx) {
     const c = P.no
     const a = ctx.aspect
+    const bentRest = (f: HandFeat): boolean => ext(f.shape, 'ring') <= P.shape.off + 0.1 && ext(f.shape, 'pinky') <= P.shape.off + 0.1
+    // Shut: index and middle tips at the thumb tip, the fingers still reaching out in front (a
+    // beak), not tucked into the palm like a fist's.
+    const shut = (f: HandFeat): boolean =>
+      bentRest(f) &&
+      dist(f.index, f.thumb, a) <= c.shut * f.scale &&
+      dist(f.middle, f.thumb, a) <= (c.shut + 0.1) * f.scale &&
+      dist(f.index, f.wrist, a) >= c.reach * f.scale
     return oneHanded(history, ctx, (track) => {
       const now = track[track.length - 1]
-      const s = now.shape
-      if (ext(s, 'ring') > P.shape.off + 0.1 || ext(s, 'pinky') > P.shape.off + 0.1) return false
-      const unit = now.scale
-      if (dist(now.index, now.thumb, a) > c.shut * unit || dist(now.middle, now.thumb, a) > (c.shut + 0.1) * unit) return false
-      // The fingers stay straight and meet the thumb out in front (a beak); a fist tucks them into the palm.
-      if (dist(now.index, now.wrist, a) < c.reach * unit) return false
-      for (let i = track.length - 2; i >= 0; i--) {
+      // The pinch holds for a moment: a hand closing into a fist only passes through it.
+      const n = track.length
+      if (n < c.shutFrames) return false
+      for (let k = 1; k <= c.shutFrames; k++) if (!shut(track[n - k])) return false
+      for (let i = n - 1 - c.shutFrames; i >= 0; i--) {
         const f = track[i]
         if (now.t - f.t > c.snapMs) break
-        if (ext(f.shape, 'ring') > P.shape.off + 0.1 || ext(f.shape, 'pinky') > P.shape.off + 0.1) return false
+        if (!bentRest(f)) return false
         if (twoFingers(f.shape) && ext(f.shape, 'thumb') >= c.openThumb && dist(f.index, f.thumb, a) >= c.open * f.scale) {
-          return dist(f.palm, now.palm, a) <= c.drift * Math.max(f.scale, unit)
+          return dist(f.palm, now.palm, a) <= c.drift * Math.max(f.scale, now.scale)
         }
       }
       return false
@@ -548,10 +561,7 @@ export const no: StreamRule = {
 }
 
 /**
- * The validated face signs, most specific first (the streaming matcher takes the first rule that
- * fires). Rules are added here once they pass faceSigns.eval.test.ts.
+ * The face signs, most specific first (the streaming matcher takes the first rule that fires):
+ * TOMORROW before YES (both fists), the contact signs before the repeated movements.
  */
 export const FACE_RULES: StreamRule[] = [tomorrow, call, thankYou, mom, dad, no, yes]
-
-/** Every rule in this file, validated or not (for the eval and the tests). */
-export const ALL_FACE_RULES: StreamRule[] = [thankYou, tomorrow, mom, dad, call, no, yes]

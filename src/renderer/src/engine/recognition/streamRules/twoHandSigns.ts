@@ -11,9 +11,13 @@ import type { StreamContext, StreamRule } from './types'
  *
  * Hands are told apart by position and continuity, not by MediaPipe's handedness label, and which
  * hand is dominant comes from what each hand does (the base hand holds still, the other moves), so
- * left-handed signers work too. All geometry is 2D in isotropic image units (x × aspect, y), in
- * hand lengths where it matters, so it does not depend on distance from the camera, and it does not
- * use landmark z (palm orientation comes from the 2D knuckle width instead).
+ * left-handed signers work too. (The label is only a majority vote for which way PLEASE circles.)
+ * All geometry is 2D in isotropic image units (x × aspect, y), in hand lengths where it matters, so
+ * it does not depend on distance from the camera. Landmark z only lengthens the hand-length unit
+ * when the tracker gives it; palm orientation comes from the 2D knuckle width instead.
+ *
+ * Only the words that hold up on real signers are enabled (TWO_HAND_RULES); MUSIC and STOP are
+ * kept in ALL_RULES for tuning (twoHandSigns.eval.test.ts) but off.
  */
 
 /**
@@ -402,10 +406,7 @@ export function strokeCount(values: readonly number[], amp: number): number {
 function smooth(values: readonly number[]): number[] {
   return values.map((v, i) => {
     if (i === 0 || i === values.length - 1) return v
-    const [p, q, r] = [values[i - 1], v, values[i + 1]].sort((x, y) => x - y)
-    void p
-    void r
-    return q
+    return [values[i - 1], v, values[i + 1]].sort((x, y) => x - y)[1]
   })
 }
 
@@ -444,9 +445,10 @@ function nearestIn(track: readonly (Hand | null)[], t: number): Hand | null {
 // ----------------------------------------------------------------------------------- OPEN
 
 /**
- * OPEN: two flat hands side by side, then they swing apart. Fires when, within OPEN_MS, the
- * horizontal gap between the hands has grown by OPEN_SPREAD hand lengths from a start of at most
- * OPEN_START_GAP, each hand having moved outward, mostly sideways, both flat throughout.
+ * OPEN: two flat hands side by side, then they swing apart. Fires when, within `ms`, the
+ * horizontal gap between the hands has grown by `spread` hand lengths from a start of at most
+ * `startGap`, each hand having moved outward (`each`), mostly sideways, both flat and not pointing
+ * down, smoothly (no jumps), and not ending palms up (that is the way into WHAT).
  */
 function openFires(history: readonly FrameSample[], { aspect }: StreamContext): boolean {
   const P = TUNING.open
@@ -494,8 +496,8 @@ function openFires(history: readonly FrameSample[], { aspect }: StreamContext): 
 
 /**
  * MUSIC: the base forearm lies across the body; the other flat hand, fingers sideways, swings side
- * to side above it. Fires on the MUSIC_STROKES-th sideways stroke of the upper hand while the lower
- * hand holds still below it.
+ * to side above it. Fires on the `strokes`-th sideways stroke of the upper hand while the lower
+ * hand holds still below it. (Off: the base forearm is mostly out of view in real clips.)
  */
 function musicFires(history: readonly FrameSample[], { aspect }: StreamContext): boolean {
   const P = TUNING.music
@@ -575,8 +577,8 @@ function playFires(history: readonly FrameSample[], { aspect }: StreamContext): 
 
 /**
  * STOP: the base hand flat, palm up; the other flat hand, on its edge, chops down onto it. Fires
- * when the edge-on hand has dropped STOP_DROP hand lengths within STOP_MS, mostly straight down,
- * and its lowest point has reached the base hand.
+ * when the edge-on hand has dropped `drop` hand lengths within `ms`, mostly straight down, and its
+ * lowest point has reached the base hand. (Off: about 40% recall on clips tracked like the app.)
  */
 function stopFires(history: readonly FrameSample[], { aspect }: StreamContext): boolean {
   const P = TUNING.stop
@@ -614,8 +616,9 @@ function stopFires(history: readonly FrameSample[], { aspect }: StreamContext): 
 // ----------------------------------------------------------------------------------- TIME
 
 /**
- * TIME: the pointing index taps the back of the base wrist. Fires on the rebound of a tap (the
- * fingertip down then up by TIME_TAP hand lengths) while it is near the base hand, which is below.
+ * TIME: the pointing index taps the back of the base wrist. Fires on a fingertip stroke of `tap`
+ * hand lengths (the tap) that ends near the base hand, while the hand still moves. The base hand is
+ * lower, lies across the body (not upright), holds still and is not pointing.
  */
 function timeFires(history: readonly FrameSample[], { aspect }: StreamContext): boolean {
   const P = TUNING.time
@@ -653,8 +656,9 @@ function timeFires(history: readonly FrameSample[], { aspect }: StreamContext): 
 // ---------------------------------------------------------------------------------- EMAIL
 
 /**
- * EMAIL: the base hand in C / O (or flat), the pointing index slides through it. Fires when the
- * index hand has moved EMAIL_SLIDE hand lengths toward and past the base hand's fingers.
+ * EMAIL: the base hand in C / O (or flat), standing up and still; the pointing index slides
+ * through it. Fires when the fingertip has travelled `slide` hand lengths relative to the base and
+ * ends within `near` of it, still pointing.
  */
 function emailFires(history: readonly FrameSample[], { aspect }: StreamContext): boolean {
   const P = TUNING.email
@@ -703,8 +707,9 @@ function emailFires(history: readonly FrameSample[], { aspect }: StreamContext):
 // ----------------------------------------------------------------------------------- WHAT
 
 /**
- * WHAT: both open hands, palms up, apart at about the same height, shaking side to side a little.
- * Fires once both hands have made WHAT_STROKES sideways strokes.
+ * WHAT (the palms-up shake): both open hands, palms up, apart at about the same height, shaking
+ * side to side. Fires once each hand has made `strokes` sideways strokes (one of them
+ * `strokesMax`) since the hands were last close, while they still move.
  */
 function whatFires(history: readonly FrameSample[], { aspect }: StreamContext): boolean {
   const P = TUNING.what
@@ -747,7 +752,8 @@ function whatFires(history: readonly FrameSample[], { aspect }: StreamContext): 
 
 /**
  * PLEASE: a flat hand on the chest, fingers across the body, circling. Fires once the palm has
- * wound PLEASE_TURN degrees around the middle of its path, below the face when a face is known.
+ * wound `turn` degrees in PLEASE's direction around the middle of its path (below the face when a
+ * face is known), with the other hand, if seen, still.
  */
 /**
  * Signed degrees the palm winds around the middle of its path, mirrored for the hand's side so the
