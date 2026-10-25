@@ -51,23 +51,7 @@ export function openCamera(source: CameraSource): Promise<CameraHandle> {
   return source.kind === 'builtin' ? openBuiltin(source.deviceId) : openMjpeg(source.url)
 }
 
-/** Cameras that are software, not a lens: OBS's Virtual Camera and the like. The app never reads one by default. */
-const VIRTUAL_CAMERA = /obs|virtual|snap camera|ndi|syphon|camo|mmhmm|epoccam/i
-const BUILT_IN_CAMERA = /facetime|macbook|built-?in|isight/i
-
-/**
- * The camera to open when none was chosen: the Mac's own, never a virtual one. macOS may make a
- * virtual camera the default (OBS's, once it is running), and the app would then read OBS's logo.
- * Undefined when there is nothing to choose from (the labels are empty until camera access is given).
- */
-export function pickBuiltinCamera(devices: readonly Pick<MediaDeviceInfo, 'kind' | 'label' | 'deviceId'>[]): string | undefined {
-  const real = devices.filter((d) => d.kind === 'videoinput' && d.label && !VIRTUAL_CAMERA.test(d.label))
-  return (real.find((d) => BUILT_IN_CAMERA.test(d.label)) ?? real[0])?.deviceId
-}
-
-async function openBuiltin(requested?: string): Promise<CameraHandle> {
-  const devices = requested ? [] : await navigator.mediaDevices.enumerateDevices().catch(() => [])
-  const deviceId = requested ?? pickBuiltinCamera(devices)
+async function openBuiltin(deviceId?: string): Promise<CameraHandle> {
   let stream: MediaStream
   try {
     stream = await navigator.mediaDevices.getUserMedia({
