@@ -933,6 +933,7 @@ Setup: Command mode, `FASTASL_CAPTIONS=1 FASTASL_LOG=1 npm run dev` (or the tray
 7. **Commands still work.** Thumbs up, pick "Send message" (2 fingers), sign the details, lower your hands. **Expected:** this one goes to the agent as usual.
 8. **Close the caption window.** **Expected:** the hint goes away; the next phrase goes to the agent again.
    Also: with the window open, swipe left and right. **Expected:** the mode stays Command. Quit in Spell mode and relaunch with `FASTASL_CAPTIONS=1`: **Expected:** Command mode.
+10. **Captions button.** Click the captions icon in the card's footer (next to the camera). **Expected:** it dims, the "Captions on" hint goes away, the caption window shows no words, and the next phrase goes to the agent. Click again: captions are back. With the caption window closed, the click opens it and captions come on.
 9. **OBS and FaceTime.** In OBS add a Window Capture of "fastASL Captions" and Start Virtual Camera; in FaceTime pick Video › OBS Virtual Camera. **Expected:** the other side sees the camera with the captions.
 
 ## Gesture: open 6 Claude Code terminals

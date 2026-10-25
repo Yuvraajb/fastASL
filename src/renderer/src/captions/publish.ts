@@ -1,8 +1,12 @@
 import type { CaptionState } from '@shared/types'
 import { useApp, type AppState } from '../app/store'
 
-/** What the caption camera should show, from the overlay's chat state. */
-export function captionStateOf(s: Pick<AppState, 'composing' | 'chat'>, lastAt: number): CaptionState {
+/**
+ * What the caption camera should show, from the overlay's chat state. With captions off (the
+ * button) nothing: the signs are commands for the agent, not words for the call.
+ */
+export function captionStateOf(s: Pick<AppState, 'composing' | 'chat'> & { captioning?: boolean }, lastAt: number): CaptionState {
+  if (s.captioning === false) return { live: '', last: '', lastAt: 0 }
   const live = s.composing.tokens.map((t) => t.text).join(' ')
   const you = [...s.chat].reverse().find((m) => m.from === 'you' && m.kind === 'text')
   const last = you && you.kind === 'text' ? you.text : ''

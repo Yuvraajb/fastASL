@@ -14,6 +14,8 @@ describe('captionStateOf', () => {
     }
     expect(captionStateOf(s, 42)).toEqual({ live: 'call friend', last: 'Tomorrow meeting what time', lastAt: 42 })
     expect(captionStateOf({ composing: { tokens: [] }, chat: [] }, 0)).toEqual({ live: '', last: '', lastAt: 0 })
+    // Captions off (the button): nothing shows, though words are being signed.
+    expect(captionStateOf({ ...s, captioning: false }, 42)).toEqual({ live: '', last: '', lastAt: 0 })
   })
 })
 
@@ -28,6 +30,7 @@ describe('publishCaptions', () => {
     vi.useFakeTimers()
     const sendCaptions = vi.fn()
     vi.stubGlobal('window', { fastasl: { sendCaptions } })
+    setApp({ captioning: true })
     const stop = publishCaptions()
     setApp({ chat: [{ id: 'm1', from: 'you', kind: 'text', text: 'Yes' }] })
     vi.advanceTimersByTime(5000)

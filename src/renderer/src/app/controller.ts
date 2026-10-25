@@ -83,6 +83,7 @@ export type TapTarget =
   | 'proceed'
   | 'option'
   | 'settings'
+  | 'captions'
 
 export const QUICK_MENU = ['Create event', 'Send message', 'Search web', 'Take notes', 'Open app']
 export const SETTINGS_ROOT = ['Teach a sign', 'New gesture', 'My gestures', 'Camera source', 'Sensitivity']
@@ -795,6 +796,28 @@ export class Controller {
 
   /** The caption camera window opened or closed (see endPhrase); Ready's hint follows. */
   setCaptioning(open: boolean): void {
+    setApp({ captionWindow: open })
+    this.applyCaptioning()
+  }
+
+  /**
+   * The captions button. On: signed phrases are captions (the window opens if it was closed).
+   * Off: they go to the agent again; the window stays up, so OBS keeps capturing it.
+   */
+  toggleCaptions(): void {
+    const { captionWindow, captionsOn } = getApp()
+    if (!captionWindow) {
+      setApp({ captionsOn: true })
+      window.fastasl?.showCaptions?.()
+      return
+    }
+    setApp({ captionsOn: !captionsOn })
+    this.applyCaptioning()
+  }
+
+  private applyCaptioning(): void {
+    const { captionWindow, captionsOn } = getApp()
+    const open = captionWindow && captionsOn
     if (getApp().captioning === open) return
     setApp({ captioning: open })
     // Captions are Command mode's streamed words (Spell mode reads letters, Dictation types them),
@@ -974,6 +997,7 @@ export class Controller {
     if (target === 'collapse') return this.collapse()
     if (target === 'expand') return this.expand()
     if (target === 'camera') return this.toggleCamera()
+    if (target === 'captions') return this.toggleCaptions()
     if (target === 'settings') return this.openSettings()
     if (target === 'option' && index !== undefined) return this.pickOption(index)
     if (target === 'close') {

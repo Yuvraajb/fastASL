@@ -93,6 +93,7 @@ function stubWindow() {
     getGestures: vi.fn(async () => GESTURES),
     saveGestures: vi.fn(async (_gestures: CustomGesture[]) => {}),
     getRecentTasks: vi.fn(async () => RECENT),
+    showCaptions: vi.fn(),
     getTemplates: vi.fn(async (): Promise<TemplateStore> => ({ version: 1, templates: [] })),
     saveTemplates: vi.fn(async (_store: TemplateStore) => {})
   }
@@ -2141,6 +2142,27 @@ describe('the caption camera (captioning)', () => {
     sendPhrase(word('hello'))
     await settle(500)
     expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('the captions button: off sends signs to the agent (window stays), on captions again; closed, it opens the window', async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    c.setCaptioning(true)
+    c.tap('captions')
+    expect(getApp()).toMatchObject({ captioning: false, captionsOn: false, captionWindow: true })
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    sendPhrase(word('hello'), word('friend'))
+    await settle(1000)
+    expect(run).toHaveBeenCalledTimes(1)
+    c.tap('close')
+    c.tap('captions')
+    expect(getApp().captioning).toBe(true)
+
+    c.setCaptioning(false)
+    c.tap('captions')
+    expect(api.showCaptions).toHaveBeenCalledTimes(1)
+    expect(getApp().captioning).toBe(false)
+    c.setCaptioning(true)
+    expect(getApp().captioning).toBe(true)
   })
 
   it('keeps Command mode while the caption window is open: it switches to it, and swipes and the saved mode leave it', () => {

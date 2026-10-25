@@ -22,12 +22,14 @@ const isOpen = (): boolean => win !== null && !win.isDestroyed()
  * later), and tells the overlay whether the caption window is open: while it is, what is signed
  * is captions for the call, not messages for the agent.
  */
-export function registerCaptions(): void {
+export function registerCaptions(open: () => void): void {
   ipcMain.on(IPC.captionsUpdate, (_e, state: CaptionState) => {
     last = state
     if (win && !win.isDestroyed()) win.webContents.send(IPC.captionsState, state)
   })
   ipcMain.handle(IPC.captionsOpen, () => isOpen())
+  // The overlay's captions button turns captions on: the window opens if it isn't (or comes forward).
+  ipcMain.on(IPC.captionsShow, () => open())
   ipcMain.handle(IPC.captionsTranslate, async (_e, glosses: unknown): Promise<Result<string>> => {
     if (!Array.isArray(glosses) || !glosses.every((g) => typeof g === 'string')) return { ok: false, error: 'bad glosses' }
     const t0 = Date.now()

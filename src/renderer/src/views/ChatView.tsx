@@ -3,6 +3,8 @@ import {
   Calendar,
   Camera,
   CameraOff,
+  Captions,
+  CaptionsOff,
   Check,
   ChevronDown,
   CircleAlert,
@@ -419,6 +421,7 @@ function ComposingBubble({
 
 function ChatFooter({ items }: { items: (string | HintItem)[] }): React.JSX.Element {
   const cameraOn = useApp((s) => s.cameraOn)
+  const captioning = useApp((s) => s.captioning)
   return (
     <footer className="chatcard__footer">
       <IconButton
@@ -428,6 +431,15 @@ function ChatFooter({ items }: { items: (string | HintItem)[] }): React.JSX.Elem
         size={28}
         iconSize={17}
         onClick={() => controller.tap('camera')}
+      />
+      {/* Captions mode: on, what you sign is captions for the call; off, it goes to the agent. */}
+      <IconButton
+        icon={captioning ? Captions : CaptionsOff}
+        label={captioning ? 'Captions on: signs go to the call. Turn off' : 'Captions off: signs go to the agent. Turn on'}
+        tone={captioning ? 'light' : 'dim'}
+        size={28}
+        iconSize={17}
+        onClick={() => controller.tap('captions')}
       />
       <Hint items={items} className="chatcard__hint" />
       <IconButton icon={ChevronDown} label="Minimize" size={28} iconSize={17} onClick={() => controller.tap('collapse')} />
@@ -462,9 +474,10 @@ function hintFor(view: ChatCardView): (string | HintItem)[] {
     case 'conversation':
       if (view.phase !== 'reply') return [{ icon: HandFist, label: 'fist to stop' }]
       if (view.answer?.view) return [{ icon: ThumbsUp, label: openLabel(view.answer.view) }, 'sign to reply']
-      return ['sign to reply', { icon: HandFist, label: 'hide' }]
+      // No "fist = hide" here: in Command mode a fist no longer hides the card (signs start with one).
+      return ['sign to reply']
     case 'ready':
       break
   }
-  return ['sign to talk', { icon: ThumbsUp, label: 'menu' }, { icon: HandFist, label: 'hide' }]
+  return ['sign to talk', { icon: ThumbsUp, label: 'menu' }]
 }

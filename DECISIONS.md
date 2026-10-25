@@ -1081,3 +1081,12 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - Tests: engines (taught D and W arrive as letters, "DW"), controller (teach order, MEETING D W, CALL D W), provider (joinLetters), directCommands (Call DW). Not tried on a real hand.
     - **Live fix: D and W came out as nothing.** They had never been taught (signs.json held only HELLO and THANK YOU), and letters come only from taught templates. So D and W now need no teaching (`engine/recognition/initials.ts`): D is a held finger count of 1 (index up), W of 3 (index, middle, ring; pinky down), one hand, still for 0.5 s, read by the existing hand-shape analysis. To keep a pointing finger from becoming a D anywhere, the spotter only listens right after CALL / FACETIME / MEETING, and only for the next letter of an initials nickname (`nextInitials`: after CALL, D; after D, W; then nothing). Taught letters still work as before. Tests on synthetic hands: D and W found once per hold, a 0.25 s pass and A, B, L, S, Y, V are not; CALL then D, W gives "Call DW"; with no CALL nothing. Not tried on a real hand.
 
+## Captions on/off button
+
+228. **A captions button in the chat card's footer, next to the camera button.** The user wanted to switch captions mode without closing anything.
+    - **On** (Captions icon, bright): signed phrases are captions for the call, as before (entry 220). **Off** (CaptionsOff, dim): they go to the agent, and the caption window shows nothing, so commands don't appear on the call. The caption window itself stays open either way, so OBS keeps capturing the same window.
+    - With the window closed, the button opens it (`captions:show` -> main's openCaptionWindow) and captions come on when it has opened.
+    - State: `captionWindow` (main says the window is open), `captionsOn` (the button, on by default), `captioning` = both. CALL / MEETING still act as commands while captions are on.
+    - The chat card's hints no longer say "fist = hide": in Command mode a fist doesn't hide the card any more (entry 219).
+    - Tests: controller (button off / on / opens the window), publish (nothing shown when off).
+

@@ -56,6 +56,10 @@ export interface AppState {
    * for the agent (the quick menu still sends one). See Controller.endPhrase.
    */
   captioning: boolean
+  /** The caption window is open (main says so). */
+  captionWindow: boolean
+  /** The captions button: off sends signs to the agent though the window (and OBS) stay up. */
+  captionsOn: boolean
   /** Signs that name a contact (FRIEND -> Darren Wu), from FASTASL_CONTACT_ALIASES. */
   contactAliases: Record<string, string>
 }
@@ -87,6 +91,8 @@ export const useApp = create<AppState>(() => ({
   chat: [],
   composing: { tokens: [] },
   captioning: false,
+  captionWindow: false,
+  captionsOn: true,
   contactAliases: {}
 }))
 

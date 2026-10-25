@@ -226,8 +226,8 @@ async function boot(): Promise<void> {
   if (logRenderer) forwardConsole(overlay.win)
   loadRenderer(overlay.win)
 
-  registerCaptions()
   const openCaptions = (): void => openCaptionWindow(loadRenderer)
+  registerCaptions(openCaptions)
   setupTray({
     dev,
     onToggle: () => {
