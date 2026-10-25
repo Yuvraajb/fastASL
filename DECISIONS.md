@@ -1026,3 +1026,5 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - **Live run** on 16 demo phrases with the real prompt: 15 became English, all correct; DAD MEETING TOMORROW YES was refused by the check ("...right?") and kept the signs.
     - Tests: `caption.test.ts` (the check, the request, failures), `controller.test.ts` (English replaces the signs; one sign or no answer keeps them).
 
+222. **The caption window keeps Command mode.** Live, the captions stopped again: the saved mode was Spell (letters only, no streamed words), most likely from a signing movement read as a swipe. While the caption window is open, opening it switches to Command mode, swipes no longer change the mode, and the mode saved from last time is not applied. Closing the window gives the swipes back. Test: `controller.test.ts` (the caption camera block).
+

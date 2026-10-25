@@ -2020,6 +2020,22 @@ describe('the caption camera (captioning)', () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps Command mode while the caption window is open: it switches to it, and swipes and the saved mode leave it', () => {
+    setApp({ mode: 'spell' })
+    c.setCaptioning(true)
+    expect(getApp().mode).toBe('command')
+    expect(getApp().view).toEqual(captionsReady)
+    g('swipeRight')
+    g('swipeLeft')
+    expect(getApp().mode).toBe('command')
+    c.restoreMode('dictation')
+    expect(getApp().mode).toBe('command')
+    expect(getApp().view).toEqual(captionsReady)
+    c.setCaptioning(false)
+    g('swipeRight')
+    expect(getApp().mode).toBe('dictation')
+  })
+
   it('closing the caption window sends phrases to the agent again', async () => {
     const run = vi.spyOn(services, 'agentRun')
     c.setCaptioning(true)

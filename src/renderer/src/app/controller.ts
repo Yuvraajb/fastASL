@@ -740,6 +740,9 @@ export class Controller {
   setCaptioning(open: boolean): void {
     if (getApp().captioning === open) return
     setApp({ captioning: open })
+    // Captions are Command mode's streamed words (Spell mode reads letters, Dictation types them),
+    // and the mode stays Command while the window is open (see cycleMode).
+    if (open && getApp().mode !== 'command') return this.switchMode('command')
     if (this.view.kind === 'ready' && !this.intentPrefix && !this.signingTask) this.setView(this.idleView())
   }
 
@@ -783,6 +786,9 @@ export class Controller {
   }
 
   cycleMode(dir: 1 | -1): void {
+    // The caption camera keeps Command mode: a signing movement read as a swipe once switched to
+    // Spell mode (letters only), and the captions stopped.
+    if (getApp().captioning) return
     const { mode } = getApp()
     this.switchMode(MODES[(MODES.indexOf(mode) + dir + MODES.length) % MODES.length])
   }
@@ -805,7 +811,7 @@ export class Controller {
 
   /** The mode saved last time, applied at launch: an idle card shows that mode's idle view. */
   restoreMode(mode: Mode): void {
-    setApp({ mode })
+    setApp({ mode: getApp().captioning ? 'command' : mode })
     const kind = this.view.kind
     if (kind === 'ready' || kind === 'dictation') this.setView(this.idleView())
   }

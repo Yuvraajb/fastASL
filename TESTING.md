@@ -932,5 +932,6 @@ Setup: Command mode, `FASTASL_CAPTIONS=1 FASTASL_LOG=1 npm run dev` (or the tray
 6. **A resting fist.** Hold a fist still for 2 s between signs. **Expected:** the card stays up and captions keep working.
 7. **Commands still work.** Thumbs up, pick "Send message" (2 fingers), sign the details, lower your hands. **Expected:** this one goes to the agent as usual.
 8. **Close the caption window.** **Expected:** the hint goes away; the next phrase goes to the agent again.
+   Also: with the window open, swipe left and right. **Expected:** the mode stays Command. Quit in Spell mode and relaunch with `FASTASL_CAPTIONS=1`: **Expected:** Command mode.
 9. **OBS and FaceTime.** In OBS add a Window Capture of "fastASL Captions" and Start Virtual Camera; in FaceTime pick Video › OBS Virtual Camera. **Expected:** the other side sees the camera with the captions.
 
