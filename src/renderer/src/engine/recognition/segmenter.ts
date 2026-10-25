@@ -140,6 +140,11 @@ export class Segmenter {
     return this.isArmed
   }
 
+  /** A movement has started ('start' was emitted) and has not ended yet. */
+  get moving(): boolean {
+    return this.phase === 'active'
+  }
+
   setThresholds(patch: Partial<SegmenterThresholds>): void {
     this.th = { ...this.th, ...patch }
   }

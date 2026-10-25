@@ -47,12 +47,18 @@ export function startEngines(controller: Controller): () => void {
   let model: SignModel | null = null
   let stopped = false
   const dev = Boolean(window.fastasl?.isDev)
-  /** The face (and pose) are tracked only where the model can be asked, so they cost nothing elsewhere. */
+  /**
+   * The face is tracked where signs are taken outside Spell mode (streaming signs place the hands
+   * against it, and the model reads it); the pose only where the ASL Citizen model can be asked.
+   * Elsewhere they cost nothing.
+   */
   const trackForModel = (): void => {
     const s = getApp()
-    const wanted = model !== null && (showsSign(s.view) || (takesSigns(s.view) && s.mode !== 'spell'))
-    camera.setExtras({ face: wanted, pose: wanted && Boolean(model?.hasCitizen) })
+    const signing = takesSigns(s.view) && s.mode !== 'spell'
+    const forModel = model !== null && (showsSign(s.view) || signing)
+    camera.setExtras({ face: signing || forModel, pose: forModel && Boolean(model?.hasCitizen) })
   }
+  trackForModel()
   void loadSignModel(dev ? (line) => console.log(line) : undefined).then(
     (loaded) => {
       if (stopped) return

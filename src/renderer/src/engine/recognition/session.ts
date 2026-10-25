@@ -1,14 +1,19 @@
+import type { Dictionary } from '@shared/dictionary'
 import type { Mode, SignTemplate } from '@shared/types'
 import type { FrameSample, SensitivityProfile } from '../types'
+import { NumberMatcher, type NumberGate } from './numbers'
 import { Recognizer, type Classification, type RecognizerOptions } from './recognizer'
 import { Segmenter, type Segment, type SegmenterThresholds } from './segmenter'
+import type { StreamRule } from './streamRules/types'
+import { StreamingSignMatcher } from './streaming'
 
 /** A movement the segmenter cut out (see Segment): its frames, frame vectors, duration and edges. */
 export type Movement = Extract<Segment, { kind: 'dynamic' }>
 
 export type RecognitionEvent =
   | { type: 'signStart' }
-  | { type: 'token'; text: string; kind: 'word' | 'letter' }
+  /** `streamed`: a streaming sign or a number, recognized while the hands were still moving (no movement outcome). */
+  | { type: 'token'; text: string; kind: 'word' | 'letter'; streamed?: true }
   | { type: 'ambiguous'; options: string[]; kind: 'word' | 'letter' }
   | { type: 'rejected' }
 
@@ -23,10 +28,24 @@ export interface SessionOptions {
    * shape would have fired, so suspend() can drop it.
    */
   controlHoldMs?: number
+  /** Standard signs recognized from the sign dictionary, with no recordings. Default none. */
+  dictionary?: Dictionary
+  /** Streaming word rules (streamRules/index.ts), run after the dictionary signs. Default none. */
+  streamRules?: readonly StreamRule[]
 }
 
 /** The gesture engine's hold can start a little after ours (it also waits for stillness). */
 const CONTROL_GRACE_MS = 250
+/**
+ * After a streaming sign fires, a movement that starts within this long is part of it (the rest
+ * of the sign), and so is the movement it fired in: none of them gets a movement outcome, so
+ * neither the sign model, the taught signs nor a guess can make a second word of it. Short, so a
+ * next sign that only the model knows still gets its own movement. The streaming signs
+ * themselves are never held back by it: a phrase of them streams word by word.
+ */
+export const SETTLE_MS = 500
+/** The same after a number: the raising movement that led to it ends with no outcome. */
+export const NUMBER_SETTLE_MS = 600
 
 /**
  * Live recognition: camera frames in, recognition events out.
@@ -40,6 +59,11 @@ const CONTROL_GRACE_MS = 250
  *   down, a movement) or a control gesture with that shape would have fired; suspend() in that
  *   window drops it, so a fist or thumbs-up is never also an S or A.
  * - Spell mode is letters only, with no wait: movements produce no events at all.
+ * - Streaming signs come first (StreamingSignMatcher: the dictionary, then the stream rules),
+ *   on every frame outside Spell mode: a `token` with `streamed`, mid-movement, with no outcome
+ *   for that movement and none for a movement starting within SETTLE_MS (it is claimed). Its
+ *   `signStart`, if already sent, is answered by the token itself. Numbers 1-5 (setNumbers) work
+ *   the same way.
  */
 export class RecognitionSession {
   readonly recognizer: Recognizer
@@ -64,12 +88,25 @@ export class RecognitionSession {
   private suspendedUntil = -Infinity
   private lastT = 0
   private pending: { event: RecognitionEvent; until: number } | null = null
+  private readonly stream: StreamingSignMatcher
+  private aspect = 1
+  private readonly numbers = new NumberMatcher()
+  private numbersOn = false
+  private numberGate: NumberGate | undefined
+  /** False while a control gesture's hold is timing toward firing: no streaming sign then. */
+  private streamGate: () => boolean = () => true
+  /** A movement starting before this belongs to the last streaming sign (SETTLE_MS). */
+  private claimUntil = -Infinity
+  /** The movement in progress belongs to a streaming sign: its end gives no outcome. */
+  private claimed = false
 
   constructor(options: SessionOptions = {}) {
     this.recognizer = new Recognizer(options.recognizer)
     this.segmenter = new Segmenter(options.thresholds, options.aspect)
     this.baseHoldMs = this.segmenter.thresholds.staticHoldMs
     this.controlHoldMs = options.controlHoldMs ?? 1000
+    this.stream = new StreamingSignMatcher({ dictionary: options.dictionary, rules: options.streamRules })
+    if (options.aspect && options.aspect > 0) this.aspect = options.aspect
   }
 
   setTemplates(templates: readonly SignTemplate[]): void {
@@ -83,13 +120,49 @@ export class RecognitionSession {
   }
 
   setMode(mode: Mode): void {
-    this.lettersOnly = mode === 'spell'
+    const lettersOnly = mode === 'spell'
+    if (lettersOnly !== this.lettersOnly) this.unclaim()
+    this.lettersOnly = lettersOnly
     this.recognizer.setMode(this.lettersOnly ? 'letters' : 'both')
+  }
+
+  /**
+   * Recognize ASL numbers 1-5 held as a handshape (no recordings). Off by default. `allow` can
+   * refuse a hand, e.g. one showing a control gesture of the current view.
+   */
+  setNumbers(on: boolean, allow?: NumberGate): void {
+    if (on !== this.numbersOn) this.numbers.reset()
+    this.numbersOn = on
+    this.numberGate = allow
+  }
+
+  /**
+   * Streaming signs (and numbers) fire only while `allowed()`: the app passes "no control
+   * gesture hold in progress", so an open palm held at the chin (the control) is not MOM.
+   */
+  setStreamGate(allowed: () => boolean): void {
+    this.streamGate = allowed
   }
 
   /** Camera image width / height; safe to call every frame (0/0 before the feed has a size is ignored). */
   setAspect(aspect: number): void {
+    if (Number.isFinite(aspect) && aspect > 0) this.aspect = aspect
     this.segmenter.setAspect(aspect)
+  }
+
+  /** A streaming sign's start is in view (its handshape held where it begins): a movement now may be that sign. */
+  get signPending(): boolean {
+    return this.stream.armed
+  }
+
+  /** How many streaming signs are loaded (dictionary signs plus stream rules). */
+  get lexiconSize(): number {
+    return this.stream.size
+  }
+
+  /** Dev diagnostics from the streaming sign matcher. */
+  get lexiconDebug(): string {
+    return this.stream.debug
   }
 
   /**
@@ -102,6 +175,16 @@ export class RecognitionSession {
     this.suspendedUntil = Math.max(this.suspendedUntil, now + ms)
     this.pending = null
     this.segmenter.reset()
+    // The movement into a control gesture is no streaming sign either.
+    this.stream.reset()
+    this.numbers.reset()
+    this.unclaim()
+  }
+
+  /** The segmenter dropped its movement: nothing is claimed any more. */
+  private unclaim(): void {
+    this.claimed = false
+    this.claimUntil = -Infinity
   }
 
   resume(): void {
@@ -123,8 +206,24 @@ export class RecognitionSession {
     this.rejectedMovement = null
     this.lastMovement = null
     if (frame.t < this.suspendedUntil) return []
-    const segments = this.segmenter.push(frame)
     const events: RecognitionEvent[] = []
+    if (!this.lettersOnly) {
+      // Both are fed every frame, so their own motion and steadiness windows never go stale.
+      const mayFire = this.streamGate()
+      const word = this.stream.update(frame, this.aspect, mayFire)
+      const held = this.numbersOn ? this.numbers.update(frame, this.aspect, this.numberGate) : null
+      const digit = mayFire ? held : null
+      const text = word ?? (digit !== null ? String(digit) : null)
+      if (text !== null) {
+        this.claimUntil = frame.t + (word !== null ? SETTLE_MS : NUMBER_SETTLE_MS)
+        if (this.segmenter.moving) this.claimed = true
+        // A letter held back is dropped, and the hand resting in the sign's last shape is no letter.
+        this.pending = null
+        this.segmenter.blockStatic()
+        events.push({ type: 'token', text, kind: 'word', streamed: true })
+      }
+    }
+    const segments = this.segmenter.push(frame)
     const movedOn = this.segmenter.armed || segments.some((s) => s.kind !== 'static')
     if (this.pending && (this.lettersOnly || movedOn || frame.t >= this.pending.until)) {
       events.push(this.pending.event)
@@ -139,8 +238,18 @@ export class RecognitionSession {
         continue
       }
       if (this.lettersOnly) continue
-      if (segment.kind === 'start') events.push({ type: 'signStart' })
-      else if (segment.kind === 'cancel') events.push({ type: 'rejected' })
+      if (segment.kind === 'start') {
+        // Settle: the rest of a streaming sign is not a new sign.
+        if (segment.t < this.claimUntil) this.claimed = true
+        else events.push({ type: 'signStart' })
+        continue
+      }
+      if (this.claimed) {
+        // The movement a streaming sign was made in: no outcome, no model, no guess.
+        this.claimed = false
+        continue
+      }
+      if (segment.kind === 'cancel') events.push({ type: 'rejected' })
       else {
         const result = this.recognizer.classifyDynamic(segment.features)
         this.lastWord = result

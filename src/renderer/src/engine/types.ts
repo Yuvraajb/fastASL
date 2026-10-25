@@ -9,6 +9,18 @@ export interface HandSample {
   score: number
 }
 
+/**
+ * The viewer's face: centre and size as fractions of the image width / height. Derived from the
+ * FaceLandmarker points (faceBoxOf in recognition/faceBox.ts): the bounding box of the face
+ * mesh, forehead top to chin and cheek to cheek.
+ */
+export interface FaceBox {
+  cx: number
+  cy: number
+  w: number
+  h: number
+}
+
 /** All hands seen in one frame. */
 export interface FrameSample {
   /** Monotonic timestamp in milliseconds (performance.now()). */

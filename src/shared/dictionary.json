@@ -1,0 +1,96 @@
+{
+  "handshapes": {
+    "B": {
+      "fingers": {
+        "index": "extended",
+        "middle": "extended",
+        "ring": "extended",
+        "pinky": "extended"
+      },
+      "thumb": "any",
+      "spreadMax": 20
+    },
+    "flatO": {
+      "fingers": {
+        "index": "any",
+        "middle": "any",
+        "ring": "any",
+        "pinky": "any"
+      },
+      "thumb": "any",
+      "pinchMax": 0.45
+    },
+    "open": {
+      "fingers": {
+        "index": "any",
+        "middle": "any",
+        "ring": "any",
+        "pinky": "any"
+      },
+      "thumb": "any",
+      "pinchMin": 0.6
+    }
+  },
+  "locations": {
+    "upperFrame": {
+      "anchor": "frame",
+      "region": {
+        "xMin": 0,
+        "xMax": 1,
+        "yMin": 0,
+        "yMax": 0.38
+      }
+    },
+    "forehead": {
+      "anchor": "face",
+      "region": {
+        "xMin": -1.8,
+        "xMax": 1.8,
+        "yMin": -1.4,
+        "yMax": 0.15
+      },
+      "fallback": "upperFrame"
+    }
+  },
+  "movements": {
+    "outward": {
+      "kind": "outward",
+      "minHandLengths": 1.0,
+      "sidewaysShare": 0.2
+    },
+    "together": {
+      "kind": "together",
+      "closeByHandLengths": 0.6,
+      "endGapHandLengths": 2.5
+    }
+  },
+  "signs": [
+    {
+      "gloss": "HELLO",
+      "hands": 1,
+      "phases": [
+        {
+          "handshape": "B",
+          "location": "forehead"
+        },
+        {
+          "handshape": "B",
+          "movement": "outward"
+        }
+      ]
+    },
+    {
+      "gloss": "MEETING",
+      "hands": 2,
+      "phases": [
+        {
+          "handshape": "open"
+        },
+        {
+          "handshape": "flatO",
+          "movement": "together"
+        }
+      ]
+    }
+  ]
+}

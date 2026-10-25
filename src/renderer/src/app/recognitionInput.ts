@@ -1,3 +1,4 @@
+import { DEFAULT_DICTIONARY } from '@shared/dictionary'
 import type { Mode, SignTemplate } from '@shared/types'
 import { pickFrames, type CapturedFrame } from '../engine/camera/frameRing'
 import { HOLD_MS } from '../engine/gestures/engine'
@@ -5,6 +6,7 @@ import { slotPresent } from '../engine/recognition/features'
 import { summarizeMotion } from '../engine/recognition/motionSummary'
 import { Segmenter } from '../engine/recognition/segmenter'
 import { RecognitionSession, type Movement, type RecognitionEvent } from '../engine/recognition/session'
+import { STREAM_RULES } from '../engine/recognition/streamRules'
 import type { Classification } from '../engine/recognition/recognizer'
 import { TEACH_REASONS, TeachSession } from '../engine/recognition/teach'
 import { decide, describeTop, ISLR_MAX_RANK, withTaught, yieldToGesture, type FinalDecision, type TaughtDecision } from '../engine/model/decide'
@@ -33,6 +35,8 @@ const GESTURE_SUSPEND_MS = 600
 const LISTEN_DELAY_MS = 400
 /** Once shown, "Listening..." stays at least this long, so a rejected movement doesn't make it flicker. */
 const LISTEN_MIN_MS = 700
+/** Held shapes that are signing, not commands, while both hands are in view (see gesture()). */
+const TWO_HAND_SIGN_SHAPES: ReadonlySet<GestureName> = new Set(['fist', 'thumbsUp'])
 const SWIPES: ReadonlySet<GestureName> = new Set(['swipeLeft', 'swipeRight', 'swipeUp'])
 /** A swipe whose movement is still being judged after this long (the hands kept moving) is dropped. */
 const SWIPE_VERDICT_MS = 1500
@@ -162,7 +166,17 @@ export function connectRecognition(
   const signModel = options.model ?? (() => null)
   const initial = getApp()
   // Outside Spell mode a letter waits out the longest control hold, so suspend() can drop it.
-  const rec = new RecognitionSession({ controlHoldMs: Math.max(...Object.values(HOLD_MS)) })
+  // Streaming signs (the dictionary, then the stream rules) come first, on every frame.
+  const rec = new RecognitionSession({
+    controlHoldMs: Math.max(...Object.values(HOLD_MS)),
+    dictionary: DEFAULT_DICTIONARY,
+    streamRules: STREAM_RULES
+  })
+  // A control gesture's hold in progress (a thumbs up, a fist, a shape held still) is no sign.
+  rec.setStreamGate(() => !options.holdingGesture?.())
+  if (window.fastasl?.isDev) {
+    console.log(`[lexicon] ${rec.lexiconSize} streaming sign(s) loaded (${initial.mode} mode${initial.mode === 'spell' ? ': off, Spell mode is letters only' : ''})`)
+  }
   let hasWords = false
   const setTemplates = (templates: SignTemplate[]): void => {
     rec.setTemplates(templates)
@@ -182,6 +196,8 @@ export function connectRecognition(
   let fed = false
   let cameraSession: CanvasImageSource | null = null
   let lastT = 0
+  /** Hands in the latest frame (see gesture()). */
+  let handsInView = 0
   /** The camera's aspect at the last frame, for the motion summary of a movement routed from it. */
   let aspectNow = 1
   /** A movement got signStart and no outcome yet. */
@@ -199,6 +215,10 @@ export function connectRecognition(
   let judging: Judging | null = null
   /** Recent tracked frames (hands, face, pose): the model's context around a movement. */
   const history: FrameSample[] = []
+  /** Streaming words that came while the model was judging an earlier movement: they follow its word. */
+  let queued: RecognitionEvent[] = []
+  /** Dev: when the streaming matcher's state was last logged. */
+  let lastDbg = -Infinity
   const forgetMovement = (): void => {
     moving = false
     heldGesture = null
@@ -494,6 +514,7 @@ export function connectRecognition(
   return {
     update(frame) {
       lastT = frame.t
+      handsInView = frame.hands.length
       if (!live.mock) {
         history.push(frame)
         while (history.length && history[0].t < frame.t - HISTORY_MS) history.shift()
@@ -534,7 +555,16 @@ export function connectRecognition(
       // The model's answer about an earlier movement comes first, in frame order.
       let shown = false
       if (judging && (judging.verdict !== null || frame.t - judging.since > MODEL_WAIT_MS)) shown = resolveJudging(judging.verdict === null)
+      if (!judging && queued.length) {
+        for (const e of queued) route(e)
+        queued = []
+        shown = true
+      }
       const events = rec.update(frame)
+      if (window.fastasl?.isDev && frame.hands.length > 0 && frame.t - lastDbg > 200) {
+        lastDbg = frame.t
+        log(`[hello-dbg] ${lettersOnly ? 'off: Spell mode is letters only (swipe right for Command mode)' : rec.lexiconDebug}`)
+      }
       const dtw = rec.lastWord
       if (rec.lastWord && window.fastasl?.isDev) {
         const { status, distance, alternatives } = rec.lastWord
@@ -544,6 +574,17 @@ export function connectRecognition(
       }
       const model = signModel()
       for (const e of events) {
+        if (e.type === 'token' && e.streamed) {
+          // A streaming sign, mid-movement: its movement gets no outcome (the session settles it),
+          // so no model word or guess for it. It waits only for an earlier movement's verdict.
+          log(`[stream] ${e.text}`)
+          if (judging) queued.push(e)
+          else {
+            route(e)
+            shown = true
+          }
+          continue
+        }
         // A movement's outcome (rec.lastMovement is set only then) waits for the model, if loaded.
         if (model && rec.lastMovement && e.type !== 'signStart' && (e.type === 'rejected' || e.kind === 'word')) {
           judge(model, rec.lastMovement, e, dtw)
@@ -561,10 +602,19 @@ export function connectRecognition(
       return shown
     },
     gesture(input) {
+      // Two hands in view while signing: a held fist or thumbs up is part of a sign (TIME's base
+      // hand is a fist held while the forearm is placed), not a command. Live, that fist cancelled
+      // "tomorrow meeting what" just before TIME. One hand alone still cancels or sends.
+      if (handsInView >= 2 && TWO_HAND_SIGN_SHAPES.has(input.gesture) && takesSigns(getApp().view)) {
+        log(`[gesture] ${input.gesture} ignored: two hands in view (signing)`)
+        return
+      }
       // A swipe made while recognition judges a movement waits for the verdict: a recognized
       // word wins (MUSIC sweeps a flat hand sideways); otherwise the swipe acts once the
-      // movement ends. Without word templates or the sign model there is nothing to wait for.
-      if (moving && (hasWords || signModel() !== null) && SWIPES.has(input.gesture)) {
+      // movement ends. Without word templates, the sign model or a dictionary sign's start in
+      // view (signPending) there is nothing to wait for. A streaming word during that movement
+      // drops the swipe.
+      if (moving && (hasWords || signModel() !== null || rec.signPending) && SWIPES.has(input.gesture)) {
         log(`[gesture] ${input.gesture} waits for the sign`)
         heldGesture = { input, t: lastT }
         return

@@ -13,7 +13,7 @@ import { describeTop, type ModelDecision } from '../engine/model/decide'
 import { ortSession } from '../engine/model/runtime'
 import { SignModel, type ModelVerdict, type MovementWindow } from '../engine/model/signModel'
 import { knownSigns } from '../engine/model/vocabulary'
-import { emptyFrames, performHolds, performSign, rng, timeline, WORDS, UNKNOWN, type PerformOptions, type ShapeName, type SignSpec } from '../engine/recognition/synthetic'
+import { emptyFrames, performHolds, performSign, rng, syntheticFace, timeline, WORDS, UNKNOWN, type PerformOptions, type ShapeName, type SignSpec } from '../engine/recognition/synthetic'
 import { TeachSession } from '../engine/recognition/teach'
 import type { FrameSample } from '../engine/types'
 import { Controller } from './controller'
@@ -162,6 +162,20 @@ describe('recognition order: the pretrained model, then taught signs, then an LL
     expect(window.end).toBeLessThan(window.frames.length - 1)
     expect(views).toEqual([{ kind: 'recognizing', token: 'thank you', isWord: true }])
     expect(unknown).not.toHaveBeenCalled()
+  })
+
+  it('a streaming sign comes first: its movement goes to neither the model nor the LLM', async () => {
+    const identify = vi.fn(async () => ({ ok: true as const, value: { is_sign: false, candidates: [] } }))
+    controller.setServices({ ...mockServices(), identifySign: identify, signGuessUnavailable: () => null, sendsFrames: () => true })
+    // A model that would name any movement it saw.
+    const model = fakeModel({ status: 'accepted', word: 'thank you', p: 0.95 })
+    await start(model)
+    const face = syntheticFace({ cx: 0.5, cy: 0.38, w: 0.16, h: 0.3 })
+    const hello: Part = (t0) => performSign(WORDS.HELLO, { random: rng(2010), aspect: ASPECT, t0, center: [0.5, 0.35], restBeforeMs: 400, restAfterMs: 2500 }).map((f) => ({ ...f, face }))
+    await play([hello])
+    expect(views).toEqual([{ kind: 'recognizing', token: 'hello', isWord: true }])
+    expect(model.classify).not.toHaveBeenCalled()
+    expect(identify).not.toHaveBeenCalled()
   })
 
   it('the model unsure, a taught sign still matches: the taught word', async () => {

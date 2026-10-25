@@ -886,3 +886,32 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - **The fix.** Face and pose now look for up to 3 people and keep the largest face and the widest shoulders. Hands look for up to 4 and keep the 2 largest.
 199. **Face and pose are held across frames that lack them** (`heldPoints` in inputs.ts, for both models). The tracker runs them on alternating frames and loses them now and then. A frame without the pose zeroes the shoulders ASL Citizen normalizes by. On real MEETING, HELLO, MUSIC and EMAIL clips, dropping the pose every other frame took top-1 from 7/8, 2/8, 5/8 and 7/8 to 0/8 each; holding the last pose restored all of them.
 
+
+## Streaming dictionary signs (ported from asl-dictionary-chat)
+
+200. **Words now stream while the hands still move.** Ported from the teammate's `asl-dictionary-chat` branch (Yuvraajb, commit 220f562): `LexiconMatcher` (`engine/recognition/lexicon.ts`), the sign dictionary (`shared/dictionary.ts` + `dictionary.json`: HELLO, two-handed MEETING), `numbers.ts` (ASL 1–5) and their tests. Not ported: the chat view and service, the Sentence card's send-to-chat, Supabase sync and push-to-listen (conversation mode already sends signed phrases to the agent).
+    - **`StreamingSignMatcher`** (`streaming.ts`) runs every frame outside Spell mode: the dictionary signs first, then each rule in `streamRules/index.ts` (`STREAM_RULES`, the `StreamRule` plugin interface in `streamRules/types.ts`). The first to fire wins. Rules get the last ≤1.5 s of frames since the last word, plus `{ aspect, face }`.
+    - **A phrase streams word by word.** After a word, any other word may fire 300 ms later (`STREAM_GAP_MS`) and the same word 900 ms later (`STREAM_COOLDOWN_MS`). The dictionary's own cooldown is per sign, so MEETING can follow HELLO at once.
+    - **The face box comes from FaceLandmarker** (`faceBox.ts`: the bounding box of the 468 mesh points), which the camera already runs. No second detector. It is reused for 1 s on frames without one. The face is now tracked wherever signs are taken outside Spell mode, not only once the sign model has loaded (`engines.ts`).
+201. **Recognition order: streaming signs, then the sign model and taught signs, then the Gemini guess.** A streamed word is a `token` with `streamed: true` (`session.ts`). The movement it fired in, and any movement starting within 500 ms of it (`SETTLE_MS`), is *claimed*: it ends with no outcome, so it reaches neither the model, the taught templates nor a guess. A streamed word that arrives while the model still judges an earlier movement waits for that word, so the phrase keeps its order (`recognitionInput.ts`).
+202. **Control gestures stay safe.**
+    - No streaming word fires while a control gesture's hold is timing toward firing (`setStreamGate`, the gesture engine's `holding()`).
+    - Swipes made while a dictionary sign's start is in view (`signPending`) wait for the movement's verdict, as they do for the model. A streamed word drops a held swipe.
+    - A streamed word spends the shape it ends in (thumbs up, fist), as any recognized word does.
+    - `streamEval.ts` builds synthetic clips of every control gesture (fist, open palm, five, 1–4, thumbs up, peace; raised to chest, chin, beside the face; swipes left, right, up), and `streaming.test.ts` checks that no dictionary sign or stream rule fires on them. One known clash is listed there: DAD fires on an open palm raised beside the forehead.
+203. **HELLO and MEETING retuned on real signers.** Measured with the app's own MediaPipe tasks run on 895 ASL Citizen videos, and on 2,168 ASL Citizen Holistic clips (`live-bin`).
+    - **HELLO.** Changes:
+      - the forehead region is measured against the mesh face box;
+      - a slow glide from the forehead keeps its start;
+      - a start held still more than 0.6 s (a held hand, not a salute) can't fire it;
+      - a swipe-fast straight stroke is left to the swipe;
+      - at least 20% of the travel must be sideways, so lowering a hand is no HELLO.
+
+      Recall went from 14% / 13% to 43% / 52%, with false fires on other words 1.7% / 1.5% (mostly FATHER) and none on the control clips.
+    - **MEETING.** The flat O is now measured as the thumb tip close to the fingertips (`pinchMax`), since MediaPipe reads a flat O's fingers as straight. The hands must start open (`pinchMin`) and close by 0.6 hand lengths. Recall went from 8% / 24% to 75% / 90%, with false fires 0.2% / 1.4% (OPEN, MAIL, MORE).
+204. **Numbers 1–5 are ported but off.** In the teammate's branch they were on only while push-to-listen was held. Without that gate, an open hand, a raised index or a V held a quarter of a second would add "5", "1" or "2" to the phrase. In Ready the 2 is also the peace-sign screenshot. `setNumbers(on, allow)` keeps them ready for a later opt-in.
+205. **Verified, and not verified.**
+    - **The live wiring on real phrases.** `app/streamPhrase.eval.test.ts` joins each ASL Citizen signer's own TOMORROW, MEETING, WHAT and TIME clips into one phrase and plays it through `startEngines` (gesture engine, recognition, controller). Across 18 signers the controller got exactly the words the matcher streamed, in order. The exception is where a control gesture acted (swipes at the joins between clips, where the hand jumps). One signer's phrase came out exactly; the rest miss words or gain extras from the rules, not from the wiring.
+    - It runs only with local data: `FASTASL_STREAM_DATA=<folders>`. The data stays outside the repo.
+    - **Checks.** Typecheck passes. `npx vitest run`: 1191 passed, 4 skipped. The build to a scratch folder succeeds.
+    - **Not verified:** a live camera after these changes. The app that was tested had been left in **Spell mode** (saved in settings), where streaming signs and face tracking are off by design. The dev log now says so: `[hello-dbg] off: Spell mode is letters only`.

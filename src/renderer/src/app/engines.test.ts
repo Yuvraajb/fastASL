@@ -6,6 +6,7 @@ import {
   performHolds,
   performSign,
   rng,
+  syntheticFace,
   timeline,
   UNKNOWN,
   WORDS,
@@ -463,9 +464,33 @@ describe('sign recognition', () => {
 
   it('a known word: Listening, then the word as a lower-case token', () => {
     stop = startEngines(controller)
-    play([sign(WORDS.HELLO, 900)])
+    // Signed low in the frame, where the dictionary's HELLO (a salute from the forehead) doesn't
+    // start: the taught template recognizes it when the movement ends.
+    play([sign(WORDS.HELLO, 900, { center: [0.5, 0.62] })])
     expect(listens).toEqual([true, false])
     expect(views).toEqual([{ kind: 'recognizing', token: 'hello', isWord: true }])
+  })
+
+  it('a dictionary sign streams: HELLO from the forehead shows mid-movement, once', () => {
+    stop = startEngines(controller)
+    const face = syntheticFace({ cx: 0.5, cy: 0.38, w: 0.16, h: 0.3 })
+    const frames = timeline([sign(WORDS.HELLO, 900, { center: [0.5, 0.35], restBeforeMs: 400, restAfterMs: 500 })]).map((f) => ({
+      ...f,
+      face,
+      t: f.t + clock
+    }))
+    let firedAt: number | null = null
+    let movementEnd = 0
+    for (const frame of frames) {
+      send([frame])
+      if (firedAt === null && views.length) firedAt = frame.t
+      if (frame.hands.length) movementEnd = frame.t
+    }
+    // The word came while the hand was still moving (well before it rested), not when it ended;
+    // the taught HELLO template matching the same movement added no second word.
+    expect(views).toEqual([{ kind: 'recognizing', token: 'hello', isWord: true }])
+    expect(firedAt).not.toBeNull()
+    expect(firedAt!).toBeLessThan(movementEnd - 500)
   })
 
   it('a movement that is no sign: Listening, then back to Ready', () => {

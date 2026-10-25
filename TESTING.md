@@ -857,3 +857,18 @@ Setup: `.env` with `LLM_PROVIDER=gemini`, your `GEMINI_API_KEY` and your `FACTOR
 19. **Dev menu.** The tray menu › Dev: states, and Option+1…9: 4 is Conversation (working), 5 Reply, 7 Reply (task done), 8 Reply (screenshot). "Conversation: understanding" and "Conversation: agent unavailable" are in the menu. Each shows its card.
 20. **Screenshots.** Run `node scripts/screens.mjs conversationReply`, one scene id per run (also `conversationWorking`, `conversationDone`, `conversationScreenshot`, `conversationFailed`, `conversationUnderstanding`, `toast`, `missingKey`, `didYouMean`, `buildingWords`, `signIdentifying`). **Expected:** they match `docs/screens/09`, `10`, `11`, `15`, `17`, `18`, `22`, `32`, `16`, `08` and `44`.
 21. **Automated.** Run `npm run typecheck`, `npx vitest run` and `npx electron-vite build --outDir <a scratch folder>`. **Expected:** no type errors, 1128 tests pass (2 skipped), and the build succeeds. `src/main/thumbs.test.ts` checks that a thumbnail is refused for any file `take_screenshot` didn't write (another picture, `/etc/passwd`, a `..` path), before the file is opened.
+
+## Streaming dictionary signs
+
+1. **Command mode first.** Start with `FASTASL_LOG=1 npm run dev`. If the header shows Spell, swipe right once. **Expected:** `[lexicon] N streaming sign(s) loaded (command mode)`, and `[tracker] … face <n> ms` (not `face off`) while Ready is up.
+2. **HELLO streams.** In Ready, salute from the forehead with a flat hand: fingertips at the temple, then out and slightly down. **Expected:** `[stream] hello`, and the word shows on the card while the hand is still moving. There is no second "hello" from the model when the hand comes to rest.
+3. **A phrase.** Sign TOMORROW MEETING WHAT TIME without lowering your hands. **Expected:** each word joins the Building card as you sign it. Lowering both hands sends the phrase.
+4. **Controls still work.** On the Building card:
+    - a thumbs up held still sends;
+    - a fist held still stops;
+    - a quick open-palm swipe left deletes the last word.
+
+    An open palm or a fist held still never adds a word.
+5. **Spell mode.** Swipe to Spell. **Expected:** letters only; no streamed words. `[hello-dbg]` says streaming is off.
+6. **Real data (optional).** `FASTASL_STREAM_DATA=<clip folders> npx vitest run streamPhrase.eval`. **Expected:** it prints each signer's phrase. The line "live" equals "matcher" unless a gesture acted.
+
