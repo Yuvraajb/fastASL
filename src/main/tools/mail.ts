@@ -38,6 +38,36 @@ export function sendMailScript(mail: OutgoingMail): string {
   ].join('\n')
 }
 
+/**
+ * Shows a message just sent: Mail's Sent mailbox in the front viewer, with the newest message of
+ * that subject selected (an earlier one with the same subject is not it). The sent copy can take
+ * a few seconds to land there, so it looks for about 12 s. Prints "shown" or "not found".
+ */
+export function revealSentScript(subject: string): string {
+  return [
+    'tell application "Mail"',
+    '	set theBox to sent mailbox',
+    '	if (count of message viewers) = 0 then make new message viewer',
+    '	set theViewer to message viewer 1',
+    '	set selected mailboxes of theViewer to {theBox}',
+    '	set found to missing value',
+    '	repeat 40 times',
+    '		try',
+    `			set hits to (messages of theBox whose subject is ${q(subject)})`,
+    '			repeat with m in hits',
+    '				if found is missing value or (date sent of m) > (date sent of found) then set found to contents of m',
+    '			end repeat',
+    '		end try',
+    '		if found is not missing value then exit repeat',
+    '		delay 0.3',
+    '	end repeat',
+    '	if found is missing value then return "not found"',
+    '	set selected messages of theViewer to {found}',
+    '	return "shown"',
+    'end tell'
+  ].join('\n')
+}
+
 /** Email addresses pass through; names must exactly match a person in Contacts. */
 async function resolveAddresses(to: string): Promise<string[]> {
   const addresses: string[] = []

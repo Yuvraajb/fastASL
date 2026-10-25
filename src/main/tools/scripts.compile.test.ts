@@ -7,7 +7,7 @@ import { FRONT_APP_SCRIPT, FRONT_WINDOW_SCRIPT } from '../mac/frontmost'
 import { pasteScript } from '../mac/typeText'
 import { createEventScript, listEventsScript } from './calendar'
 import { contactSearchScript } from './contacts'
-import { sendMailScript } from './mail'
+import { revealSentScript, sendMailScript } from './mail'
 import { sendMessageScript } from './messages'
 import { readNoteScript, searchNotesScript } from './notes'
 import { PAUSE_SCRIPT, playScript } from './spotify'
@@ -46,6 +46,8 @@ describe.runIf(process.platform === 'darwin')('generated scripts compile against
     }),
     'calendar create (minimal)': createEventScript({ title: 'x', start, end, attendees: [], notes: '' }),
     'mail send': sendMailScript({ to: ['a@example.com', 'b@example.com'], subject: hostile, body: hostile }),
+    'mail reveal sent': revealSentScript(hostile),
+    'calendar create, revealed': createEventScript({ title: hostile, start, end, attendees: ['a@example.com'], notes: '', reveal: true }),
     'message send': sendMessageScript('+15550102000', hostile),
     'contacts search': contactSearchScript(hostile),
     'notes search': searchNotesScript(hostile),

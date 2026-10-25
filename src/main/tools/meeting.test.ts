@@ -45,14 +45,20 @@ describe('meeting_invite', () => {
   it('creates the event with them invited, then emails them', async () => {
     contact.mockResolvedValue({ name: 'Darren Wu', phones: [], emails: [{ label: 'home', value: 'darren@example.com' }] } as never)
     const created = ['Meeting with Darren Wu', '2026-10-25T14:00:00', '2026-10-25T15:00:00', '1', 'Calendar'].join(SEP.field)
-    run.mockImplementation(async (script: string) => (script.includes('outgoing message') ? 'true' : created))
+    run.mockImplementation(async (script: string) =>
+      script.includes('outgoing message') ? 'true' : script.includes('sent mailbox') ? 'shown' : created
+    )
     const outcome = await meetingInvite.run(ARGS)
     const scripts = run.mock.calls.map(([s]) => s as string)
-    expect(scripts).toHaveLength(2)
+    expect(scripts).toHaveLength(3)
     expect(scripts[0]).toContain('Meeting with Darren Wu')
     expect(scripts[0]).toContain('darren@example.com')
+    // Calendar selects the new event; Mail then shows Sent with the email selected.
+    expect(scripts[0]).toContain('show ev')
     expect(scripts[1]).toContain('outgoing message')
     expect(scripts[1]).toContain('darren@example.com')
+    expect(scripts[2]).toContain('set selected mailboxes of theViewer to {theBox}')
+    expect(scripts[2]).toContain('whose subject is "Meeting today at 2:00 PM"')
     expect(outcome).toMatchObject({ ok: true, title: 'Meeting set up' })
     expect(outcome.subtitle).toContain('invite + email sent')
   })

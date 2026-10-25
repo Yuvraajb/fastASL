@@ -7,7 +7,7 @@ import { runAppleScript } from '../mac/osascript'
 import { createEventScript, parseCreatedEvent } from './calendar'
 import { findContact } from './contacts'
 import { clockTime, dateLabel, timeRangeLabel, truncate } from './format'
-import { sendMailScript } from './mail'
+import { revealSentScript, sendMailScript } from './mail'
 import { fail } from './outcome'
 import { defineTool } from './types'
 
@@ -78,7 +78,7 @@ export const meetingInvite = defineTool({
     const when = whenLabel(start, end, now)
     const title = `Meeting with ${contact.name}`
     const calendarId = (await readDefault('com.apple.iCal', 'defaultCalendarID')) ?? undefined
-    const script = createEventScript({ title, start, end, attendees: [email], notes: 'Set up in fastASL.', calendarId })
+    const script = createEventScript({ title, start, end, attendees: [email], notes: 'Set up in fastASL.', calendarId, reveal: true })
     const created = parseCreatedEvent(await runAppleScript(script, { app: 'Calendar', launch: true, timeoutMs: 30_000 }))
     if (!created) return fail('Calendar did not confirm the new event')
 
@@ -87,6 +87,8 @@ export const meetingInvite = defineTool({
     if (sent !== 'true') {
       return fail(`"${title}" is in Calendar (${when}), but Mail did not send the email. Check that a Mail account is set up.`)
     }
+    // Show what was sent: the Sent mailbox with this email selected (for show only, never fails the action).
+    await runAppleScript(revealSentScript(subject), { app: 'Mail', timeoutMs: 20_000 }).catch(() => null)
     const invited = created.guests > 0 ? `${email} invited` : `no invite sent (the "${created.calendar}" calendar doesn't send them)`
     return {
       ok: true,

@@ -174,6 +174,8 @@ export interface NewEvent {
   videoLink?: string
   /** Preferred calendar (Calendar's default); falls back to the first writable one. */
   calendarId?: string
+  /** Select the new event in Calendar's window afterwards (MEETING D W shows what it made). */
+  reveal?: boolean
 }
 
 /**
@@ -225,6 +227,7 @@ export function createEventScript(ev: NewEvent): string {
   for (const email of ev.attendees) {
     lines.push('\ttry', `\t\tmake new attendee at end of attendees of ev with properties {email:${q(email)}}`, '\tend try')
   }
+  if (ev.reveal) lines.push('\ttry', '\t\tshow ev', '\tend try')
   lines.push(
     `\treturn (summary of ev) & US & ${appleScriptIso('start date of ev')} & US & ${appleScriptIso('end date of ev')} & US & ((count of attendees of ev) as text) & US & (name of targetCal)`,
     'end tell'
