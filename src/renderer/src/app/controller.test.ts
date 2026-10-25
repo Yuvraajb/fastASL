@@ -26,6 +26,7 @@ import {
   TOAST_THUMB_MS,
   CANCELLED_NOTE,
   GESTURE_SUGGESTIONS,
+  isCallPhrase,
   GESTURE_TASK_LABEL,
   STOPPED_NOTE,
   UNDERSTANDING_STEP,
@@ -2014,15 +2015,27 @@ describe('the caption camera (captioning)', () => {
     await settle()
     expect(captionText).toHaveBeenCalledWith(['tomorrow', 'time', 'what', 'meeting'])
     expect(getApp().chat.at(-1)).toMatchObject({ from: 'you', kind: 'text', text: 'What time is the meeting tomorrow?' })
-    sign(word('call'), word('friend'))
+    sign(word('hello'), word('friend'))
     g('handsDown')
     await settle()
-    expect(getApp().chat.at(-1)).toMatchObject({ kind: 'text', text: 'Call friend' })
+    expect(getApp().chat.at(-1)).toMatchObject({ kind: 'text', text: 'Hello friend' })
     sign(word('yes'))
     g('handsDown')
     await settle()
     expect(getApp().chat.at(-1)).toMatchObject({ kind: 'text', text: 'Yes' })
     expect(captionText).toHaveBeenCalledTimes(2)
+  })
+
+  it('CALL plus one word still goes to the agent (CALL FRIEND starts a call during a captioned session)', async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    c.setCaptioning(true)
+    sendPhrase(word('call'), word('friend'))
+    await settle(1000)
+    // The mock interpreter reads it its own way; what matters is that it went to the agent.
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(isCallPhrase(['friend', 'call'])).toBe(true)
+    expect(isCallPhrase(['call', 'friend', 'tomorrow'])).toBe(false)
+    expect(isCallPhrase(['call'])).toBe(false)
   })
 
   it('a quick-menu pick still goes to the agent', async () => {

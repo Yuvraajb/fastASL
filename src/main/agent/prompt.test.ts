@@ -26,6 +26,16 @@ describe('turn prompt', () => {
   })
 })
 
+describe('contact nicknames', () => {
+  it('tells the agent which contact a sign names, when there are any', () => {
+    const req = { intent: 'Email friend the notes', sentence: 'EMAIL FRIEND NOTES', frontmost: null }
+    expect(turnPrompt(req, now, 'UTC', new Map([['friend', 'Yuvraaj SCU']])).split('\n')).toContain(
+      'Contact nicknames (sign = full name in Contacts): FRIEND = Yuvraaj SCU'
+    )
+    expect(turnPrompt(req, now, 'UTC')).not.toContain('nicknames')
+  })
+})
+
 describe('system prompt', () => {
   it('answers conversational messages in one or two sentences, with no tools', () => {
     expect(SYSTEM_PROMPT).toMatch(/greetings, thanks, small talk, questions about you, or about the current date or time/)

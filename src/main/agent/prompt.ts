@@ -35,12 +35,20 @@ export function describeNow(now: Date, timeZone: string): string {
  * the signed sentence itself for anything else (a greeting, a question), which the rules answer
  * in words.
  */
-export function turnPrompt(req: AgentRunRequest, now: Date, timeZone: string): string {
+export function turnPrompt(
+  req: AgentRunRequest,
+  now: Date,
+  timeZone: string,
+  aliases: ReadonlyMap<string, string> = new Map()
+): string {
   const app = req.frontmost
   const frontmost = app ? `${app.name}${app.windowTitle ? ` (window: "${app.windowTitle}")` : ''}` : 'unknown'
+  // Signs that name a contact (FRIEND = Yuvraaj SCU): the full name as saved in Contacts.
+  const nicknames = [...aliases].map(([word, name]) => `${word.toUpperCase()} = ${name}`).join('; ')
   return [
     `Current date and time: ${describeNow(now, timeZone)}`,
     `Frontmost app: ${frontmost}`,
+    ...(nicknames ? [`Contact nicknames (sign = full name in Contacts): ${nicknames}`] : []),
     `Signed sentence: "${req.sentence}"`,
     `Message: ${req.intent}`
   ].join('\n')

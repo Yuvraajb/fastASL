@@ -7,6 +7,7 @@ import { addRecentTask, dataDir, getGestures, saveGestures } from '../store'
 import { TOOLS, runTool } from '../tools'
 import { AgentService } from './agentService'
 import { resolveDroidPath } from './droidPath'
+import { contactAliases, directCommand } from './directCommands'
 import { openDroidSession } from './session'
 import { runShortcut } from './shortcuts'
 
@@ -28,7 +29,9 @@ export function createAgentServices(): AgentServices {
     apiKey: () => getKey('FACTORY_API_KEY'),
     droidPath: () => resolveDroidPath(),
     addRecentTask,
-    cwd
+    cwd,
+    directCommand: (sentence) => directCommand(sentence, contactAliases()),
+    contactAliases: () => contactAliases()
   })
   agent.init()
   return {

@@ -944,3 +944,13 @@ Setup: Command mode, `npm run dev` with FACTORY_API_KEY set. Optional: FASTASL_C
 3. **Again.** Close the windows and make the shape again. **Expected:** the same, faster (the compiled call replays with no model).
 4. **By sign or text.** Ask the agent "open 2 claude code terminals". **Expected:** two windows, side by side.
 
+## CALL FRIEND (FaceTime, one confirmation)
+
+Setup: `FASTASL_CONTACT_ALIASES="friend=<a contact's full name>"` in .env, a contact with that exact name and a phone or Apple ID email, Command mode. Calls a real person: use a teammate.
+
+1. **Call.** Sign CALL FRIEND and lower your hands. **Expected:** within about a second (no "Thinking"), the chat shows "Calling <name>" and an inline Confirm "FaceTime video call / To: <name>". Nothing has opened yet.
+2. **Confirm.** Thumbs up. **Expected:** FaceTime opens and the call starts by itself (no "Click to call"). The first time, macOS asks to give fastASL Accessibility access: allow it, then try again. Without it the result reads "Press Call in FaceTime".
+3. **Cancel.** Sign CALL FRIEND, then a fist on the Confirm. **Expected:** "Cancelled"; FaceTime doesn't open.
+4. **With captions on** (`FASTASL_CAPTIONS=1`): sign CALL FRIEND. **Expected:** the same Confirm (it isn't just captioned). Sign HELLO FRIEND: captioned, not sent.
+5. **Not a nickname.** Sign CALL DAD with no `dad=` alias. **Expected:** it goes to the agent as before (contacts_find, then a Confirm for whatever it finds).
+

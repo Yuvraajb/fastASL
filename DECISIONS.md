@@ -1038,3 +1038,12 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - **Running it:** the first time the gesture fires, the agent reads the task and calls the tool; after a complete run the call is compiled, so later runs replay it with no model.
     - **Verified:** the tiling script opened and tiled 2 test windows (echo, not claude) on the user's Mac, which were then closed. Tests: `mac/terminal.test.ts`, `tools/terminal.test.ts`, `controller.test.ts`. The first run from fastASL asks macOS for permission to control Terminal.
 
+## CALL FRIEND: a fixed FaceTime call, one confirmation
+
+224. **CALL plus a contact nickname runs with no model, and FaceTime's Call is pressed for the user.** The user wanted CALL FRIEND to call one specific contact (Yuvraaj SCU) after a single confirmation.
+    - **Nicknames:** FASTASL_CONTACT_ALIASES in .env (`friend=Yuvraaj SCU; mom=...`), the full name as saved in Contacts. Config, not code: the demo contact is the user's own.
+    - **Direct path** (`agent/directCommands.ts`, `AgentService.startDirect`): a sentence of exactly CALL (or FACETIME) and a nickname, either order, becomes a fixed `facetime_call` to that contact. It runs like a replay (no Droid session, no model, about a second) but shows as a normal run: steps, the inline Confirm, Done. A failed step ends the run with the failure; it doesn't fall back to the agent. Anything else goes to the agent, which is now told the nicknames each turn (EMAIL FRIEND).
+    - **One confirmation:** `facetime_call` stays a write (fastASL's Confirm card). A facetime:// link only opens FaceTime on "Click to call" with Cancel / Call, so after the user's thumbs up the tool presses Call itself (`mac/faceTimeCall.ts`: System Events, the button described "Call", within about 6 s). That needs Accessibility access for fastASL; without it the card says "Press Call in FaceTime". Found on the user's Mac with a fictional 555 number, cancelled.
+    - **Captions:** while the caption window is open, a two-word CALL phrase is still a command (`isCallPhrase`), so a call can start by sign mid-session. Other phrases stay captions.
+    - Tests: `directCommands.test.ts`, `agentService.test.ts` (direct sign commands), `facetime.test.ts`, `prompt.test.ts`, `controller.test.ts`. `npx vitest run`: 1293 passed, 9 skipped. Not verified live: no real call was placed.
+

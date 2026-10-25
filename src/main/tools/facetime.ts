@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { exec } from '../mac/exec'
+import { pressFaceTimeCall } from '../mac/faceTimeCall'
 import { truncate } from './format'
 import { resolveRecipient } from './messages'
 import { defineTool } from './types'
@@ -17,7 +18,8 @@ const callKind = (audioOnly: boolean): string => (audioOnly ? 'FaceTime audio' :
 
 /**
  * Calls someone with FaceTime. A call reaches another person, so it is a write: the user
- * confirms it on a card first. Video is the default, so a signer can sign on the call.
+ * confirms it on a card first, and that is the only confirmation: FaceTime's own Call button
+ * is then pressed for them. Video is the default, so a signer can sign on the call.
  */
 export const faceTimeCall = defineTool({
   name: 'facetime_call',
@@ -40,12 +42,15 @@ export const faceTimeCall = defineTool({
     const { label, handle } = await resolveRecipient(args.contact_name)
     await exec('open', [faceTimeUrl(handle, args.audio_only)])
     const kind = callKind(args.audio_only)
+    const { pressed, error } = await pressFaceTimeCall()
     return {
       // FaceTime takes it from here: the text says the call was started, not that anyone answered.
       ok: true,
-      text: `Opened FaceTime to start a ${kind} call to ${label} (${handle}).`,
+      text: pressed
+        ? `Started a ${kind} call to ${label} (${handle}) in FaceTime.`
+        : `Opened FaceTime to call ${label} (${handle}); the user still has to press Call there${error ? ` (${error})` : ''}.`,
       title: `Calling ${label}`,
-      subtitle: kind,
+      subtitle: pressed ? kind : 'Press Call in FaceTime',
       view: { kind: 'openApp', app: 'FaceTime' }
     }
   }

@@ -234,6 +234,15 @@ export function assembleSentence(tokens: Token[]): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
 }
 
+/**
+ * CALL plus one word (CALL FRIEND): a command even while the caption camera is open, so a call
+ * can be started by sign during a captioned session. Main runs it with no model when the word is
+ * a contact nickname (src/main/agent/directCommands.ts).
+ */
+export function isCallPhrase(words: readonly string[]): boolean {
+  return words.length === 2 && words.some((w) => /^(call|facetime)$/i.test(w))
+}
+
 /** The phrase's words: each sign, and each run of spelled letters as one word. */
 export function phraseWords(tokens: Token[]): string[] {
   const words: string[] = []
@@ -1208,7 +1217,8 @@ export class Controller {
   private endPhrase(): void {
     if (!this.tokens.length) return this.cancel()
     if (getApp().mode === 'spell') return void this.spellSuggestions()
-    if (getApp().captioning && !this.intentPrefix && !this.signingTask) return this.captionPhrase()
+    const command = this.intentPrefix || this.signingTask || isCallPhrase(phraseWords(this.tokens))
+    if (getApp().captioning && !command) return this.captionPhrase()
     void this.sendPhrase()
   }
 

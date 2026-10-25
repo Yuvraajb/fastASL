@@ -11,6 +11,7 @@ import type { AgentEvent, AgentRunRequest, CompletedTask, Result, ToolCallRecord
 import type { ToolDef } from '../tools/types'
 import { callsComplete, confirmDetailsFor, errorText, parseArgs, performCall, summarize, type ToolArgs } from './calls'
 import { buildDroidTools } from './droidTools'
+import type { DirectCommand } from './directCommands'
 import { SYSTEM_PROMPT, turnPrompt } from './prompt'
 import { Run } from './run'
 import { findFastaslTool, matchPermissionTool, SCRIPT_HELPERS } from './toolNames'
@@ -32,6 +33,10 @@ export interface AgentDeps {
   cwd: string
   now?: () => Date
   timeZone?: () => string
+  /** A sentence that needs no model (CALL FRIEND), as the tool calls to run instead (directCommands.ts). */
+  directCommand?: (sentence: string) => DirectCommand | null
+  /** Signs that name a contact (FRIEND = Yuvraaj SCU), told to the agent each turn. */
+  contactAliases?: () => ReadonlyMap<string, string>
 }
 
 export type Emit = (event: AgentEvent) => void
@@ -91,6 +96,8 @@ export class AgentService {
 
   /** Like run(), but also hands back a promise for the run's outcome. Never throws. */
   start(req: AgentRunRequest, emit: Emit): Promise<Result<{ runId: string; completion: Promise<RunOutcome> }>> {
+    const direct = this.deps.directCommand?.(req.sentence)
+    if (direct) return this.startDirect(direct, emit)
     const stops = this.stopCount
     return this.enqueue(async () => {
       await this.halt()
@@ -103,6 +110,25 @@ export class AgentService {
       run.openPlanStep()
       const completion = this.drive(run, req)
       this.track({ run, inSession: true, finished: completion })
+      return { ok: true, value: { runId: run.runId, completion } }
+    })
+  }
+
+  /**
+   * A direct sign command (CALL FRIEND): its fixed tool calls run like a replay, with no Droid
+   * session, but shown as a normal run (steps, the Confirm card for a write, Done), and a step
+   * that fails ends the run with that failure instead of falling back to the agent.
+   */
+  private startDirect(direct: DirectCommand, emit: Emit): Promise<Result<{ runId: string; completion: Promise<RunOutcome> }>> {
+    const stops = this.stopCount
+    return this.enqueue(async () => {
+      await this.halt()
+      if (this.disposed || this.stopCount !== stops) return { ok: false, error: 'Stopped' }
+      const run = new Run(direct.intent, emit)
+      this.lastCalls = []
+      run.announce()
+      const completion = this.replaySteps(run, direct.calls).then((outcome) => (outcome.kind === 'failed' ? this.finish(run) : outcome))
+      this.track({ run, inSession: false, finished: completion })
       return { ok: true, value: { runId: run.runId, completion } }
     })
   }
@@ -194,7 +220,7 @@ export class AgentService {
   private async drive(run: Run, req: AgentRunRequest): Promise<RunOutcome> {
     const now = this.deps.now?.() ?? new Date()
     const timeZone = this.deps.timeZone?.() ?? Intl.DateTimeFormat().resolvedOptions().timeZone
-    return this.conclude(run, await this.streamTurn(run, turnPrompt(req, now, timeZone)))
+    return this.conclude(run, await this.streamTurn(run, turnPrompt(req, now, timeZone, this.deps.contactAliases?.())))
   }
 
   /** Streams one turn. Never throws: a session that won't start or a stream that breaks ends up in `errors`. */

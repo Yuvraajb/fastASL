@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { exec } from '../mac/exec'
+import { pressFaceTimeCall } from '../mac/faceTimeCall'
 import { SEP, runAppleScript } from '../mac/osascript'
 import { faceTimeCall, faceTimeUrl } from './facetime'
 
 // Nobody is ever called: `open` and every AppleScript (Contacts lookup) call are mocked.
 vi.mock('../mac/exec', () => ({ exec: vi.fn(async () => '') }))
+vi.mock('../mac/faceTimeCall', () => ({ pressFaceTimeCall: vi.fn(async () => ({ pressed: true })) }))
 vi.mock('../mac/osascript', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../mac/osascript')>()),
   runAppleScript: vi.fn()
@@ -50,12 +52,21 @@ describe('facetime_call', () => {
     runMock.mockResolvedValueOnce([card('Srikar Dad', '+1 555 0100'), card('Dad', '+1 (408) 555-0178', 'dad@example.com')].join(SEP.record))
     expect(await faceTimeCall.run({ contact_name: 'Dad', audio_only: false })).toEqual({
       ok: true,
-      text: 'Opened FaceTime to start a FaceTime video call to Dad (+14085550178).',
+      text: 'Started a FaceTime video call to Dad (+14085550178) in FaceTime.',
       title: 'Calling Dad',
       subtitle: 'FaceTime video',
       view: { kind: 'openApp', app: 'FaceTime' }
     })
     expect(execMock).toHaveBeenCalledWith('open', ['facetime://+14085550178'])
+  })
+
+  it("says so when Call couldn't be pressed (no Accessibility access): the user presses it", async () => {
+    vi.mocked(pressFaceTimeCall).mockResolvedValueOnce({ pressed: false, error: 'not allowed assistive access' })
+    expect(await faceTimeCall.run({ contact_name: '+14085550100', audio_only: false })).toMatchObject({
+      ok: true,
+      title: 'Calling +14085550100',
+      subtitle: 'Press Call in FaceTime'
+    })
   })
 
   it('calls a typed number or email without looking anyone up', async () => {

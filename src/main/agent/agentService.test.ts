@@ -111,6 +111,43 @@ describe('AgentService', () => {
     expect(ctx.agent.lastRunCalls()).toEqual([])
   })
 
+  describe('direct sign commands (CALL FRIEND, no model)', () => {
+    const direct = (sentence: string) =>
+      sentence === 'Call friend'
+        ? { intent: 'Call Yuvraaj SCU', calls: [{ tool: 'send_message', args: { to: 'Yuvraaj SCU', text: 'hi' }, ok: true }] }
+        : null
+
+    it('runs the fixed calls as a normal run (Confirm, steps, Done) without opening a Droid session', async () => {
+      const ctx = makeAgent([], { directCommand: direct })
+      const started = await ctx.agent.start({ intent: 'Call friend', sentence: 'Call friend', frontmost: null }, ctx.emit)
+      if (!started.ok) throw new Error(started.error)
+      expect(ctx.events[0]).toEqual({ type: 'started', runId: started.value.runId, intent: 'Call Yuvraaj SCU' })
+      const confirm = await waitForConfirm(ctx.events)
+      expect(ctx.runs).toEqual([])
+      await ctx.agent.respond(confirm.requestId, true)
+      const outcome = await started.value.completion
+      expect(outcome.kind).toBe('done')
+      expect(ctx.runs).toEqual(['send_message'])
+      expect(ofType(ctx.events, 'done')[0].complete).toBe(true)
+      expect(ctx.sessions).toHaveLength(0)
+    })
+
+    it('a declined Confirm runs nothing, and other sentences still go to the agent', async () => {
+      const ctx = makeAgent([callTool('take_screenshot', {})], { directCommand: direct })
+      const started = await ctx.agent.start({ intent: 'Call friend', sentence: 'Call friend', frontmost: null }, ctx.emit)
+      if (!started.ok) throw new Error(started.error)
+      await ctx.agent.respond((await waitForConfirm(ctx.events)).requestId, false)
+      await started.value.completion
+      expect(ctx.runs).toEqual([])
+      expect(ofType(ctx.events, 'done')[0].complete).toBe(false)
+
+      const { completion } = await startRun(ctx, 'Take a screenshot')
+      await completion
+      expect(ctx.runs).toEqual(['take_screenshot'])
+      expect(ctx.sessions).toHaveLength(1)
+    })
+  })
+
   describe('tools called from a Script (how droid calls MCP tools)', () => {
     it('allows a script of fastasl reads and ToolSearch without asking', async () => {
       const seen: unknown[] = []
