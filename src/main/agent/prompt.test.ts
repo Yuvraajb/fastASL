@@ -52,7 +52,7 @@ describe('system prompt', () => {
 
   it('reads spelled letters as a person, without naming anyone', () => {
     const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Meeting with a person'))!
-    expect(rule).toContain('spelled letters ("KC", "K C"): pass the letters to contacts_find unchanged')
+    expect(rule).toContain('search them joined into one run ("KC") with contacts_find')
     expect(rule).toContain('initials of a first and last name')
     expect(SYSTEM_PROMPT).not.toMatch(/Krishna|Chandra/)
   })

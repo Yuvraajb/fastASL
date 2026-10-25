@@ -1,6 +1,6 @@
 import { basename } from 'node:path'
 import { z } from 'zod'
-import { appleScriptString as q, runAppleScript } from '../mac/osascript'
+import { AS_SEPARATORS, SEP, appleScriptString as q, runAppleScript, splitRecords } from '../mac/osascript'
 import { findContact } from './contacts'
 import { allowedFile } from './files'
 import { fail } from './outcome'
@@ -104,6 +104,194 @@ export const mailSend = defineTool({
       text: `Sent "${args.subject}" to ${to.join(', ')}${attachments.length ? ` with ${attachments.map((p) => basename(p)).join(', ')} attached` : ''}.`,
       title: 'Email sent',
       subtitle: `to ${to[0]}${others}${attachments.length ? ` · ${attachments.length} attached` : ''}`
+    }
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Reading the inbox and replying: mail_list, mail_read, mail_reply.
+// ---------------------------------------------------------------------------
+
+export interface MailSummary {
+  id: string
+  sender: string
+  subject: string
+  date: string
+  unread: boolean
+}
+
+export interface ReadMessage {
+  subject: string
+  sender: string
+  date: string
+  body: string
+}
+
+/** Mail ids are integers; anything else cannot address a message. */
+export function isMessageId(id: string): boolean {
+  return /^\d+$/.test(id.trim()) && Number(id) > 0
+}
+
+/** The newest `limit` inbox messages, one SEP.record per message. */
+export function mailListScript(limit: number): string {
+  const n = Math.max(1, Math.min(50, Math.trunc(limit)))
+  return [
+    AS_SEPARATORS,
+    'tell application "Mail"',
+    '\tset total to count of messages of inbox',
+    `\tif total > ${n} then set total to ${n}`,
+    '\tset out to ""',
+    '\trepeat with i from 1 to total',
+    '\t\tset m to message i of inbox',
+    '\t\tset out to out & (id of m as text) & US & (sender of m) & US & (subject of m) & US & ' +
+      '((date received of m) as text) & US & ((read status of m) as text) & RS',
+    '\tend repeat',
+    '\treturn out',
+    'end tell'
+  ].join('\n')
+}
+
+export function parseMailList(output: string): MailSummary[] {
+  return splitRecords(output)
+    .filter((fields) => fields.length >= 5 && fields[0].trim())
+    .map(([id, sender, subject, date, read]) => ({
+      id: id.trim(),
+      sender: sender.trim(),
+      subject: subject.trim(),
+      date: date.trim(),
+      unread: read.trim().toLowerCase() !== 'true'
+    }))
+}
+
+/** One message: subject, sender, date, body. */
+export function mailReadScript(id: string): string {
+  return [
+    AS_SEPARATORS,
+    'tell application "Mail"',
+    `\tset m to first message of inbox whose id is ${id.trim()}`,
+    '\treturn (subject of m) & US & (sender of m) & US & ((date received of m) as text) & US & (content of m)',
+    'end tell'
+  ].join('\n')
+}
+
+export function parseMailMessage(output: string): ReadMessage | null {
+  const fields = output.split(SEP.field)
+  if (fields.length < 4) return null
+  const [subject, sender, date, ...rest] = fields
+  return {
+    subject: subject.trim(),
+    sender: sender.trim(),
+    date: date.trim(),
+    body: rest.join(SEP.field).trim()
+  }
+}
+
+/** Replies to the message, writing `body` above the quoted original. */
+export function replyMailScript(id: string, body: string): string {
+  return [
+    AS_SEPARATORS,
+    'tell application "Mail"',
+    `\tset m to first message of inbox whose id is ${id.trim()}`,
+    '\tset r to reply m opening window false',
+    '\tset original to content of r',
+    `\tset content of r to ${q(body)} & return & return & original`,
+    '\treturn (send r) as text',
+    'end tell'
+  ].join('\n')
+}
+
+/** Reading a body this long is enough for the model; the whole thread is not needed. */
+const MAX_BODY = 1800
+
+export const mailList = defineTool({
+  name: 'mail_list',
+  description:
+    'List the most recent messages in the Mail inbox, newest first: id, sender, subject, date and whether ' +
+    'it is unread. Pass an id to mail_read to read one, then mail_reply to answer it.',
+  schema: {
+    limit: z.number().int().min(1).max(25).default(10),
+    unread_only: z.boolean().default(false)
+  },
+  risk: 'read',
+  stepLabel: () => 'Checking email',
+  async run(args) {
+    const rows = parseMailList(
+      await runAppleScript(mailListScript(args.limit), { app: 'Mail', launch: true, timeoutMs: 30_000 })
+    )
+    const shown = args.unread_only ? rows.filter((row) => row.unread) : rows
+    if (!shown.length) {
+      return {
+        ok: true,
+        text: args.unread_only ? 'No unread messages in the inbox.' : 'The inbox is empty.',
+        title: 'No email',
+        subtitle: args.unread_only ? 'nothing unread' : 'inbox empty'
+      }
+    }
+    const lines = shown.map(
+      (row) => `[${row.id}] ${row.sender} — "${row.subject}" (${row.date})${row.unread ? ' · unread' : ''}`
+    )
+    return {
+      ok: true,
+      text: `${shown.length} message(s), newest first:\n${lines.join('\n')}`,
+      title: 'Checked email',
+      subtitle: `${shown.length} message${shown.length === 1 ? '' : 's'}`
+    }
+  }
+})
+
+export const mailRead = defineTool({
+  name: 'mail_read',
+  description:
+    'Read one inbox message by the id from mail_list: sender, subject, date and the body text ' +
+    '(long bodies are truncated).',
+  schema: { id: z.string().trim().min(1) },
+  risk: 'read',
+  stepLabel: () => 'Reading email',
+  async run(args) {
+    if (!isMessageId(args.id)) return fail('Use an id from mail_list (a number).')
+    const message = parseMailMessage(
+      await runAppleScript(mailReadScript(args.id), { app: 'Mail', launch: true, timeoutMs: 30_000 })
+    )
+    if (!message) return fail('Mail did not return that message. Use an id from mail_list.')
+    const body = message.body.length > MAX_BODY ? `${message.body.slice(0, MAX_BODY)}…` : message.body
+    return {
+      ok: true,
+      text: `From: ${message.sender}\nSubject: ${message.subject}\nDate: ${message.date}\n\n${body}`,
+      title: 'Email opened',
+      subtitle: message.subject
+    }
+  }
+})
+
+export const mailReply = defineTool({
+  name: 'mail_reply',
+  description:
+    'Reply to an inbox message by its id from mail_list, quoting the original. Mail supplies the ' +
+    'recipient and "Re:" subject. `body` is only the words to add, not the quoted text.',
+  schema: {
+    id: z.string().trim().min(1),
+    body: z.string().trim().min(1)
+  },
+  risk: 'write',
+  stepLabel: () => 'Replying to email',
+  confirmDetails: (args) => ({
+    kind: 'generic',
+    title: 'Reply to email',
+    lines: [`Message ${args.id}`, args.body.length > 280 ? `${args.body.slice(0, 280)}…` : args.body]
+  }),
+  async run(args) {
+    if (!isMessageId(args.id)) return fail('Use an id from mail_list (a number).')
+    const sent = await runAppleScript(replyMailScript(args.id, args.body), {
+      app: 'Mail',
+      launch: true,
+      timeoutMs: 30_000
+    })
+    if (sent !== 'true') return fail('Mail did not send the reply. Check that a Mail account is set up.')
+    return {
+      ok: true,
+      text: 'Replied to the message, quoted below your text.',
+      title: 'Reply sent',
+      subtitle: `message ${args.id}`
     }
   }
 })
