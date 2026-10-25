@@ -1,6 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SEP, runAppleScript } from '../mac/osascript'
-import { isEmail, mailSend, sendMailScript, splitRecipients } from './mail'
+import {
+  isEmail,
+  isMessageId,
+  mailListScript,
+  mailReadScript,
+  mailSend,
+  parseMailList,
+  parseMailMessage,
+  replyMailScript,
+  sendMailScript,
+  splitRecipients
+} from './mail'
 import { messageSend, sendMessageScript } from './messages'
 
 // Nothing is ever sent: every AppleScript call is answered by this mock.
@@ -132,5 +143,51 @@ describe('message_send', () => {
     expect(outcome.subtitle).toBe('to +1 555 010 2000')
     expect(runMock).toHaveBeenCalledTimes(1)
     expect(runMock.mock.calls[0][0]).toContain('participant "+15550102000"')
+  })
+})
+
+describe('mailbox reading', () => {
+  it('only accepts numeric message ids', () => {
+    expect(isMessageId('12345')).toBe(true)
+    expect(isMessageId(' 42 ')).toBe(true)
+    expect(isMessageId('abc')).toBe(false)
+    expect(isMessageId('0')).toBe(false)
+    expect(isMessageId('-3')).toBe(false)
+  })
+
+  it('lists the newest messages, clamped to a sane count', () => {
+    expect(mailListScript(3)).toContain('if total > 3 then set total to 3')
+    expect(mailListScript(999)).toContain('if total > 50 then set total to 50')
+    expect(mailListScript(0)).toContain('if total > 1 then set total to 1')
+    expect(mailListScript(5)).toContain('repeat with i from 1 to total')
+  })
+
+  it('parses list records and flags unread messages', () => {
+    const record = (id: string, read: string) => [id, 'Ana <ana@x.com>', 'Lunch', 'Oct 25, 2026', read].join(SEP.field)
+    expect(parseMailList([record('1', 'false'), record('2', 'true')].join(SEP.record))).toEqual([
+      { id: '1', sender: 'Ana <ana@x.com>', subject: 'Lunch', date: 'Oct 25, 2026', unread: true },
+      { id: '2', sender: 'Ana <ana@x.com>', subject: 'Lunch', date: 'Oct 25, 2026', unread: false }
+    ])
+    expect(parseMailList('')).toEqual([])
+  })
+
+  it('reads one message and keeps newlines in the body', () => {
+    expect(mailReadScript('77')).toContain('whose id is 77')
+    const output = ['Lunch?', 'Ana <ana@x.com>', 'Oct 25, 2026', 'Line one\nLine two'].join(SEP.field)
+    expect(parseMailMessage(output)).toEqual({
+      subject: 'Lunch?',
+      sender: 'Ana <ana@x.com>',
+      date: 'Oct 25, 2026',
+      body: 'Line one\nLine two'
+    })
+    expect(parseMailMessage('too short')).toBeNull()
+  })
+
+  it('replies in place, writing the body above the quote', () => {
+    const script = replyMailScript('77', 'Yes — noon works.')
+    expect(script).toContain('whose id is 77')
+    expect(script).toContain('reply m opening window false')
+    expect(script).toContain('set content of r to "Yes — noon works." & return & return & original')
+    expect(script).toContain('return (send r) as text')
   })
 })

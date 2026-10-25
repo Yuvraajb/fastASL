@@ -22,6 +22,9 @@ const SAMPLE_ARGS: Record<string, Record<string, unknown>> = {
   },
   contacts_find: { query: 'Sarah' },
   mail_send: { to: 'a@example.com', subject: 'Hi', body: 'Hello' },
+  mail_list: { limit: 5, unread_only: false },
+  mail_read: { id: '1' },
+  mail_reply: { id: '1', body: 'On my way' },
   message_send: { contact_name: 'Sarah Chen', text: 'On my way' },
   notes_search: { query: 'groceries' },
   notes_read: { title: 'Groceries' },
@@ -52,7 +55,15 @@ describe('tool registry', () => {
 
   it('asks for confirmation exactly for tools that send or create', () => {
     const write = TOOLS.filter((t) => t.risk === 'write').map((t) => t.name)
-    expect(write.sort()).toEqual(['calendar_create_event', 'facetime_call', 'files_move', 'lock_screen', 'mail_send', 'message_send'])
+    expect(write.sort()).toEqual([
+      'calendar_create_event',
+      'facetime_call',
+      'files_move',
+      'lock_screen',
+      'mail_reply',
+      'mail_send',
+      'message_send'
+    ])
   })
 
   it('gives every write tool a confirm card', () => {

@@ -3,7 +3,7 @@ import { calendarCreateEvent, calendarListEvents } from './calendar'
 import { contactsFind } from './contacts'
 import { lockScreen, setDarkMode, setTimer, setVolume } from './controls'
 import { filesFind, filesList, filesMove } from './files'
-import { mailSend } from './mail'
+import { mailList, mailRead, mailReply, mailSend } from './mail'
 import { faceTimeCall } from './facetime'
 import { mediaControl } from './media'
 import { messageSend } from './messages'
@@ -34,6 +34,9 @@ export const TOOLS: readonly ToolDef[] = [
   calendarCreateEvent,
   contactsFind,
   mailSend,
+  mailList,
+  mailRead,
+  mailReply,
   messageSend,
   notesSearch,
   notesRead,
