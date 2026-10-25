@@ -803,3 +803,57 @@ Run `npm install` first (or `npm run setup`), then `FASTASL_LOG=1 npm run dev` w
 
 21. **Checks.** Run `npm run typecheck`, `npx vitest run` and `npx electron-vite build`. **Expected:** no type errors, and about 1116 tests pass. The real-data tests skip without `FASTASL_SIGN_DATA`, and one vocabulary check skips without ASL Citizen. The build succeeds.
 22. **Real data.** With ASL Citizen poses converted to `<folder>` (see `src/renderer/src/engine/model/evalData.ts`), run `FASTASL_SIGN_DATA=<folder> npx vitest run src/renderer/src/engine/model/realModel.test.ts`. **Expected:** HELLO, THANK YOU and WATER accepted (at least 80% of 6 clips each). Adding `FASTASL_SIGN_EVAL=1` prints the per-word report in DECISIONS 170.
+
+## Conversational command mode
+
+Setup: `.env` with `LLM_PROVIDER=gemini`, your `GEMINI_API_KEY` and your `FACTORY_API_KEY`, and the `droid` CLI installed. Quit the running app and start it again with `FASTASL_LOG=1 npm run dev`. The preload and main process changed, so a hot reload is not enough. Work in Command mode (no mode label in the header). This replaces the Sentence card, Agent ready, Done, context actions and Did you mean for intents. Their steps in the Phase 5, Phase 6, Gemini and Guess sections (and "the Sentence card" in Pretrained sign model, step 5) now end on the conversation card.
+
+### Signing and sending
+
+1. **Keep signing.** In Ready, sign HELLO, then THANK YOU, then PLEASE (words the model knows, DECISIONS 169), keeping your hands up between signs. **Expected:** "hello" on the Recognizing card, then the Building card with every word in the strip and the running sentence. It never stops after one sign. The hint reads "hands down to send · swipe ← delete".
+2. **Hands down sends.** Lower both hands and keep them down. **Expected:**
+   - After about 1.2 s the card turns into the conversation card (wider), "● Working...", "You" over “Hello thank you please”, and a spinning "Understanding".
+   - There is no Sentence card, no pencil, no "swipe → continue" and no "Agent ready".
+   - The log shows `[gemini] interpret …`, then `[agent] {"type":"started",…}`.
+3. **A greeting gets a reply.** Sign HELLO alone and lower your hands. **Expected:**
+   - "Understanding", then "Thinking", then the header turns to "● Reply" (green).
+   - "You" over “Hello.”, then "Agent" over the agent's own greeting in large text, for example "Hi! How can I help you today?".
+   - No "Nothing was done". No tool runs: the log shows no `Script` or tool step, and the `done` event's `result.reply` holds the text.
+4. **A question.** Sign TIME NOW (WHAT TIME with ASL Citizen installed) and lower your hands. **Expected:** a one- or two-sentence reply with the current time, and no tool runs.
+5. **A task.** Simulate MEETING TOMORROW AT 3 PM: Control+Option+S five times, then Control+Option+H. **Expected:**
+   - The steps run on the same card ("Thinking", then the calendar steps).
+   - The Confirm card for the event comes up (step 10 has more on it). Thumbs up.
+   - Back on the conversation card: a check badge, "Event created" (or "Meeting created") and the time from the tool, with the agent's own short line under them in gray. The status reads "Done", and the hint "open Calendar · sign to reply".
+6. **A real conversation.** After a reply, sign THANK YOU and lower your hands. **Expected:** the card starts a new phrase as soon as the sign is recognized ("thank you" on the Recognizing card), then sends it. The reply comes from the same Droid session, so it can refer to the earlier messages.
+
+### When the interpreter fails or is unsure
+
+7. **No key.** Empty `GEMINI_API_KEY` and restart. Sign HELLO and lower your hands. **Expected:** the notice "Add GEMINI_API_KEY to .env" on the conversation card, and the agent still gets "Hello" (`intent` and `sentence` in the log are the signed words) and replies.
+8. **Rate limit.** With the always-429 stub from the Gemini section (`GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8429`), sign and lower your hands. **Expected:** "Rate limited, retrying..." under "Understanding". After the retries, "Gemini is rate limited. Try again in a minute", and the signed words still go to the agent.
+9. **Unsure.** Sign two words the interpreter can't make sense of together. **Expected:** no Did you mean list. If its confidence is under 0.6, the log shows the agent got the signed words themselves (`"intent":"<the signed words>"`).
+
+### Safety
+
+10. **Writes wait.** Sign (or use the quick menu: thumbs up, 2 fingers "Send message", then sign the details) a message to someone, and lower your hands. **Expected:** the Confirm card with the recipient and the text. Nothing is sent while it shows. A thumbs up sends it and returns to the step list, then the result "Message sent". A fist instead cancels: the card says "Nothing was done" / "You cancelled it", with no line from the agent.
+11. **Fist stops.** Start a task and make a fist while the steps run. **Expected:** the toast "Stopped" / "The agent was interrupted", then Ready. The log shows the run stopped.
+12. **Fist while understanding.** Lower your hands after a phrase and make a fist at once, while "Understanding" spins. **Expected:** Ready. The log shows `-> {"error":"Cancelled"}` for interpret, and no agent run starts.
+
+### The reply card
+
+13. **Quick menu.** On a reply that opens nothing (a greeting), thumbs up. **Expected:** the quick menu. Pick "Create event", sign TOMORROW and lower your hands. **Expected:** "You · Create event" over the sentence on the conversation card.
+14. **Ready's other gestures.** On a reply: a swipe right switches to Dictation, a swipe up opens Settings, and a fist collapses the card. The X goes back to Ready.
+15. **Idle.** Leave a reply on screen without moving. **Expected:** after 20 s it becomes the Ready card. Move a hand in view around 19 s (Listening in the header) and keep moving. **Expected:** the reply stays until about 2 s after the movement ends.
+16. **A guess on the reply.** On a reply, sign a word no model knows (for example SPOTIFY) and hold still. **Expected:** "Identifying...", then "Is this …?". A pick starts the next phrase with the word, and a fist goes back to the reply.
+
+### Screenshots
+
+17. **Peace sign.** In Ready (or with the card collapsed), hold the peace sign. **Expected:**
+    - The toast "Screenshot taken" / "Desktop · fastASL Screenshot <date> at <time>.png" shows the screenshot itself in place of the camera tile, for 6 s, with the hint "open in Preview · dismiss".
+    - The file is on the Desktop.
+    - A thumbs up (or a click on the picture) opens it in Preview, and the toast goes. A fist dismisses it.
+18. **The agent's screenshot.** Teach a word for it first: Settings › Teach a sign › Spell a new word, type SCREENSHOT, Return, and record it 5 times. Then sign SCREENSHOT and lower your hands. **Expected:** the result shows a thumbnail beside "Screenshot taken" and the file name. A thumbs up opens it in Preview, and the card stays.
+### Screens and automated checks
+
+19. **Dev menu.** The tray menu › Dev: states, and Option+1…9: 4 is Conversation (working), 5 Reply, 7 Reply (task done), 8 Reply (screenshot). "Conversation: understanding" and "Conversation: agent unavailable" are in the menu. Each shows its card.
+20. **Screenshots.** Run `node scripts/screens.mjs conversationReply`, one scene id per run (also `conversationWorking`, `conversationDone`, `conversationScreenshot`, `conversationFailed`, `conversationUnderstanding`, `toast`, `missingKey`, `didYouMean`, `buildingWords`, `signIdentifying`). **Expected:** they match `docs/screens/09`, `10`, `11`, `15`, `17`, `18`, `22`, `32`, `16`, `08` and `44`.
+21. **Automated.** Run `npm run typecheck`, `npx vitest run` and `npx electron-vite build --outDir <a scratch folder>`. **Expected:** no type errors, 1128 tests pass (2 skipped), and the build succeeds. `src/main/thumbs.test.ts` checks that a thumbnail is refused for any file `take_screenshot` didn't write (another picture, `/etc/passwd`, a `..` path), before the file is opened.

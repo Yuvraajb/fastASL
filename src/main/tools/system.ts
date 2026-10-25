@@ -5,6 +5,7 @@ import { getFrontmostApp } from '../mac/frontmost'
 import { typeText } from '../mac/typeText'
 import { plural, truncate } from './format'
 import { fail } from './outcome'
+import { rememberScreenshot } from './screenshots'
 import { defineTool } from './types'
 
 export const getFrontmostAppTool = defineTool({
@@ -23,7 +24,8 @@ export const getFrontmostAppTool = defineTool({
 
 export const openAppTool = defineTool({
   name: 'open_app',
-  description: 'Open (or bring to the front) a Mac app by name, e.g. "Calendar" or "Safari".',
+  description:
+    'Open (or bring to the front) a Mac app by name, e.g. "Calendar" or "Safari". Only for "open <app>": every other tool starts the app it needs by itself.',
   schema: { name: z.string().trim().min(1) },
   risk: 'read',
   stepLabel: (args) => truncate(`Opening ${args.name}`, 40),
@@ -79,6 +81,8 @@ export const takeScreenshotTool = defineTool({
   stepLabel: () => 'Taking screenshot',
   async run() {
     const path = await takeScreenshot()
+    // The card may show a thumbnail of this file, and of no other (main's imageThumb).
+    rememberScreenshot(path)
     return {
       ok: true,
       text: `Saved a screenshot to ${path}.`,

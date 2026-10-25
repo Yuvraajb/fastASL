@@ -3,7 +3,7 @@ import type { ConfirmDetails, ViewAction } from '@shared/types'
 
 /**
  * What a tool implementation returns. `text` goes back to the model; `title` /
- * `subtitle` (when present) are what the Done card shows, so the card is always
+ * `subtitle` (when present) are what the result card shows, so the card is always
  * built from real tool results and never from the model's own claim.
  */
 export interface ToolOutcome {

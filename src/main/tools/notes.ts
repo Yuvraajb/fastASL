@@ -99,7 +99,7 @@ export const notesSearch = defineTool({
   risk: 'read',
   stepLabel: () => 'Searching Notes',
   async run(args) {
-    const hits = parseNoteHits(await runAppleScript(searchNotesScript(args.query), { app: 'Notes', timeoutMs: 30_000 }))
+    const hits = parseNoteHits(await runAppleScript(searchNotesScript(args.query), { app: 'Notes', launch: true, timeoutMs: 30_000 }))
     if (!hits.length) {
       return { ok: true, text: `No notes match "${args.query}".`, title: 'No matching notes', subtitle: args.query }
     }
@@ -121,7 +121,7 @@ export const notesRead = defineTool({
   risk: 'read',
   stepLabel: (args) => truncate(`Reading “${args.title}”`, 40),
   async run(args) {
-    const output = await runAppleScript(readNoteScript(args.title), { app: 'Notes', timeoutMs: 20_000 })
+    const output = await runAppleScript(readNoteScript(args.title), { app: 'Notes', launch: true, timeoutMs: 20_000 })
     const [fields] = splitRecords(output)
     if (!fields) return fail(`No note titled "${args.title}"`)
     const [title = args.title, body = ''] = fields

@@ -1,7 +1,7 @@
 import { ChevronRight } from 'lucide-react'
 import type { Token, View } from '../app/types'
 import { controller } from '../app/context'
-import { ActivityBars, Divider, Feed, Footer, Header, IconButton, Notice, QuoteBox, Stack, TokenPill, TokenStrip } from '../ui'
+import { ActivityBars, Divider, Feed, Footer, Header, Hint, IconButton, Notice, QuoteBox, Stack, TokenPill, TokenStrip } from '../ui'
 import './BuildingView.css'
 
 type BuildingState = Extract<View, { kind: 'building' }>
@@ -50,7 +50,10 @@ function phraseWords(tokens: readonly Token[]): string[] {
   return words
 }
 
-/** Reference image 2, panel 3: word chips, the running sentence, activity bars and ">" to finish. */
+/**
+ * Reference image 2, panel 3: word chips, the running sentence, activity bars and ">" to send.
+ * Signing keeps adding words; lowering both hands sends the sentence to the agent.
+ */
 function WordsBuilding({ view }: Props): React.JSX.Element {
   const words = phraseWords(view.tokens)
   return (
@@ -62,9 +65,10 @@ function WordsBuilding({ view }: Props): React.JSX.Element {
       <div className="building__actions">
         <span />
         <ActivityBars />
-        <IconButton icon={ChevronRight} variant="filled" label="Done signing" onClick={() => controller.tap('proceed')} />
+        <IconButton icon={ChevronRight} variant="filled" label="Send" onClick={() => controller.tap('proceed')} />
       </div>
       <Notice />
+      <Hint items={['hands down to send', 'swipe ← delete']} />
     </Stack>
   )
 }

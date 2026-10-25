@@ -12,6 +12,7 @@ import type {
   SpellRequest,
   ViewAction
 } from '@shared/types'
+import { MOCK_SCREENSHOT_PATH, MOCK_SCREENSHOT_SUBTITLE, MOCK_SCREENSHOT_THUMB } from './mockThumb'
 import { getApp } from './store'
 
 /** Status lines of one LLM call while it runs, e.g. "Rate limited, retrying...". */
@@ -43,6 +44,8 @@ export interface Services {
   frontmostApp(): Promise<FrontmostApp | null>
   typeText(text: string): Promise<Result<void>>
   openTarget(action: ViewAction): Promise<void>
+  /** A screenshot's thumbnail (PNG data URL). Main serves only screenshots fastASL took. */
+  imageThumb(path: string): Promise<Result<string>>
 }
 
 /** Real services: everything goes through the preload bridge to the main process. */
@@ -90,7 +93,12 @@ export function ipcServices(): Services {
     runShortcut: (id) => api.runShortcut(id),
     frontmostApp: () => api.getFrontmostApp(),
     typeText: (text) => api.typeText(text),
-    openTarget: (action) => api.openTarget(action)
+    openTarget: (action) => api.openTarget(action),
+    // A renderer reloaded onto an older preload (dev hot reload) has no thumbnails until a restart.
+    imageThumb: (path) =>
+      typeof api.getImageThumb === 'function'
+        ? api.getImageThumb(path)
+        : Promise.resolve({ ok: false, error: 'Restart fastASL to show thumbnails' })
   }
 }
 
@@ -124,9 +132,19 @@ export const MOCK_SIGN_GUESS: SignGuess = {
   ]
 }
 
+/** The mock agent's answer to a message it doesn't act on, as the real agent answers in words. */
+export function mockReply(message: string): string {
+  const m = message.toLowerCase()
+  if (/\btime\b|\bdate\b|\bday\b/.test(m)) return "It's 10:00 AM on Friday, October 25."
+  if (/\bthank/.test(m)) return "You're welcome! Anything else?"
+  return 'Hello! What can I do for you?'
+}
+
 /**
- * Mock services for UI work, screenshots and demos without keys. They script a
- * believable calendar flow so every state can be reached with the dev hotkeys.
+ * Mock services for UI work, screenshots and demos without keys. They script a believable
+ * conversation so every state can be reached with the dev hotkeys: a greeting or a question is
+ * answered in words, "screenshot" takes one (with a thumbnail), anything else books the calendar
+ * event behind a Confirm card.
  */
 export function mockServices(): Services {
   const listeners = new Set<(e: AgentEvent) => void>()
@@ -138,43 +156,40 @@ export function mockServices(): Services {
     async interpret(req) {
       await wait(500)
       const s = req.sentence.toLowerCase()
-      if (s.includes('what') && s.includes('time')) {
-        return {
-          ok: true,
-          value: {
-            sentence: 'What time is my next meeting?',
-            intent: null,
-            alternatives: ['Show my next meeting', 'What time is it?', 'Open Calendar'],
-            confidence: 0.5,
-            needs_confirmation: false,
-            context_actions: []
-          }
-        }
-      }
-      if (s.includes('email')) {
-        return {
-          ok: true,
-          value: {
-            sentence: req.sentence,
-            intent: 'Send this email to team@company.com',
-            alternatives: [],
-            confidence: 0.9,
-            needs_confirmation: true,
-            context_actions: ['Insert text', 'Send message', 'More options']
-          }
-        }
-      }
-      return {
+      const reading = (patch: Partial<IntentResult>): Result<IntentResult> => ({
         ok: true,
         value: {
-          sentence: 'Meeting tomorrow at 3pm.',
-          intent: 'Schedule a meeting tomorrow at 3pm with the team',
+          sentence: req.sentence,
+          intent: null,
           alternatives: [],
-          confidence: 0.86,
-          needs_confirmation: true,
-          context_actions: ['Insert text', 'Send message', 'More options']
+          confidence: 0.9,
+          needs_confirmation: false,
+          context_actions: [],
+          ...patch
         }
+      })
+      if (/^(hello|hi|hey|thank)/.test(s)) {
+        const sentence = `${req.sentence.charAt(0).toUpperCase()}${req.sentence.slice(1)}${/[.!?]$/.test(req.sentence) ? '' : '.'}`
+        return reading({ sentence, confidence: 0.95 })
       }
+      if (s.includes('what') && s.includes('time')) {
+        return reading({
+          sentence: 'What time is my next meeting?',
+          alternatives: ['Show my next meeting', 'What time is it?', 'Open Calendar'],
+          confidence: 0.5
+        })
+      }
+      if (s.includes('screenshot')) return reading({ sentence: 'Take a screenshot.', intent: 'Take a screenshot' })
+      if (s.includes('email')) {
+        return reading({ intent: 'Send this email to team@company.com', needs_confirmation: true })
+      }
+      return reading({
+        sentence: 'Meeting tomorrow at 3pm.',
+        intent: 'Schedule a meeting tomorrow at 3pm with the team',
+        confidence: 0.86,
+        needs_confirmation: true,
+        context_actions: ['Insert text', 'Send message', 'More options']
+      })
     },
     async spellSuggest(req) {
       await wait(300)
@@ -190,8 +205,41 @@ export function mockServices(): Services {
     async agentRun(req) {
       const runId = `mock-${Date.now()}`
       stopped = false
+      const task = req.intent.toLowerCase()
       void (async () => {
         emit({ type: 'started', runId, intent: req.intent })
+        if (task.includes('screenshot')) {
+          emit({ type: 'step', runId, step: { id: 's0', label: 'Taking screenshot', status: 'current' } })
+          await wait(600)
+          if (stopped) return
+          emit({ type: 'step', runId, step: { id: 's0', label: 'Taking screenshot', status: 'done' } })
+          emit({
+            type: 'done',
+            runId,
+            result: {
+              title: 'Screenshot taken',
+              subtitle: MOCK_SCREENSHOT_SUBTITLE,
+              evidence: [{ tool: 'take_screenshot', args: {}, ok: true, result: `Saved a screenshot to ${MOCK_SCREENSHOT_PATH}.` }],
+              view: { kind: 'openFile', path: MOCK_SCREENSHOT_PATH },
+              reply: 'Saved a screenshot to your Desktop.'
+            },
+            complete: true
+          })
+          return
+        }
+        if (!/meeting|event|schedule|calendar|email/.test(task)) {
+          // A message the agent answers in words: no tool runs.
+          emit({ type: 'step', runId, step: { id: 'plan', label: 'Thinking', status: 'current' } })
+          await wait(700)
+          if (stopped) return
+          emit({
+            type: 'done',
+            runId,
+            result: { title: 'Nothing was done', subtitle: "The agent didn't run any action", evidence: [], reply: mockReply(req.sentence) },
+            complete: false
+          })
+          return
+        }
         const steps = ['Opening Calendar', 'Creating event', 'Adding attendees', 'Adding meeting link']
         for (let i = 0; i < steps.length; i++) {
           if (stopped) return
@@ -237,7 +285,8 @@ export function mockServices(): Services {
             title: 'Meeting created',
             subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
             evidence: [{ tool: 'calendar_create_event', args: { title: 'Team Sync' }, ok: true, result: 'created' }],
-            view: { kind: 'openApp', app: 'Calendar' }
+            view: { kind: 'openApp', app: 'Calendar' },
+            reply: 'Team Sync is on your calendar for tomorrow at 10.'
           },
           complete: true
         })
@@ -261,7 +310,14 @@ export function mockServices(): Services {
     async runShortcut(gestureId) {
       await wait(400)
       if (gestureId === 'builtin-peace') {
-        return { ok: true, title: 'Screenshot taken', subtitle: 'Saved to Desktop', compiled: true, durationMs: 400 }
+        return {
+          ok: true,
+          title: 'Screenshot taken',
+          subtitle: MOCK_SCREENSHOT_SUBTITLE,
+          compiled: true,
+          durationMs: 400,
+          view: { kind: 'openFile', path: MOCK_SCREENSHOT_PATH }
+        }
       }
       return { ok: true, title: 'Playing Motion Sickness', subtitle: 'Phoebe Bridgers', compiled: true, durationMs: 420 }
     },
@@ -271,6 +327,9 @@ export function mockServices(): Services {
     async typeText() {
       return { ok: true, value: undefined }
     },
-    async openTarget() {}
+    async openTarget() {},
+    async imageThumb() {
+      return { ok: true, value: MOCK_SCREENSHOT_THUMB }
+    }
   }
 }

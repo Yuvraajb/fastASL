@@ -28,6 +28,8 @@ const SAMPLE_ARGS: Record<string, Record<string, unknown>> = {
   spotify_search: { query: 'motion sickness' },
   spotify_play: { uri: 'spotify:track:5xo8RrjJ9CVNrtRg2S3B1R', name: 'Motion Sickness' },
   spotify_pause: {},
+  media_control: { action: 'play' },
+  facetime_call: { contact_name: 'Dad' },
   open_app: { name: 'Calendar' },
   web_search: { query: 'weather' },
   type_text: { text: 'hello' },
@@ -43,13 +45,13 @@ describe('tool registry', () => {
 
   it('asks for confirmation exactly for tools that send or create', () => {
     const write = TOOLS.filter((t) => t.risk === 'write').map((t) => t.name)
-    expect(write.sort()).toEqual(['calendar_create_event', 'mail_send', 'message_send'])
+    expect(write.sort()).toEqual(['calendar_create_event', 'facetime_call', 'mail_send', 'message_send'])
   })
 
   it('gives every write tool a confirm card', () => {
     for (const tool of TOOLS.filter((t) => t.risk === 'write')) {
       const args = z.object(tool.schema).parse(SAMPLE_ARGS[tool.name])
-      expect(tool.confirmDetails?.(args).kind, tool.name).toMatch(/event|mail|message/)
+      expect(tool.confirmDetails?.(args).kind, tool.name).toMatch(/event|mail|message|generic/)
     }
   })
 

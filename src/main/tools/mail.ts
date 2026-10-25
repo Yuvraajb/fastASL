@@ -58,7 +58,8 @@ export const mailSend = defineTool({
   name: 'mail_send',
   description:
     'Send an email from the Mail app. `to` is one or more comma-separated email addresses or full names ' +
-    'exactly as saved in Contacts (partial names are refused; use contacts_find to get the exact name).',
+    'exactly as saved in Contacts (partial names are refused; use contacts_find to get the exact name). ' +
+    'Needs an email address in Contacts; for someone with only a phone number, offer message_send instead.',
   schema: {
     to: z.string().trim().min(1),
     subject: z.string(),
@@ -72,6 +73,7 @@ export const mailSend = defineTool({
     if (!to.length) return fail('Add at least one recipient')
     const sent = await runAppleScript(sendMailScript({ to, subject: args.subject, body: args.body }), {
       app: 'Mail',
+      launch: true,
       timeoutMs: 30_000
     })
     if (sent !== 'true') return fail('Mail did not send the message. Check that a Mail account is set up.')

@@ -18,11 +18,15 @@ import {
   NONE_OF_THESE,
   NOT_A_SIGN,
   QUICK_MENU,
+  REPLY_IDLE_MS,
   SETTINGS_ROOT,
   SHOW_ME,
   SIGN_GUESS_COOLDOWN_MS,
   SIGN_GUESS_ERROR_EVERY_MS,
+  TOAST_MS,
+  TOAST_THUMB_MS,
   type UnknownMovement,
+  answerFor,
   activeGestures,
   assembleSentence,
   dictationChunk,
@@ -36,13 +40,12 @@ import {
 import { CAPTURE_REASONS } from '../engine/gestures/customShapes'
 import { FRAME_FEATURE_DIM, HAND_FEATURE_DIM } from '../engine/recognition/features'
 import { live } from './live'
+import { MOCK_SCREENSHOT_PATH, MOCK_SCREENSHOT_THUMB } from './mockThumb'
 import { mockServices, type Services } from './services'
 import { getApp, setApp, useApp } from './store'
-import type { SettingsPage, Token, View } from './types'
+import { statusFor, type Answer, type SettingsPage, type Token, type View } from './types'
 
 // Mirrors the controller's private timings.
-const TOAST_MS = 2600
-const DONE_AUTO_COLLAPSE_MS = 4000
 const TYPED_RUN_MS = 2 * 60_000
 
 const word = (text: string): Token => ({ text, kind: 'word' })
@@ -126,17 +129,34 @@ const g = (gesture: GestureName): void => c.gesture({ gesture })
 const fingers = (count: number): void => c.gesture({ gesture: 'fingers', count })
 const sign = (...tokens: Token[]): void => tokens.forEach((t) => c.token(t))
 
-function signSentence(...tokens: Token[]): Extract<View, { kind: 'sentence' }> {
-  sign(...tokens)
-  g('handsDown')
-  return viewAs('sentence')
+type Conversation = Extract<View, { kind: 'conversation' }>
+
+/** The conversation card in `phase`. */
+function conversation(phase: Conversation['phase']): Conversation {
+  const view = viewAs('conversation')
+  expect(view.phase).toBe(phase)
+  return view
 }
 
-async function toAgentReady(): Promise<Extract<View, { kind: 'agentReady' }>> {
-  signSentence(...MEETING)
-  g('thumbsUp')
+/** Signs the phrase and lowers both hands: the conversation card, while the interpreter reads it. */
+function sendPhrase(...tokens: Token[]): Conversation {
+  sign(...tokens)
+  g('handsDown')
+  return conversation('understanding')
+}
+
+/** A phrase sent and answered in words by the mock agent (interpret 500 ms, then 700 ms): the reply card. */
+async function toReply(...tokens: Token[]): Promise<Conversation> {
+  sendPhrase(...tokens)
+  await settle(1300)
+  return conversation('reply')
+}
+
+/** The meeting phrase sent and interpreted (mock interpret: 500 ms): the agent is working on it. */
+async function toWorking(): Promise<Conversation> {
+  sendPhrase(...MEETING)
   await settle(500)
-  return viewAs('agentReady')
+  return conversation('working')
 }
 
 function useServices(next: Services): void {
@@ -225,22 +245,31 @@ describe('gesture gating', () => {
     expect(activeGestures({ kind: 'collapsed' })).toEqual(new Set(['palmHold', 'shape']))
     expect(activeGestures({ kind: 'ready' }).has('fingers')).toBe(false)
     expect(activeGestures({ kind: 'quickMenu', options: [] }).has('fingers')).toBe(true)
-    const list: View = { kind: 'didYouMean', variant: 'list', options: [], purpose: 'intent' }
-    const quote: View = { kind: 'didYouMean', variant: 'quote', options: [], purpose: 'intent' }
-    const signs: View = { kind: 'didYouMean', variant: 'list', options: [], purpose: 'sign' }
-    expect(activeGestures(list).has('fingers')).toBe(true)
-    expect(activeGestures(list).has('swipeLeft')).toBe(true)
+    const spellings: View = { kind: 'didYouMean', options: [], purpose: 'spell' }
+    const signs: View = { kind: 'didYouMean', options: [], purpose: 'sign' }
+    expect(activeGestures(spellings).has('fingers')).toBe(true)
+    expect(activeGestures(spellings).has('swipeLeft')).toBe(true)
     expect(activeGestures(signs).has('swipeLeft')).toBe(false)
-    expect(activeGestures(quote).has('fingers')).toBe(false)
-    expect(activeGestures(quote).has('swipeLeft')).toBe(true)
+  })
+
+  it('the conversation card: only a fist while the interpreter or the agent works; the reply has Ready\'s gestures', () => {
+    for (const phase of ['understanding', 'working'] as const) {
+      expect(activeGestures({ kind: 'conversation', phase, said: 'Hi', steps: [] })).toEqual(new Set(['fist']))
+    }
+    const reply: View = { kind: 'conversation', phase: 'reply', said: 'Hi', steps: [], answer: { ok: true, text: 'Hello!' } }
+    expect(activeGestures(reply)).toEqual(activeGestures({ kind: 'ready' }))
+    expect(activeGestures(reply, 'spell')).toEqual(activeGestures({ kind: 'ready' }, 'spell'))
+    expect(takesSigns(reply)).toBe(true)
+    expect(takesSigns({ kind: 'conversation', phase: 'working', said: 'Hi', steps: [] })).toBe(false)
+    // A thumbs up or fist already up while the agent worked doesn't act on the reply.
+    expect(gestureScreen(reply)).not.toBe(gestureScreen({ kind: 'conversation', phase: 'working', said: 'Hi', steps: [] }))
   })
 
   it('numbers the options each view offers', () => {
     expect(optionsFor({ kind: 'ready' })).toEqual([])
     expect(optionsFor({ kind: 'quickMenu', options: QUICK_MENU })).toEqual(QUICK_MENU)
     expect(optionsFor({ kind: 'settings', settings: { page: 'root' } })).toEqual(SETTINGS_ROOT)
-    expect(optionsFor({ kind: 'done', ok: true, title: '', subtitle: '' })).toEqual(['View', 'New command', 'Save as gesture'])
-    expect(optionsFor({ kind: 'done', ok: false, title: '', subtitle: '' })).toEqual(['View', 'New command'])
+    expect(optionsFor({ kind: 'conversation', phase: 'reply', said: 'Hi', steps: [], answer: { ok: true, text: 'Hello!' } })).toEqual([])
   })
 })
 
@@ -325,7 +354,7 @@ describe('modes', () => {
     fingers(1)
     g('swipeRight')
     g('swipeLeft')
-    signSentence(...MEETING)
+    sendPhrase(...MEETING)
     await settle()
     expect(interpret.mock.calls[0][0].intentPrefix).toBeUndefined()
   })
@@ -546,7 +575,7 @@ describe('settings', () => {
     fingers(1)
     await settle(400)
     expect(viewAs('toast')).toMatchObject({ title: 'Screenshot taken', returnTo: 'ready' })
-    await settle(TOAST_MS)
+    await settle(TOAST_THUMB_MS)
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 })
@@ -571,15 +600,12 @@ describe('settings by hand', () => {
     expect(getApp().view).toEqual(idle)
   })
 
-  it('Done: swipe up opens Settings, which stops the collapse; a fist goes to Ready', async () => {
-    await toAgentReady()
-    g('thumbsUp')
-    await settle(1400)
-    g('thumbsUp') // approves the mock agent's confirm step
-    await settle(1400)
-    expect(viewAs('done').ok).toBe(true)
+  it("the agent's reply: swipe up opens Settings, which stops its idle timer; a fist goes to Ready", async () => {
+    sendPhrase(word('hello'))
+    await settle(1300)
+    conversation('reply')
     g('swipeUp')
-    await settle(DONE_AUTO_COLLAPSE_MS * 2)
+    await settle(REPLY_IDLE_MS)
     expect(page()).toEqual({ page: 'root' })
     g('fist')
     expect(getApp().view).toEqual({ kind: 'ready' })
@@ -808,12 +834,11 @@ describe('new gesture', () => {
       fingers(2)
     }
 
-    it("goes to Ready with a hint; the proceeded phrase's intent becomes the task instead of an agent run", async () => {
+    it("goes to Ready with a hint; the phrase's intent becomes the task instead of an agent run", async () => {
       const agentRun = vi.spyOn(services, 'agentRun')
       await signNewTask()
       expect(getApp().view).toEqual({ kind: 'ready', hint: 'Sign the task for your gesture' })
-      signSentence(...MEETING)
-      g('thumbsUp')
+      sendPhrase(...MEETING)
       await settle(500)
       expect(hold()).toEqual({ page: 'newGestureHold', task: 'Schedule a meeting tomorrow at 3pm with the team', countdown: 3 })
       expect(agentRun).not.toHaveBeenCalled()
@@ -827,8 +852,7 @@ describe('new gesture', () => {
 
     it("takes Claude's sentence when it found no intent, without asking Did you mean", async () => {
       await signNewTask()
-      signSentence(word('what'), word('time'))
-      g('thumbsUp')
+      sendPhrase(word('what'), word('time'))
       await settle(500)
       expect(hold().task).toBe('What time is my next meeting?')
     })
@@ -836,8 +860,7 @@ describe('new gesture', () => {
     it('takes the signed sentence without Claude, and says why', async () => {
       vi.spyOn(services, 'interpret').mockResolvedValue({ ok: false, error: 'no key', missingKey: 'ANTHROPIC_API_KEY' })
       await signNewTask()
-      signSentence(...MEETING)
-      g('thumbsUp')
+      sendPhrase(...MEETING)
       await settle()
       expect(hold().task).toBe('Meeting tomorrow at 3 pm')
       expect(getApp().notice).toBe('Add ANTHROPIC_API_KEY to .env')
@@ -849,8 +872,7 @@ describe('new gesture', () => {
       g('thumbsUp')
       fingers(4) // Take notes
       expect(getApp().view).toEqual({ kind: 'ready', hint: 'Take notes: sign the details' })
-      signSentence(...MEETING)
-      g('thumbsUp')
+      sendPhrase(...MEETING)
       await settle()
       expect(hold().task).toBe('Take notes: Meeting tomorrow at 3 pm')
     })
@@ -861,8 +883,8 @@ describe('new gesture', () => {
       await signNewTask()
       expect(getApp().mode).toBe('command')
       expect(getApp().view).toEqual({ kind: 'ready', hint: 'Sign the task for your gesture' })
-      signSentence(...MEETING)
-      g('fist') // cancel
+      sendPhrase(...MEETING)
+      g('fist') // cancels while the interpreter reads it
       expect(getApp().view).toEqual({ kind: 'ready' })
     })
   })
@@ -1114,12 +1136,14 @@ describe('listening', () => {
       { kind: 'ready' },
       { kind: 'recognizing', token: null, isWord: false },
       { kind: 'building', tokens: [], current: null, sentence: '' },
-      { kind: 'sentence', sentence: 'Hi', tokens: [] },
+      { kind: 'conversation', phase: 'reply', said: 'Hi', steps: [], answer: { ok: true, text: 'Hello!' } },
       { kind: 'dictation', text: '' },
       { kind: 'settings', settings: { page: 'teachSpell', letters: '', canSpell: true } }
     ]
     const no: View[] = [
       { kind: 'collapsed' },
+      { kind: 'conversation', phase: 'understanding', said: 'Hi', steps: [] },
+      { kind: 'conversation', phase: 'working', said: 'Hi', steps: [] },
       { kind: 'working', intent: 'x', steps: [] },
       { kind: 'toast', title: 't', ok: true, returnTo: 'ready' },
       { kind: 'quickMenu', options: QUICK_MENU },
@@ -1173,21 +1197,28 @@ describe('phrase building', () => {
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
-  it.each(['handsDown', 'thumbsUp', 'swipeRight'] as const)('%s in building -> sentence', (gesture) => {
-    sign(...MEETING)
-    g(gesture)
-    expect(getApp().view).toEqual({ kind: 'sentence', sentence: 'Meeting tomorrow at 3 pm', tokens: MEETING })
+  it('keeps adding signs for as long as the user signs: nothing stops after one sign', () => {
+    const words = ['hello', 'my', 'name', 'is', 'sam', 'nice', 'to', 'meet', 'you'].map(word)
+    sign(...words)
+    expect(viewAs('building')).toMatchObject({ tokens: words, current: 'you', sentence: 'Hello my name is sam nice to meet you' })
   })
 
-  it('the proceed button and phraseEnd() also end the phrase', () => {
+  it.each(['handsDown', 'thumbsUp', 'swipeRight'] as const)('%s in building sends the phrase: the conversation card, with no Sentence card', (gesture) => {
+    sign(...MEETING)
+    g(gesture)
+    expect(getApp().view).toEqual({ kind: 'conversation', phase: 'understanding', said: 'Meeting tomorrow at 3 pm', steps: [] })
+  })
+
+  it('the proceed button and phraseEnd() also send it', () => {
     sign(word('hi'), word('there'))
     c.tap('proceed')
-    expect(viewAs('sentence').sentence).toBe('Hi there')
+    expect(conversation('understanding').said).toBe('Hi there')
 
     c.tap('close')
+    expect(getApp().view).toEqual({ kind: 'ready' })
     sign(word('hi'))
     c.phraseEnd()
-    expect(viewAs('sentence').sentence).toBe('Hi')
+    expect(conversation('understanding').said).toBe('Hi')
   })
 
   it('ending a phrase with nothing signed returns to ready', () => {
@@ -1204,33 +1235,37 @@ describe('phrase building', () => {
     expect(viewAs('recognizing').token).toBe('again')
   })
 
-  it('swipeLeft on the sentence removes a word and stays on the sentence', () => {
-    signSentence(...MEETING)
-    g('swipeLeft')
-    expect(viewAs('sentence')).toMatchObject({ sentence: 'Meeting tomorrow at 3', tokens: MEETING.slice(0, 4) })
+  it('signs are not taken while the interpreter or the agent works on the phrase', async () => {
+    sendPhrase(word('hello'))
+    const understanding = getApp().view
+    c.token(word('again'))
+    expect(getApp().view).toBe(understanding)
+    await settle(500)
+    const working = conversation('working')
+    c.token(word('again'))
+    expect(getApp().view).toBe(working)
   })
 
-  it('a sign after a finished sentence starts the next phrase', () => {
-    signSentence(word('meeting'), word('tomorrow'))
-    c.token(word('morning'))
-    expect(viewAs('recognizing').token).toBe('morning')
-    c.token(word('call'))
-    expect(viewAs('building')).toMatchObject({ sentence: 'Morning call', current: 'call' })
+  it("the next sign after the agent's reply starts a new phrase on the Building card", async () => {
+    await toReply(word('hello'))
+    c.token(word('what'))
+    expect(viewAs('recognizing').token).toBe('what')
+    c.token(word('time'))
+    expect(viewAs('building')).toMatchObject({ tokens: [word('what'), word('time')], sentence: 'What time', current: 'time' })
   })
 
-  it('a movement on a finished sentence keeps it until a sign arrives; a sign moves on', () => {
-    signSentence(word('meeting'), word('tomorrow'))
-    const sentence = getApp().view
+  it('a movement on the reply keeps it until a sign arrives; a sign moves on', async () => {
+    const reply = await toReply(word('hello'))
     c.signStart()
-    expect(getApp().view).toBe(sentence)
+    expect(getApp().view).toBe(reply)
     expect(getApp().signing).toBe(true)
     c.signRejected()
-    expect(getApp().view).toBe(sentence)
+    expect(getApp().view).toBe(reply)
     c.signStart()
-    c.token(word('hello'))
-    expect(viewAs('recognizing').token).toBe('hello')
+    c.token(word('thank you'))
+    expect(viewAs('recognizing').token).toBe('thank you')
     c.token(word('friend'))
-    expect(viewAs('building').sentence).toBe('Hello friend')
+    expect(viewAs('building').sentence).toBe('Thank you friend')
   })
 
   it('ignores tokens in views that are not collecting a phrase', () => {
@@ -1241,21 +1276,15 @@ describe('phrase building', () => {
   })
 })
 
-describe('interpretation', () => {
-  it('sentence --thumbsUp--> thinking, then agentReady with the intent', async () => {
+describe('sending a phrase: the interpreter, then straight to the agent', () => {
+  it('hands down shows the conversation card at once; the interpreted message goes to the agent with nothing to confirm', async () => {
     const interpret = vi.spyOn(services, 'interpret')
-    signSentence(...MEETING)
-    g('thumbsUp')
-    expect(viewAs('sentence').thinking).toBe(true)
-    await settle(500)
-    expect(getApp().view).toEqual({
-      kind: 'agentReady',
-      intent: 'Schedule a meeting tomorrow at 3pm with the team',
-      variant: 'default',
-      target: undefined,
-      sentence: 'Meeting tomorrow at 3pm.'
-    })
-    // Prefetched when the phrase ended, reused on proceed.
+    const run = vi.spyOn(services, 'agentRun')
+    sign(...MEETING)
+    g('handsDown')
+    expect(getApp().view).toEqual({ kind: 'conversation', phase: 'understanding', said: 'Meeting tomorrow at 3 pm', steps: [] })
+    expect(statusFor(getApp().view, 'command')).toEqual({ label: 'Working...', tone: 'idle' })
+    await settle()
     expect(interpret).toHaveBeenCalledTimes(1)
     const req = interpret.mock.calls[0][0]
     expect(req).toMatchObject({
@@ -1269,536 +1298,211 @@ describe('interpretation', () => {
       ]
     })
     expect(req.intentPrefix).toBeUndefined()
-  })
+    expect(run).not.toHaveBeenCalled()
 
-  it('an intent with an email address uses the email variant', async () => {
-    signSentence(word('email'), word('team'))
-    g('thumbsUp')
     await settle(500)
-    expect(viewAs('agentReady')).toMatchObject({ variant: 'email', target: 'team@company.com' })
+    expect(run).toHaveBeenCalledWith({
+      intent: 'Schedule a meeting tomorrow at 3pm with the team',
+      sentence: 'Meeting tomorrow at 3pm.',
+      frontmost: { name: 'Mail', windowTitle: 'New Message' }
+    })
+    expect(getApp().view).toEqual({
+      kind: 'conversation',
+      phase: 'working',
+      said: 'Meeting tomorrow at 3pm.',
+      steps: [{ id: 's0', label: 'Opening Calendar', status: 'current' }]
+    })
   })
 
-  it('low confidence offers a numbered "did you mean" list, picked by fingers', async () => {
-    signSentence(word('what'), word('time'), word('next'), word('meeting'))
-    g('thumbsUp')
+  it('a greeting goes to the agent as the sentence itself (the interpreter found no task in it)', async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    sendPhrase(word('hello'))
     await settle(500)
-    expect(getApp().view).toEqual({
-      kind: 'didYouMean',
-      variant: 'list',
-      options: ['Show my next meeting', 'What time is it?', 'Open Calendar', 'Insert text'],
-      purpose: 'intent',
-      quote: 'What time is my next meeting?'
-    })
-    fingers(2)
-    expect(getApp().view).toEqual({
-      kind: 'agentReady',
-      intent: 'What time is it?',
-      variant: 'default',
-      sentence: 'What time is my next meeting?'
-    })
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'Hello.', sentence: 'Hello.' }))
+    expect(conversation('working').said).toBe('Hello.')
   })
 
-  it('a low-confidence intent is listed first', async () => {
-    vi.spyOn(services, 'interpret').mockResolvedValue({
-      ok: true,
-      value: intentResult({ intent: 'Open Notes', alternatives: ['Open Notes', 'Take notes'], confidence: 0.4 })
-    })
-    signSentence(word('notes'))
-    g('thumbsUp')
+  it.each([
+    ['a missing key', { ok: false, error: 'no key', missingKey: 'GEMINI_API_KEY' }, 'Add GEMINI_API_KEY to .env'],
+    ['a rate limit', { ok: false, error: 'Gemini is rate limited. Try again in 30 s' }, 'Gemini is rate limited. Try again in 30 s'],
+    ['a timeout', { ok: false, error: 'Gemini took too long to answer' }, 'Gemini took too long to answer']
+  ] as const)('an interpreter failure (%s) still sends what was signed, and says why', async (_case, failure, notice) => {
+    vi.spyOn(services, 'interpret').mockResolvedValue(failure as Result<IntentResult>)
+    const run = vi.spyOn(services, 'agentRun')
+    sendPhrase(...MEETING)
     await settle()
-    expect(viewAs('didYouMean').options).toEqual(['Open Notes', 'Take notes'])
-  })
-
-  it('no intent but context actions -> contextActions, Insert text first and More options last', async () => {
-    vi.spyOn(services, 'interpret').mockResolvedValue({
-      ok: true,
-      value: intentResult({ context_actions: ['Send message', 'More options', 'Type it', 'Reply', 'Extra'] })
-    })
-    signSentence(word('update'))
-    g('thumbsUp')
-    await settle()
-    expect(getApp().view).toEqual({
-      kind: 'contextActions',
-      sentence: 'Here is the update',
-      actions: ['Insert text', 'Send message', 'Reply', 'More options']
-    })
-  })
-
-  it('context action "Insert text" types the sentence and toasts', async () => {
-    const typeText = vi.spyOn(services, 'typeText')
-    c.setView({ kind: 'contextActions', sentence: 'Here is the update', actions: ['Insert text', 'Send message'] })
-    fingers(1)
-    await settle()
-    expect(typeText).toHaveBeenCalledWith('Here is the update')
-    expect(viewAs('toast')).toMatchObject({ title: 'Text inserted', subtitle: 'Here is the update', ok: true })
-    await settle(TOAST_MS)
-    expect(getApp().view).toEqual({ kind: 'ready' })
-  })
-
-  it('context action "Send message" prepares an agent intent', () => {
-    c.setView({ kind: 'contextActions', sentence: 'Running late', actions: ['Insert text', 'Send message'] })
-    fingers(2)
-    expect(viewAs('agentReady')).toMatchObject({ intent: 'Send message: "Running late"', sentence: 'Running late' })
-  })
-
-  it('context action "More options" opens the quick menu for the sentence', () => {
-    c.setView({ kind: 'contextActions', sentence: 'x', actions: ['More options'] })
-    c.tap('option', 0)
-    expect(getApp().view).toEqual({ kind: 'quickMenu', options: QUICK_MENU, fromSentence: true })
-  })
-
-  it('no intent and no actions still offers Insert text and More options', async () => {
-    vi.spyOn(services, 'interpret').mockResolvedValue({ ok: true, value: intentResult({ sentence: 'Hmm' }) })
-    signSentence(word('hmm'))
-    g('thumbsUp')
-    await settle()
-    expect(getApp().view).toEqual({ kind: 'contextActions', sentence: 'Hmm', actions: ['Insert text', 'More options'] })
-  })
-
-  it('missing API key: notice + agentReady with the raw sentence', async () => {
-    vi.spyOn(services, 'interpret').mockResolvedValue({
-      ok: false,
-      error: 'no key',
-      missingKey: 'ANTHROPIC_API_KEY'
-    })
-    signSentence(...MEETING)
-    g('thumbsUp')
-    await settle()
-    expect(getApp().notice).toBe('Add ANTHROPIC_API_KEY to .env')
-    expect(getApp().view).toEqual({
-      kind: 'agentReady',
-      intent: 'Meeting tomorrow at 3 pm',
-      variant: 'default',
-      sentence: 'Meeting tomorrow at 3 pm'
-    })
+    expect(getApp().notice).toBe(notice)
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'Meeting tomorrow at 3 pm', sentence: 'Meeting tomorrow at 3 pm' }))
+    expect(conversation('working').said).toBe('Meeting tomorrow at 3 pm')
     await settle(5000)
     expect(getApp().notice).toBeNull()
   })
 
-  it('a rejected interpret call does not leave the card thinking', async () => {
+  it('a rejected interpret call (main crashed) still sends', async () => {
     vi.spyOn(services, 'interpret').mockRejectedValue(new Error('IPC failed'))
-    signSentence(word('hello'))
-    g('thumbsUp')
+    const run = vi.spyOn(services, 'agentRun')
+    sendPhrase(word('hello'))
     await settle()
     expect(getApp().notice).toBe('IPC failed')
-    expect(viewAs('agentReady')).toMatchObject({ intent: 'Hello', sentence: 'Hello' })
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'Hello', sentence: 'Hello' }))
   })
 
-  it('editing while thinking discards the stale interpretation', async () => {
-    const interpret = vi.spyOn(services, 'interpret').mockImplementation(async (req) => {
-      await new Promise((r) => setTimeout(r, 500))
-      return { ok: true, value: intentResult({ sentence: req.sentence, intent: `Do: ${req.sentence}` }) }
-    })
-    signSentence(word('call'), word('mom'), word('now'))
-    g('thumbsUp')
-    g('swipeLeft') // "Call mom now" -> "Call mom" while the first interpretation is in flight
-    await settle(600)
-    expect(viewAs('sentence').sentence).toBe('Call mom')
-    g('thumbsUp')
-    await settle(600)
-    expect(viewAs('agentReady').intent).toBe('Do: Call mom')
-    expect(interpret).toHaveBeenCalledTimes(2)
-  })
+  it("a low-confidence reading is not asked about (no Did you mean): what was signed goes instead of its guess", async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    sendPhrase(word('what'), word('time'), word('next'), word('meeting'))
+    await settle(500)
+    expect(getApp().view.kind).not.toBe('didYouMean')
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'What time next meeting', sentence: 'What time next meeting' }))
+    expect(conversation('working').said).toBe('What time next meeting')
 
-  it('a newer failed interpretation is not masked by an older one', async () => {
-    let call = 0
-    vi.spyOn(services, 'interpret').mockImplementation(async () => {
-      call++
-      if (call === 1) {
-        await new Promise((r) => setTimeout(r, 1000))
-        return { ok: false, error: 'old failure' }
-      }
-      return { ok: true, value: intentResult({ intent: 'Call mom' }) }
+    run.mockClear()
+    vi.spyOn(services, 'interpret').mockResolvedValue({
+      ok: true,
+      value: intentResult({ sentence: 'Open my notes.', intent: 'Open Notes', alternatives: ['Take notes'], confidence: 0.4 })
     })
-    signSentence(word('call'), word('mom'), word('now'))
-    g('swipeLeft')
-    g('thumbsUp')
-    await settle(1000)
-    expect(viewAs('agentReady').intent).toBe('Call mom')
-    expect(getApp().notice).toBeNull()
-  })
-
-  it('the pencil edit replaces the phrase and re-interprets', async () => {
-    const interpret = vi.spyOn(services, 'interpret')
-    signSentence(word('meeting'))
-    c.editSentence('  Email the team  ')
-    expect(getApp().view).toEqual({
-      kind: 'sentence',
-      sentence: 'Email the team',
-      tokens: [word('Email'), word('the'), word('team')]
-    })
+    g('fist')
+    await settle(TOAST_MS)
+    sendPhrase(word('notes'))
     await settle()
-    expect(interpret).toHaveBeenLastCalledWith(
-      expect.objectContaining({ sentence: 'Email the team' }),
-      expect.any(Function), // the call's status listener
-      expect.any(AbortSignal) // aborted once the card drops the call
-    )
-    c.editSentence('   ')
-    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'Notes', sentence: 'Notes' }))
   })
 
-  it('quick menu pick sets an intent prefix that reaches interpret', async () => {
+  it('a quick-menu pick reaches the interpreter and shows on the card; without the interpreter it prefixes the message', async () => {
     const interpret = vi.spyOn(services, 'interpret')
+    const run = vi.spyOn(services, 'agentRun')
     g('thumbsUp')
-    expect(getApp().view).toEqual({ kind: 'quickMenu', options: QUICK_MENU })
     fingers(1)
     expect(getApp().view).toEqual({ kind: 'ready', hint: 'Create event: sign the details' })
-    signSentence(...MEETING)
-    await settle()
+    sendPhrase(...MEETING)
+    expect(conversation('understanding').prefix).toBe('Create event')
+    await settle(500)
     expect(interpret.mock.calls[0][0].intentPrefix).toBe('Create event')
+    expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ intent: 'Schedule a meeting tomorrow at 3pm with the team' }))
+    expect(conversation('working').prefix).toBe('Create event')
+
+    g('fist')
+    await settle(TOAST_MS)
+    interpret.mockResolvedValue({ ok: false, error: 'offline' })
+    g('thumbsUp')
+    fingers(1)
+    sendPhrase(...MEETING)
+    await settle()
+    expect(run).toHaveBeenLastCalledWith(
+      expect.objectContaining({ intent: 'Create event: Meeting tomorrow at 3 pm', sentence: 'Meeting tomorrow at 3 pm' })
+    )
   })
 
   it('cancelling the quick menu clears the prefix', async () => {
     const interpret = vi.spyOn(services, 'interpret')
     g('thumbsUp')
-    fingers(2)
-    sign(word('hi'))
     g('fist')
-    signSentence(word('hi'))
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    sendPhrase(word('hello'))
     await settle()
     expect(interpret.mock.calls[0][0].intentPrefix).toBeUndefined()
   })
 
-  it('without Claude, a quick-menu pick still reaches the agent with the details', async () => {
-    vi.spyOn(services, 'interpret').mockResolvedValue({ ok: false, error: "Can't reach Claude. Check your connection" })
-    g('thumbsUp')
-    fingers(1)
-    signSentence(word('lunch'), word('friday'))
-    g('thumbsUp')
-    await settle()
-    expect(getApp().notice).toBe("Can't reach Claude. Check your connection")
-    expect(viewAs('agentReady')).toMatchObject({ intent: 'Create event: Lunch friday', sentence: 'Lunch friday' })
-  })
-
-  it('without Claude, More options › a pick keeps the action', async () => {
-    vi.spyOn(services, 'interpret')
-      .mockResolvedValueOnce({ ok: true, value: intentResult({ sentence: 'Thank you for the update.' }) })
-      .mockResolvedValueOnce({ ok: false, error: "Can't reach Claude. Check your connection" })
-    signSentence(word('thank'), word('you'), word('update'))
-    g('thumbsUp')
-    await settle()
-    fingers(2) // More options
-    fingers(3) // Search web
-    await settle()
-    expect(viewAs('agentReady')).toMatchObject({ intent: 'Search web: Thank you update', sentence: 'Thank you update' })
-  })
-})
-
-/** Routing of real-shaped Claude replies (as sanitizeIntent returns them in command mode). */
-describe('intent routing', () => {
-  const answer = (value: IntentResult): void => {
-    vi.spyOn(services, 'interpret').mockResolvedValue({ ok: true, value })
-  }
-  const proceedWith = async (...tokens: Token[]): Promise<void> => {
-    signSentence(...tokens)
-    g('thumbsUp')
-    await settle()
-  }
-
-  it('a confident intent goes straight to Agent ready; its alternatives are not asked', async () => {
-    answer({
-      sentence: 'Play Motion Sickness.',
-      intent: 'Play Motion Sickness by Phoebe Bridgers on Spotify',
-      alternatives: ['Search Spotify for Motion Sickness'],
-      confidence: 0.92,
-      needs_confirmation: false,
-      context_actions: ['More options']
-    })
-    await proceedWith(word('play'), word('motion'), word('sickness'))
-    expect(getApp().view).toEqual({
-      kind: 'agentReady',
-      intent: 'Play Motion Sickness by Phoebe Bridgers on Spotify',
-      variant: 'default',
-      target: undefined,
-      sentence: 'Play Motion Sickness.'
-    })
-  })
-
-  it('close alternatives ask "Did you mean" even above 0.6; fingers pick one for Agent ready', async () => {
-    answer({
-      sentence: 'Meeting tomorrow at 3.',
-      intent: 'Create a calendar event called Meeting tomorrow at 3 PM',
-      alternatives: ['Remind me about the meeting tomorrow at 3 PM', 'Show my calendar for tomorrow'],
-      confidence: 0.7,
-      needs_confirmation: true,
-      context_actions: ['Insert text', 'More options']
-    })
-    await proceedWith(word('meeting'), word('tomorrow'), word('time'), word('3'))
-    expect(getApp().view).toEqual({
-      kind: 'didYouMean',
-      variant: 'list',
-      options: [
-        'Create a calendar event called Meeting tomorrow at 3 PM',
-        'Remind me about the meeting tomorrow at 3 PM',
-        'Show my calendar for tomorrow'
-      ],
-      purpose: 'intent',
-      quote: 'Meeting tomorrow at 3.'
-    })
-    expect(activeGestures(getApp().view).has('fingers')).toBe(true)
-    fingers(2)
-    expect(getApp().view).toEqual({
-      kind: 'agentReady',
-      intent: 'Remind me about the meeting tomorrow at 3 PM',
-      variant: 'default',
-      sentence: 'Meeting tomorrow at 3.'
-    })
-  })
-
-  it('a lone low-confidence intent is shown as one numbered row; a pick opens Agent ready, never the agent', async () => {
+  it('a fist or the X while the interpreter reads drops the phrase: its call is cancelled and the agent never starts', async () => {
     const run = vi.spyOn(services, 'agentRun')
-    answer({
-      sentence: 'Friend music.',
-      intent: 'Play the Friends playlist on Spotify',
-      alternatives: [],
-      confidence: 0.45,
-      needs_confirmation: false,
-      context_actions: ['More options']
+    const signals: AbortSignal[] = []
+    vi.spyOn(services, 'interpret').mockImplementation(async (_req, _onStatus, signal) => {
+      if (signal) signals.push(signal)
+      await new Promise((r) => setTimeout(r, 500))
+      return { ok: true, value: intentResult({ intent: 'Do it' }) }
     })
-    await proceedWith(word('friend'), word('music'))
-    expect(getApp().view).toEqual({
-      kind: 'didYouMean',
-      variant: 'list',
-      options: ['Play the Friends playlist on Spotify'],
-      purpose: 'intent',
-      quote: 'Friend music.'
-    })
-    g('thumbsUp')
-    expect(getApp().view).toEqual({
-      kind: 'agentReady',
-      intent: 'Play the Friends playlist on Spotify',
-      variant: 'default',
-      sentence: 'Friend music.'
-    })
+    sendPhrase(...MEETING)
     await settle()
+    g('fist')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(signals[0].aborted).toBe(true)
+    await settle(500)
+    expect(run).not.toHaveBeenCalled()
+    expect(getApp().view).toEqual({ kind: 'ready' })
+
+    sendPhrase(word('hi'))
+    await settle()
+    c.tap('close')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(signals[1].aborted).toBe(true)
+    await settle(500)
     expect(run).not.toHaveBeenCalled()
   })
-
-  it('no intent at low confidence lists the candidate intents, then Insert text', async () => {
-    answer({
-      sentence: 'Friend music.',
-      intent: null,
-      alternatives: ['Play music', 'Text a friend', 'Open Music'],
-      confidence: 0.35,
-      needs_confirmation: false,
-      context_actions: ['More options']
-    })
-    await proceedWith(word('friend'), word('music'))
-    expect(viewAs('didYouMean')).toMatchObject({
-      variant: 'list',
-      options: ['Play music', 'Text a friend', 'Open Music', 'Insert text'],
-      purpose: 'intent'
-    })
-  })
-
-  it('text Claude is unsure about can still be inserted, or edited with a swipe left', async () => {
-    const typeText = vi.spyOn(services, 'typeText')
-    answer({
-      sentence: 'Thank you for the update.',
-      intent: null,
-      alternatives: ['Reply "Thank you for the update" to this email'],
-      confidence: 0.55,
-      needs_confirmation: false,
-      context_actions: ['Insert text', 'Reply']
-    })
-    await proceedWith(word('thank'), word('you'), word('update'))
-    expect(viewAs('didYouMean').options).toEqual(['Reply "Thank you for the update" to this email', 'Insert text'])
-    g('swipeLeft')
-    expect(viewAs('sentence')).toMatchObject({ sentence: 'Thank you update', tokens: [word('thank'), word('you'), word('update')] })
-    g('thumbsUp')
-    await settle()
-    fingers(2)
-    await settle()
-    expect(typeText).toHaveBeenCalledWith('Thank you for the update.')
-    expect(viewAs('toast').title).toBe('Text inserted')
-  })
-
-  it('Insert text and More options are offered whatever actions Claude suggests', async () => {
-    answer({
-      sentence: 'Pasta recipes.',
-      intent: null,
-      alternatives: [],
-      confidence: 0.8,
-      needs_confirmation: false,
-      context_actions: ['Search web', 'Copy', 'Translate']
-    })
-    await proceedWith(word('pasta'), word('recipes'))
-    expect(viewAs('contextActions').actions).toEqual(['Insert text', 'Search web', 'Copy', 'More options'])
-    fingers(4)
-    expect(getApp().view).toEqual({ kind: 'quickMenu', options: QUICK_MENU, fromSentence: true })
-  })
-
-  it('text to type (no intent, confident) shows the context actions, ignoring alternatives', async () => {
-    answer({
-      sentence: 'Thank you for the update!',
-      intent: null,
-      alternatives: ['Reply "Thank you for the update!" to this email'],
-      confidence: 0.88,
-      needs_confirmation: false,
-      context_actions: ['Insert text', 'Send message', 'More options']
-    })
-    await proceedWith(word('thank'), word('you'), word('update'))
-    expect(getApp().view).toEqual({
-      kind: 'contextActions',
-      sentence: 'Thank you for the update!',
-      actions: ['Insert text', 'Send message', 'More options']
-    })
-    expect([...activeGestures(getApp().view)].sort()).toEqual(['fingers', 'fist'])
-  })
-
-  it('a failed insert says why and stays, so it can be picked again once fixed', async () => {
-    const error = 'Allow fastASL in System Settings › Privacy & Security › Accessibility'
-    const typeText = vi.spyOn(services, 'typeText').mockResolvedValueOnce({ ok: false, error })
-    const actions: View = { kind: 'contextActions', sentence: 'Thanks!', actions: ['Insert text', 'More options'] }
-    c.setView(actions)
-    fingers(1)
-    await settle()
-    expect(getApp().view).toBe(actions)
-    expect(getApp().notice).toBe(error)
-    fingers(1)
-    await settle()
-    expect(typeText).toHaveBeenCalledTimes(2)
-    expect(viewAs('toast')).toMatchObject({ title: 'Text inserted', subtitle: 'Thanks!', ok: true })
-  })
-
-  it('a second pick while the text is still being typed does not type it twice', async () => {
-    let finish: (res: { ok: true; value: undefined }) => void = () => {}
-    const typeText = vi
-      .spyOn(services, 'typeText')
-      .mockReturnValueOnce(new Promise((resolve) => (finish = resolve)))
-    c.setView({ kind: 'contextActions', sentence: 'Thanks!', actions: ['Insert text', 'More options'] })
-    fingers(1)
-    fingers(1)
-    expect(typeText).toHaveBeenCalledTimes(1)
-    expect(getApp().notice).toBe('Still typing the last pick')
-    finish({ ok: true, value: undefined })
-    await settle()
-    expect(viewAs('toast').title).toBe('Text inserted')
-  })
-
-  it('More options › a quick-menu pick interprets the signed sentence with that prefix', async () => {
-    const interpret = vi
-      .spyOn(services, 'interpret')
-      .mockResolvedValueOnce({
-        ok: true,
-        value: intentResult({ sentence: 'Team lunch Friday at noon.', context_actions: ['Insert text', 'More options'] })
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        value: intentResult({
-          sentence: 'Team lunch Friday at noon.',
-          intent: 'Create a calendar event called Team lunch on Friday at 12 PM',
-          confidence: 0.9,
-          needs_confirmation: true
-        })
-      })
-    await proceedWith(word('team'), word('lunch'), word('friday'), word('noon'))
-    fingers(2)
-    expect(getApp().view).toEqual({ kind: 'quickMenu', options: QUICK_MENU, fromSentence: true })
-    fingers(1)
-    expect(viewAs('sentence')).toMatchObject({ sentence: 'Team lunch friday noon', thinking: true })
-    await settle()
-    expect(interpret).toHaveBeenCalledTimes(2)
-    expect(interpret.mock.calls[1][0]).toMatchObject({
-      tokens: ['team', 'lunch', 'friday', 'noon'],
-      intentPrefix: 'Create event',
-      mode: 'command'
-    })
-    expect(viewAs('agentReady').intent).toBe('Create a calendar event called Team lunch on Friday at 12 PM')
-  })
-
-  it('Claude without a key: notice, Agent ready with the raw sentence, then the agent is not available yet', async () => {
-    vi.spyOn(services, 'interpret').mockResolvedValue({
-      ok: false,
-      error: 'Add ANTHROPIC_API_KEY to .env',
-      missingKey: 'ANTHROPIC_API_KEY'
-    })
-    vi.spyOn(services, 'agentRun').mockResolvedValue({ ok: false, error: 'The agent is not available yet' })
-    await proceedWith(word('open'), word('notes'))
-    expect(getApp().notice).toBe('Add ANTHROPIC_API_KEY to .env')
-    expect(viewAs('agentReady')).toMatchObject({ intent: 'Open notes', sentence: 'Open notes' })
-    g('thumbsUp')
-    await settle()
-    expect(viewAs('done')).toMatchObject({
-      ok: false,
-      title: "Couldn't start the agent",
-      subtitle: 'The agent is not available yet'
-    })
-  })
-
-  it('a wrong key is reported as is, not as a missing key', async () => {
-    vi.spyOn(services, 'interpret').mockResolvedValue({ ok: false, error: 'Claude rejected ANTHROPIC_API_KEY. Check .env' })
-    await proceedWith(word('hello'))
-    expect(getApp().notice).toBe('Claude rejected ANTHROPIC_API_KEY. Check .env')
-    expect(viewAs('agentReady').intent).toBe('Hello')
-  })
 })
 
-describe('agent run', () => {
-  it('agentReady --thumbsUp--> working, steps stream, confirm, approve, done, auto-collapse', async () => {
-    const run = vi.spyOn(services, 'agentRun')
-    const ready = await toAgentReady()
-    g('thumbsUp')
-    expect(getApp().view).toEqual({ kind: 'working', intent: ready.intent, steps: [] })
-    await settle()
-    expect(run).toHaveBeenCalledWith({
-      intent: ready.intent,
-      sentence: ready.sentence,
-      frontmost: { name: 'Mail', windowTitle: 'New Message' }
-    })
-    expect(viewAs('working').steps).toEqual([{ id: 's0', label: 'Opening Calendar', status: 'current' }])
-
+describe('the conversation with the agent', () => {
+  it('steps stream onto the card; a write waits on the Confirm card; the result shows under what was signed', async () => {
+    const respond = vi.spyOn(services, 'agentRespond')
+    await toWorking()
+    expect(conversation('working').steps).toEqual([{ id: 's0', label: 'Opening Calendar', status: 'current' }])
     await settle(700)
-    expect(viewAs('working').steps.map((s) => s.status)).toEqual(['done', 'current'])
-
+    expect(conversation('working').steps.map((s) => s.status)).toEqual(['done', 'current'])
     await settle(700)
-    expect(viewAs('confirm').details).toMatchObject({ kind: 'event', title: 'Team Sync' })
+    const confirm = viewAs('confirm')
+    expect(confirm.details).toMatchObject({ kind: 'event', title: 'Team Sync' })
+    // Nothing is written until a thumbs up.
+    await settle(30_000)
+    expect(getApp().view).toBe(confirm)
+    expect(respond).not.toHaveBeenCalled()
 
     g('thumbsUp')
-    expect(viewAs('working').steps.map((s) => s.status)).toEqual(['done', 'current'])
+    expect(respond).toHaveBeenCalledWith(confirm.requestId, true)
+    expect(conversation('working')).toMatchObject({ said: 'Meeting tomorrow at 3pm.' })
     await settle()
-    expect(viewAs('working').steps.map((s) => s.status)).toEqual(['done', 'done', 'current'])
-
+    expect(conversation('working').steps.map((s) => s.status)).toEqual(['done', 'done', 'current'])
     await settle(1400)
-    expect(getApp().view).toEqual({
-      kind: 'done',
-      ok: true,
-      title: 'Meeting created',
-      subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
-      view: { kind: 'openApp', app: 'Calendar' },
-      intent: ready.intent
+    expect(conversation('reply')).toMatchObject({
+      said: 'Meeting tomorrow at 3pm.',
+      answer: {
+        ok: true,
+        title: 'Meeting created',
+        subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
+        text: 'Team Sync is on your calendar for tomorrow at 10.',
+        view: { kind: 'openApp', app: 'Calendar' }
+      }
     })
-
-    await settle(DONE_AUTO_COLLAPSE_MS - 1)
-    expect(getApp().view.kind).toBe('done')
-    await settle(1)
-    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    expect(statusFor(getApp().view, 'command')).toEqual({ label: 'Done', tone: 'active' })
   })
 
-  it('confirm --fist--> denied: the agent cancels', async () => {
+  it("a greeting: no tool runs, and the agent's own reply is shown (not \"Nothing was done\")", async () => {
+    sendPhrase(word('hello'))
+    await settle(500)
+    expect(conversation('working').steps).toEqual([{ id: 'plan', label: 'Thinking', status: 'current' }])
+    await settle(700)
+    expect(conversation('reply')).toMatchObject({ said: 'Hello.', answer: { ok: true, text: 'Hello! What can I do for you?' } })
+    expect(conversation('reply').answer?.title).toBeUndefined()
+    expect(statusFor(getApp().view, 'command')).toEqual({ label: 'Reply', tone: 'active' })
+  })
+
+  it('a real conversation: each message is a new phrase sent to the same agent', async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    await toReply(word('hello'))
+    sign(word('what'), word('time'))
+    g('handsDown')
+    expect(conversation('understanding').said).toBe('What time')
+    await settle(500)
+    await settle(700)
+    expect(conversation('reply').answer).toEqual({ ok: true, text: "It's 10:00 AM on Friday, October 25." })
+    expect(run.mock.calls.map(([req]) => req.sentence)).toEqual(['Hello.', 'What time'])
+  })
+
+  it('confirm --fist--> denied: the agent cancels, and the card says nothing was done', async () => {
     const respond = vi.spyOn(services, 'agentRespond')
-    await toAgentReady()
-    g('thumbsUp')
+    await toWorking()
     await settle(1400)
     const confirm = viewAs('confirm')
     g('fist')
-    expect(viewAs('working').intent).toBe('Schedule a meeting tomorrow at 3pm with the team')
+    expect(conversation('working').said).toBe('Meeting tomorrow at 3pm.')
     await settle()
     expect(respond).toHaveBeenCalledWith(confirm.requestId, false)
-    expect(viewAs('done')).toMatchObject({ ok: false, title: 'Nothing was done', subtitle: 'You cancelled it' })
-    // A failed result stays twice as long before collapsing.
-    await settle(DONE_AUTO_COLLAPSE_MS)
-    viewAs('done')
-    await settle(DONE_AUTO_COLLAPSE_MS)
-    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    expect(conversation('reply').answer).toEqual({ ok: false, title: 'Nothing was done', subtitle: 'You cancelled it' })
+    expect(statusFor(getApp().view, 'command')).toEqual({ label: 'Done', tone: 'idle' })
   })
 
   it('confirm buttons: primary approves, close denies', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
     const details = { kind: 'generic' as const, title: 'Delete file', lines: [] }
-    c.setView({ kind: 'agentReady', intent: 'Tidy up', variant: 'default', sentence: 'Tidy up' })
-    c.tap('primary')
+    void c.runAgent('Tidy up', 'Tidy up.')
     await settle()
     emit({ type: 'confirm', runId: 'r1', requestId: 'q1', tool: 'rm', details })
     c.tap('primary')
@@ -1806,26 +1510,24 @@ describe('agent run', () => {
     emit({ type: 'confirm', runId: 'r1', requestId: 'q2', tool: 'rm', details })
     c.tap('close')
     expect(manual.agentRespond).toHaveBeenLastCalledWith('q2', false)
-    expect(viewAs('working').intent).toBe('Tidy up')
+    expect(conversation('working').said).toBe('Tidy up.')
   })
 
   it('confirm returns to the live step list', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
-    c.setView({ kind: 'agentReady', intent: 'Tidy up', variant: 'default', sentence: 'Tidy up' })
-    g('thumbsUp')
+    void c.runAgent('Tidy up', 'Tidy up.')
     await settle()
     emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Look', status: 'current' } })
     emit({ type: 'confirm', runId: 'r1', requestId: 'q1', tool: 'rm', details: { kind: 'generic', title: 't', lines: [] } })
     emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Look', status: 'done' } })
     g('thumbsUp')
-    expect(viewAs('working').steps).toEqual([{ id: 'a', label: 'Look', status: 'done' }])
+    expect(conversation('working').steps).toEqual([{ id: 'a', label: 'Look', status: 'done' }])
   })
 
-  it('working --fist--> stops the agent, toasts, then returns to a fresh ready', async () => {
+  it('a fist while the agent works stops it, toasts, then returns to a fresh ready', async () => {
     const stop = vi.spyOn(services, 'agentStop')
-    await toAgentReady()
-    g('thumbsUp')
+    await toWorking()
     await settle(700)
     g('fist')
     await settle()
@@ -1849,8 +1551,7 @@ describe('agent run', () => {
 
   it('the close button stops a working agent', async () => {
     const stop = vi.spyOn(services, 'agentStop')
-    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
-    g('thumbsUp')
+    void c.runAgent('x', 'x')
     await settle()
     c.tap('close')
     await settle()
@@ -1862,14 +1563,12 @@ describe('agent run', () => {
     const interpret = vi.spyOn(services, 'interpret')
     g('thumbsUp')
     fingers(1)
-    signSentence(...MEETING)
-    g('thumbsUp')
+    sendPhrase(...MEETING)
     await settle(500)
-    g('thumbsUp')
-    await settle()
+    conversation('working')
     g('fist')
     await settle(TOAST_MS)
-    signSentence(word('hi'))
+    sendPhrase(word('hi'))
     await settle()
     expect(interpret.mock.calls.map((call) => call[0].intentPrefix)).toEqual(['Create event', undefined])
   })
@@ -1877,11 +1576,10 @@ describe('agent run', () => {
   it('ignores agent events that arrive after a stop', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
-    c.setView({ kind: 'agentReady', intent: 'Play music', variant: 'default', sentence: 'Play music' })
-    g('thumbsUp')
+    void c.runAgent('Play music', 'Play music.')
     await settle()
     emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Opening Spotify', status: 'current' } })
-    expect(viewAs('working').steps).toHaveLength(1)
+    expect(conversation('working').steps).toHaveLength(1)
     g('fist')
     await settle()
     emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Opening Spotify', status: 'done' } })
@@ -1897,8 +1595,7 @@ describe('agent run', () => {
   it('a stopped run that had already sent something says so instead of "Stopped"', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
-    c.setView({ kind: 'agentReady', intent: 'Text Mom on my way', variant: 'default', sentence: 'Text Mom on my way' })
-    g('thumbsUp')
+    void c.runAgent('Text Mom on my way', 'Text Mom on my way.')
     await settle()
     emit({ type: 'step', runId: 'r1', step: { id: 'm', label: 'Messaging Mom', status: 'current' } })
     g('fist')
@@ -1911,12 +1608,11 @@ describe('agent run', () => {
     expect(getApp().view).toEqual({ kind: 'ready' })
 
     // Once the card has moved on, the report is a notice.
-    c.setView({ kind: 'agentReady', intent: 'Email Sam hi', variant: 'default', sentence: 'Email Sam hi' })
-    g('thumbsUp')
+    void c.runAgent('Email Sam hi', 'Email Sam hi.')
     await settle()
     g('fist')
     await settle(TOAST_MS)
-    signSentence(word('hi'))
+    sign(word('hi'))
     emit({ type: 'done', runId: 'r1', result: { title: 'Email sent', subtitle: 'You stopped the rest', evidence: sent }, complete: false })
     expect(getApp().notice).toBe('Email sent before you stopped')
     expect(getApp().view.kind).not.toBe('toast')
@@ -1924,8 +1620,7 @@ describe('agent run', () => {
 
   it('a stop before the agent starts never launches it', async () => {
     const run = vi.spyOn(services, 'agentRun')
-    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
-    g('thumbsUp')
+    void c.runAgent('x', 'x')
     g('fist') // same frame, before frontmostApp() resolved
     await settle()
     expect(run).not.toHaveBeenCalled()
@@ -1935,81 +1630,75 @@ describe('agent run', () => {
   it('an agent that stops on its own shows the stopped toast', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
-    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
-    g('thumbsUp')
+    void c.runAgent('x', 'x')
     await settle()
     emit({ type: 'stopped', runId: 'r1' })
     expect(viewAs('toast')).toMatchObject({ title: 'Stopped', returnTo: 'ready' })
   })
 
-  it('a failed start shows a failed done card with the missing key', async () => {
+  it('an agent that cannot start says why on the card, which stays ready for the next message', async () => {
     vi.spyOn(services, 'agentRun').mockResolvedValue({ ok: false, error: 'nope', missingKey: 'FACTORY_API_KEY' })
-    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
-    g('thumbsUp')
-    await settle()
-    expect(viewAs('done')).toMatchObject({ ok: false, title: "Couldn't start the agent", subtitle: 'Add FACTORY_API_KEY to .env' })
-    await settle(DONE_AUTO_COLLAPSE_MS * 2)
-    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    sendPhrase(word('hello'))
+    await settle(500)
+    expect(conversation('reply')).toMatchObject({
+      said: 'Hello.',
+      answer: { ok: false, title: "Couldn't start the agent", subtitle: 'Add FACTORY_API_KEY to .env' }
+    })
+    expect(statusFor(getApp().view, 'command')).toEqual({ label: 'Done', tone: 'idle' })
+    await settle(REPLY_IDLE_MS)
+    expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
   it('a rejected start does not leave the card stuck on working', async () => {
     vi.spyOn(services, 'agentRun').mockRejectedValue(new Error('main crashed'))
-    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
-    g('thumbsUp')
+    void c.runAgent('x', 'x')
     await settle()
-    expect(viewAs('done')).toMatchObject({ ok: false, subtitle: 'main crashed' })
+    expect(conversation('reply').answer).toMatchObject({ ok: false, subtitle: 'main crashed' })
   })
 
   it('an error event ends the run', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
-    c.setView({ kind: 'agentReady', intent: 'Play music', variant: 'default', sentence: 'Play music' })
-    g('thumbsUp')
+    void c.runAgent('Play music', 'Play music.')
     await settle()
     emit({ type: 'error', runId: 'r1', message: 'Spotify is not running' })
-    expect(viewAs('done')).toMatchObject({ ok: false, title: "Couldn't finish", subtitle: 'Spotify is not running', intent: 'Play music' })
+    expect(conversation('reply')).toMatchObject({
+      said: 'Play music.',
+      answer: { ok: false, title: "Couldn't finish", subtitle: 'Spotify is not running' }
+    })
     emit({ type: 'error', runId: 'r1', message: 'x', missingKey: 'SPOTIFY_CLIENT_ID' })
-    expect(viewAs('done').subtitle).toBe('Spotify is not running')
+    expect(conversation('reply').answer?.subtitle).toBe('Spotify is not running')
   })
 
   it('an unfinished task is not ok, even with successful evidence; a complete one is, despite a failed retry', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
-    c.setView({ kind: 'agentReady', intent: 'Text Mom hi', variant: 'default', sentence: 'Text Mom hi' })
-    g('thumbsUp')
+    void c.runAgent('Text Mom hi', 'Text Mom hi.')
     await settle()
     const sent = [{ tool: 'message_send', args: {}, ok: true }]
     emit({ type: 'done', runId: 'r1', result: { title: 'Message sent', subtitle: 'Droid process exited', evidence: sent }, complete: false })
-    expect(viewAs('done')).toMatchObject({ ok: false, title: 'Message sent', subtitle: 'Droid process exited' })
-    await settle(DONE_AUTO_COLLAPSE_MS)
-    viewAs('done') // failures stay twice as long
-    // Not a completed task: 3 fingers don't save it, and New gesture doesn't suggest it.
-    expect(optionsFor(getApp().view)).toEqual(['View', 'New command'])
-    fingers(3)
-    await settle()
-    viewAs('done')
+    expect(conversation('reply').answer).toEqual({ ok: false, title: 'Message sent', subtitle: 'Droid process exited' })
+    // Not a completed task: New gesture doesn't suggest it.
     c.startNewGesture()
     await settle()
     expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
 
-    c.setView({ kind: 'agentReady', intent: 'Play jazz', variant: 'default', sentence: 'Play jazz' })
-    g('thumbsUp')
+    void c.runAgent('Play jazz', 'Play jazz.')
     await settle()
     const retried = [{ tool: 'spotify_play', args: {}, ok: false }, { tool: 'spotify_play', args: {}, ok: true }]
     emit({ type: 'done', runId: 'r1', result: { title: 'Playing jazz', subtitle: '', evidence: retried }, complete: true })
-    expect(viewAs('done').ok).toBe(true)
-    fingers(3)
+    expect(conversation('reply').answer?.ok).toBe(true)
+    c.startNewGesture()
     await settle()
     expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Play jazz', 'Open Notes'] })
   })
 
-  it('holds events until agentRun replies with the run id, then shows only that run\'s', async () => {
+  it("holds events until agentRun replies with the run id, then shows only that run's", async () => {
     const { services: manual, emit } = manualAgent(services)
     let reply: (value: { ok: true; value: { runId: string } }) => void = () => {}
     vi.mocked(manual.agentRun).mockImplementation(() => new Promise((resolve) => (reply = resolve)))
     useServices(manual)
-    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
-    g('thumbsUp')
+    void c.runAgent('x', 'x')
     await settle()
     // The previous run's stop and this run's start arrive before the reply: nothing shows yet.
     emit({ type: 'stopped', runId: 'old' })
@@ -2017,13 +1706,13 @@ describe('agent run', () => {
     emit({ type: 'step', runId: 'r2', step: { id: 'a', label: 'Thinking', status: 'current' } })
     emit({ type: 'step', runId: 'old', step: { id: 'b', label: 'Old step', status: 'current' } })
     emit({ type: 'confirm', runId: 'old', requestId: 'stale', tool: 'x', details: { kind: 'generic', title: 't', lines: [] } })
-    expect(viewAs('working').steps).toEqual([])
+    expect(conversation('working').steps).toEqual([])
     reply({ ok: true, value: { runId: 'r2' } })
     await settle()
-    expect(viewAs('working').steps).toEqual([{ id: 'a', label: 'Thinking', status: 'current' }])
+    expect(conversation('working').steps).toEqual([{ id: 'a', label: 'Thinking', status: 'current' }])
     expect(manual.agentRespond).toHaveBeenCalledWith('stale', false)
-    emit({ type: 'done', runId: 'r2', result: { title: 'Opened', subtitle: '', evidence: [] }, complete: true })
-    expect(viewAs('done').title).toBe('Opened')
+    emit({ type: 'done', runId: 'r2', result: { title: 'Opened', subtitle: '', evidence: [{ tool: 'open_app', args: {}, ok: true }] }, complete: true })
+    expect(conversation('reply').answer?.title).toBe('Opened')
   })
 
   it('a failed start drops the events it held, declining their confirms', async () => {
@@ -2031,80 +1720,198 @@ describe('agent run', () => {
     let reply: (value: { ok: false; error: string }) => void = () => {}
     vi.mocked(manual.agentRun).mockImplementation(() => new Promise((resolve) => (reply = resolve)))
     useServices(manual)
-    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
-    g('thumbsUp')
+    void c.runAgent('x', 'x')
     await settle()
     emit({ type: 'started', runId: 'old', intent: 'y' })
     emit({ type: 'confirm', runId: 'old', requestId: 'stale', tool: 'x', details: { kind: 'generic', title: 't', lines: [] } })
     reply({ ok: false, error: 'nope' })
     await settle()
-    expect(viewAs('done')).toMatchObject({ ok: false, title: "Couldn't start the agent", subtitle: 'nope' })
+    expect(conversation('reply').answer).toMatchObject({ ok: false, title: "Couldn't start the agent", subtitle: 'nope' })
     expect(manual.agentRespond).toHaveBeenCalledWith('stale', false)
   })
 
   it('still receives agent events after dispose() (React StrictMode remounts App)', async () => {
     c.dispose()
-    c.setView({ kind: 'agentReady', intent: 'x', variant: 'default', sentence: 'x' })
-    g('thumbsUp')
+    void c.runAgent('Schedule a meeting', 'Meeting.')
     await settle()
-    expect(viewAs('working').steps).toHaveLength(1)
+    expect(conversation('working').steps).toHaveLength(1)
   })
 
-  it('agentReady swipeLeft goes back to the sentence; fist cancels', async () => {
-    await toAgentReady()
-    g('swipeLeft')
-    expect(viewAs('sentence')).toMatchObject({ sentence: 'Meeting tomorrow at 3 pm', tokens: MEETING })
-    g('thumbsUp')
-    await settle(500)
-    g('fist')
-    expect(getApp().view).toEqual({ kind: 'ready' })
+  describe('the reply card', () => {
+    const reply = (answer: Answer): View => ({ kind: 'conversation', phase: 'reply', said: 'Hi.', steps: [], answer })
+
+    it(`stays ready for ${REPLY_IDLE_MS / 1000} s with no movement, then gives way to Ready; a movement being judged holds it`, async () => {
+      // The mock agent answers 1.2 s after hands down (interpret 0.5 s, then the agent 0.7 s).
+      sendPhrase(word('hello'))
+      await settle(1200)
+      const shown = conversation('reply')
+      await settle(REPLY_IDLE_MS - 1)
+      expect(getApp().view).toBe(shown)
+      await settle(1)
+      expect(getApp().view).toEqual({ kind: 'ready' })
+
+      sendPhrase(word('hello'))
+      await settle(1200)
+      const again = conversation('reply')
+      await settle(REPLY_IDLE_MS - 100)
+      c.signStart()
+      await settle(5000)
+      expect(getApp().view).toBe(again)
+      c.signRejected()
+      await settle(2000)
+      expect(getApp().view).toEqual({ kind: 'ready' })
+    })
+
+    it("has Ready's gestures: a thumbs up opens the quick menu, a fist hides the card, swipes switch modes, swipe up opens Settings", () => {
+      const shown = reply({ ok: true, text: 'Hello!' })
+      c.setView(shown)
+      g('thumbsUp')
+      expect(viewAs('quickMenu').options).toEqual(QUICK_MENU)
+      c.setView(shown)
+      g('fist')
+      expect(getApp().view).toEqual({ kind: 'collapsed' })
+      c.setView(shown)
+      g('swipeRight')
+      expect(getApp().mode).toBe('dictation')
+      expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
+      g('fist')
+      c.setView(shown)
+      g('swipeUp')
+      expect(viewAs('settings').settings).toEqual({ page: 'root' })
+    })
+
+    it('a thumbs up (or a click) opens what the agent made, and the card stays; the X goes back to Ready', () => {
+      const open = vi.spyOn(services, 'openTarget')
+      const shown = reply({ ok: true, title: 'Meeting created', subtitle: '', view: { kind: 'openApp', app: 'Calendar' } })
+      c.setView(shown)
+      g('thumbsUp')
+      expect(open).toHaveBeenCalledWith({ kind: 'openApp', app: 'Calendar' })
+      expect(getApp().view).toBe(shown)
+      c.tap('primary')
+      expect(open).toHaveBeenCalledTimes(2)
+      c.tap('close')
+      expect(getApp().view).toEqual({ kind: 'ready' })
+    })
+
+    it('an ambiguous sign on the reply asks, and the pick starts the next phrase', () => {
+      c.setView(reply({ ok: true, text: 'Hello!' }))
+      c.ambiguousSign(['where', 'what'])
+      expect(getApp().view).toEqual({ kind: 'didYouMean', options: ['where', 'what'], purpose: 'sign' })
+      fingers(2)
+      expect(viewAs('building')).toMatchObject({ tokens: [word('what')], sentence: 'What' })
+    })
   })
 
-  it('agentReady secondary button changes the sentence', async () => {
-    await toAgentReady()
-    c.tap('secondary')
-    expect(viewAs('sentence').sentence).toBe('Meeting tomorrow at 3 pm')
-  })
+  describe('a screenshot the agent took', () => {
+    const SHOT = '/Users/me/Desktop/fastASL Screenshot 2026-10-24 at 15.45.12.png'
+    const shot = { tool: 'take_screenshot', args: {}, ok: true }
 
-  it('done: 1 opens the result, 2 starts over, 3 saves as a gesture', async () => {
-    const open = vi.spyOn(services, 'openTarget')
-    const done: View = {
-      kind: 'done',
-      ok: true,
-      title: 'Meeting created',
-      subtitle: '',
-      view: { kind: 'openApp', app: 'Calendar' },
-      intent: 'Schedule a meeting'
+    async function screenshotRun(thumb: Services['imageThumb']) {
+      const { services: base, emit } = manualAgent(services)
+      const imageThumb = vi.fn(thumb)
+      const manual: Services = { ...base, imageThumb, openTarget: vi.fn(async () => {}) }
+      useServices(manual)
+      void c.runAgent('Take a screenshot', 'Take a screenshot.')
+      await settle()
+      emit({
+        type: 'done',
+        runId: 'r1',
+        result: {
+          title: 'Screenshot taken',
+          subtitle: 'Desktop · fastASL Screenshot 2026-10-24 at 15.45.12.png',
+          evidence: [shot],
+          view: { kind: 'openFile', path: SHOT },
+          reply: 'Saved it to your Desktop.'
+        },
+        complete: true
+      })
+      return { imageThumb, manual }
     }
-    c.setView(done)
-    fingers(1)
-    expect(open).toHaveBeenCalledWith({ kind: 'openApp', app: 'Calendar' })
-    fingers(2)
-    expect(getApp().view).toEqual({ kind: 'ready' })
 
-    c.setView(done)
-    fingers(3)
-    await settle()
-    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Schedule a meeting', 'Open Notes'] })
+    it("shows its thumbnail (from main) with the file name; a thumbs up opens it in Preview", async () => {
+      const { imageThumb, manual } = await screenshotRun(async () => ({ ok: true, value: 'data:image/png;base64,AAA' }))
+      expect(imageThumb).toHaveBeenCalledWith(SHOT)
+      await settle()
+      expect(conversation('reply').answer).toEqual({
+        ok: true,
+        title: 'Screenshot taken',
+        subtitle: 'Desktop · fastASL Screenshot 2026-10-24 at 15.45.12.png',
+        text: 'Saved it to your Desktop.',
+        view: { kind: 'openFile', path: SHOT },
+        thumb: 'data:image/png;base64,AAA'
+      })
+      g('thumbsUp')
+      expect(manual.openTarget).toHaveBeenCalledWith({ kind: 'openFile', path: SHOT })
+      conversation('reply')
+    })
 
-    c.setView(done)
-    g('thumbsUp')
-    expect(getApp().view).toEqual({ kind: 'ready' })
-    c.setView(done)
-    g('swipeUp')
-    expect(viewAs('settings').settings).toEqual({ page: 'root' })
-    c.setView(done)
-    g('fist')
-    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    it('a thumbnail main refuses, or one that never comes, is left out', async () => {
+      await screenshotRun(async () => ({ ok: false, error: 'Not a screenshot fastASL took' }))
+      await settle()
+      expect(conversation('reply').answer).toMatchObject({ title: 'Screenshot taken', view: { kind: 'openFile', path: SHOT } })
+      expect(conversation('reply').answer?.thumb).toBeUndefined()
+
+      await screenshotRun(() => new Promise(() => {}))
+      await settle(1499)
+      conversation('working')
+      await settle(1)
+      expect(conversation('reply').answer?.thumb).toBeUndefined()
+    })
+
+    it('a stop while the thumbnail loads wins', async () => {
+      await screenshotRun(() => new Promise((resolve) => setTimeout(() => resolve({ ok: true, value: 'data:x' }), 300)))
+      g('fist')
+      await settle(300)
+      expect(viewAs('toast').title).toBe('Stopped')
+    })
+
+    it('files that are not images get no thumbnail call', async () => {
+      const { services: manual, emit } = manualAgent(services)
+      const imageThumb = vi.fn(async () => ({ ok: true as const, value: 'data:x' }))
+      useServices({ ...manual, imageThumb })
+      void c.runAgent('Open the report', 'Open the report.')
+      await settle()
+      const view = { kind: 'openFile' as const, path: '/Users/me/report.pdf' }
+      emit({ type: 'done', runId: 'r1', result: { title: 'Opened report.pdf', subtitle: '', evidence: [shot], view }, complete: true })
+      expect(conversation('reply').answer).toMatchObject({ view })
+      expect(imageThumb).not.toHaveBeenCalled()
+    })
   })
 
-  it('done buttons: primary starts over, secondary opens the result', () => {
-    const open = vi.spyOn(services, 'openTarget')
-    c.setView({ kind: 'done', ok: true, title: 't', subtitle: '', view: { kind: 'openUrl', url: 'https://x.dev' } })
-    c.tap('secondary')
-    expect(open).toHaveBeenCalledWith({ kind: 'openUrl', url: 'https://x.dev' })
-    c.tap('primary')
-    expect(getApp().view).toEqual({ kind: 'ready' })
+  describe('answerFor', () => {
+    it("is the model's reply when no tool ran", () => {
+      expect(answerFor({ title: 'Nothing was done', subtitle: "The agent didn't run any action", evidence: [], reply: 'Hi there!' }, false)).toEqual({
+        ok: true,
+        text: 'Hi there!'
+      })
+    })
+
+    it('keeps the evidence-based title and subtitle when tools ran, with the reply under them', () => {
+      const evidence = [{ tool: 'web_search', args: {}, ok: true }]
+      const view = { kind: 'openUrl' as const, url: 'https://google.com' }
+      expect(answerFor({ title: 'Searched the web', subtitle: 'asl', evidence, view, reply: 'Opened a search.' }, true)).toEqual({
+        ok: true,
+        title: 'Searched the web',
+        subtitle: 'asl',
+        text: 'Opened a search.',
+        view
+      })
+    })
+
+    it("is the model's reply when only lookups ran, not the lookup's headline", () => {
+      const evidence = [{ tool: 'contacts_find', args: { query: 'Mom' }, ok: true }]
+      expect(
+        answerFor({ title: 'Found 18 contacts', subtitle: 'Mom Machli', evidence, reply: "I couldn't find a contact named exactly Mom." }, true)
+      ).toEqual({ ok: true, text: "I couldn't find a contact named exactly Mom." })
+    })
+
+    it('says nothing was done (and why) when no tool ran and the model said nothing usable', () => {
+      expect(answerFor({ title: 'Nothing was done', subtitle: 'You cancelled it', evidence: [] }, false)).toEqual({
+        ok: false,
+        title: 'Nothing was done',
+        subtitle: 'You cancelled it'
+      })
+    })
   })
 
   describe('a failed start uses up the phrase', () => {
@@ -2112,21 +1919,23 @@ describe('agent run', () => {
       vi.spyOn(services, 'agentRun').mockResolvedValue({ ok: false, error: 'The agent is not available yet' })
       g('thumbsUp')
       fingers(1) // Create event: sign the details
-      signSentence(word('meeting'), word('tomorrow'))
-      g('thumbsUp')
+      sendPhrase(word('meeting'), word('tomorrow'))
       await settle(500)
-      g('thumbsUp')
-      await settle()
-      expect(viewAs('done').title).toBe("Couldn't start the agent")
+      expect(conversation('reply').answer?.title).toBe("Couldn't start the agent")
       g('swipeUp')
       g('fist')
       expect(getApp().view).toEqual({ kind: 'ready' })
     }
 
-    it('failed start › settings › back › sign begins a new sentence', async () => {
+    it('failed start › settings › back › a sign begins a new phrase', async () => {
+      const interpret = vi.spyOn(services, 'interpret')
       await failedStart()
-      signSentence(word('hello'))
-      expect(viewAs('sentence').sentence).toBe('Hello')
+      sendPhrase(word('hello'))
+      await settle()
+      expect(interpret.mock.calls.map(([req]) => [req.sentence, req.intentPrefix])).toEqual([
+        ['Meeting tomorrow', 'Create event'],
+        ['Hello', undefined]
+      ])
     })
 
     it('failed start › settings › back › a quick-menu pick waits for its details', async () => {
@@ -2147,7 +1956,6 @@ describe('did you mean', () => {
     c.ambiguousSign(['tomorrow', 'today', 'tonight', 'Tuesday'])
     expect(getApp().view).toEqual({
       kind: 'didYouMean',
-      variant: 'list',
       options: ['tomorrow', 'today', 'tonight'],
       purpose: 'sign'
     })
@@ -2164,46 +1972,12 @@ describe('did you mean', () => {
     expect(viewAs('building')).toMatchObject({ tokens: [word('hello')] })
   })
 
-  it('ambiguous sign on the Sentence card: asks, and the pick continues the phrase', () => {
-    signSentence(word('meeting'), word('tomorrow'))
-    c.ambiguousSign(['at', 'and'])
-    expect(viewAs('didYouMean').options).toEqual(['at', 'and'])
-    fingers(1)
-    expect(viewAs('building')).toMatchObject({ sentence: 'Meeting tomorrow at' })
-  })
 
   it('"Edit" on an ambiguous sign returns to the phrase', () => {
     sign(word('meeting'), word('at'))
     c.ambiguousSign(['three', 'tree'])
     c.tap('secondary')
     expect(viewAs('building')).toMatchObject({ tokens: [word('meeting'), word('at')], sentence: 'Meeting at' })
-  })
-
-  it('quote variant: "Yes, send" shows the intent on Agent ready before it runs', () => {
-    c.setView({
-      kind: 'didYouMean',
-      variant: 'quote',
-      quote: 'Meeting tomorrow at 3pm',
-      options: ['Send "Meeting tomorrow at 3pm"'],
-      purpose: 'intent'
-    })
-    c.tap('primary')
-    expect(getApp().view).toEqual({
-      kind: 'agentReady',
-      intent: 'Send "Meeting tomorrow at 3pm"',
-      variant: 'default',
-      sentence: 'Meeting tomorrow at 3pm'
-    })
-  })
-
-  it('quote variant: swipeLeft edits, fist cancels', () => {
-    sign(word('meeting'), word('tomorrow'))
-    c.setView({ kind: 'didYouMean', variant: 'quote', quote: 'Meeting tomorrow', options: ['Send it'], purpose: 'intent' })
-    g('swipeLeft')
-    expect(viewAs('sentence').sentence).toBe('Meeting tomorrow')
-    c.setView({ kind: 'didYouMean', variant: 'quote', quote: 'Meeting tomorrow', options: ['Send it'], purpose: 'intent' })
-    g('fist')
-    expect(getApp().view).toEqual({ kind: 'ready' })
   })
 })
 
@@ -2217,7 +1991,6 @@ describe('spell mode', () => {
     g('handsDown')
     expect(getApp().view).toEqual({
       kind: 'didYouMean',
-      variant: 'list',
       options: ['KC'],
       purpose: 'spell',
       quote: 'KC',
@@ -2226,7 +1999,6 @@ describe('spell mode', () => {
     await settle(300)
     expect(getApp().view).toEqual({
       kind: 'didYouMean',
-      variant: 'list',
       options: ['KC', 'kc', 'kc@calhacks.io'],
       purpose: 'spell',
       quote: 'KC'
@@ -2277,7 +2049,7 @@ describe('spell mode', () => {
     sign(letter('K'), letter('C'))
     g('thumbsUp')
     await settle()
-    expect(getApp().view).toEqual({ kind: 'didYouMean', variant: 'list', options: ['KC'], purpose: 'spell', quote: 'KC' })
+    expect(getApp().view).toEqual({ kind: 'didYouMean', options: ['KC'], purpose: 'spell', quote: 'KC' })
     expect(getApp().notice).toBe('Add ANTHROPIC_API_KEY to .env')
   })
 
@@ -2420,16 +2192,6 @@ describe('dictation mode', () => {
     expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
     sign(word('hello'))
     expect(typeText.mock.calls.map((call) => call[0])).toEqual(['my', ' name', ' is', ' KC', ' hello'])
-  })
-
-  it('inserted text right after dictated words is spaced too', async () => {
-    const typeText = vi.spyOn(services, 'typeText')
-    sign(word('hello'))
-    c.setView({ kind: 'contextActions', sentence: 'Thanks!', actions: ['Insert text', 'More options'] })
-    fingers(1)
-    await settle()
-    expect(typeText).toHaveBeenLastCalledWith(' Thanks!')
-    expect(viewAs('toast').subtitle).toBe('Thanks!')
   })
 
   it('a long pause off the card, or an agent run, starts a new run without a space', async () => {
@@ -2575,11 +2337,20 @@ describe('loadSettings (launch)', () => {
 })
 
 describe('mockServices', () => {
+  it('answers a greeting or a question in words, with no tool', async () => {
+    const mock = mockServices()
+    const done: AgentEvent[] = []
+    mock.onAgentEvent((e) => e.type === 'done' && done.push(e))
+    await mock.agentRun({ intent: 'Hello.', sentence: 'Hello.', frontmost: null })
+    await settle(700)
+    expect(done[0]).toMatchObject({ complete: false, result: { evidence: [], reply: 'Hello! What can I do for you?' } })
+  })
+
   it('emits nothing after a stop during a pending confirmation', async () => {
     const mock = mockServices()
     const events: AgentEvent['type'][] = []
     mock.onAgentEvent((e) => events.push(e.type))
-    await mock.agentRun({ intent: 'x', sentence: 'x', frontmost: null })
+    await mock.agentRun({ intent: 'Schedule a meeting', sentence: 'Meeting.', frontmost: null })
     await settle(1400)
     expect(events.at(-1)).toBe('confirm')
     await mock.agentStop()
@@ -2590,24 +2361,60 @@ describe('mockServices', () => {
 })
 
 describe('shortcuts and toasts', () => {
-  it('collapsed shortcut -> toast with compiled meta -> back to collapsed', async () => {
+  it('the peace sign from the pill: a toast with the screenshot, its file name and compiled meta, then back to collapsed', async () => {
     const run = vi.spyOn(services, 'runShortcut')
+    const thumb = vi.spyOn(services, 'imageThumb')
     c.setView({ kind: 'collapsed' })
     c.gesture({ gesture: 'shape', shapeId: 'builtin-peace' })
     expect(run).toHaveBeenCalledWith('builtin-peace')
     await settle(400)
+    expect(thumb).toHaveBeenCalledWith(MOCK_SCREENSHOT_PATH)
     expect(getApp().view).toEqual({
       kind: 'toast',
       title: 'Screenshot taken',
-      subtitle: 'Saved to Desktop',
+      subtitle: 'Desktop · fastASL Screenshot 2026-10-25 at 10.00.00.png',
       ok: true,
       meta: 'compiled · 0.4 s',
+      view: { kind: 'openFile', path: MOCK_SCREENSHOT_PATH },
+      thumb: MOCK_SCREENSHOT_THUMB,
       returnTo: 'collapsed'
     })
-    await settle(TOAST_MS - 1)
+    expect(activeGestures(getApp().view)).toEqual(new Set(['thumbsUp', 'fist']))
+    // Long enough to see it and raise a thumbs up.
+    await settle(TOAST_THUMB_MS - 1)
     expect(getApp().view.kind).toBe('toast')
     await settle(1)
     expect(getApp().view).toEqual({ kind: 'collapsed' })
+  })
+
+  it('a thumbs up (or a click on the thumbnail) opens the screenshot in Preview, and the toast goes', async () => {
+    const open = vi.spyOn(services, 'openTarget')
+    c.gesture({ gesture: 'shape', shapeId: 'builtin-peace' })
+    await settle(400)
+    viewAs('toast')
+    g('thumbsUp')
+    expect(open).toHaveBeenCalledWith({ kind: 'openFile', path: MOCK_SCREENSHOT_PATH })
+    expect(getApp().view).toEqual({ kind: 'ready' })
+
+    c.gesture({ gesture: 'shape', shapeId: 'builtin-peace' })
+    await settle(400)
+    c.tap('primary')
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('without a thumbnail (main refused it) the toast keeps the camera tile, and a thumbs up does nothing', async () => {
+    const open = vi.spyOn(services, 'openTarget')
+    vi.spyOn(services, 'imageThumb').mockResolvedValue({ ok: false, error: 'Not a screenshot fastASL took' })
+    c.gesture({ gesture: 'shape', shapeId: 'builtin-peace' })
+    await settle(400)
+    const toast = viewAs('toast')
+    expect(toast.thumb).toBeUndefined()
+    expect(toast.view).toEqual({ kind: 'openFile', path: MOCK_SCREENSHOT_PATH })
+    g('thumbsUp')
+    expect(open).not.toHaveBeenCalled()
+    await settle(TOAST_MS)
+    expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
   it('a shortcut from ready returns to ready', async () => {
@@ -2643,7 +2450,7 @@ describe('shortcuts and toasts', () => {
       return { manual, emit, finish: (res: ShortcutRunResult) => finish(res) }
     }
 
-    it('a replay that needs a confirm shows Working and Confirm; the result is the toast, not a Done card', async () => {
+    it('a replay that needs a confirm shows Working and Confirm; the result is the toast, not a conversation', async () => {
       const { manual, emit, finish } = manualShortcut()
       c.setView({ kind: 'collapsed' })
       c.gesture({ gesture: 'shape', shapeId: 'g2' })
@@ -2703,15 +2510,14 @@ describe('shortcuts and toasts', () => {
     it('a command started while a silent shortcut runs replaces it: no toast over the Working card', async () => {
       const { emit, finish } = manualShortcut()
       c.gesture({ gesture: 'shape', shapeId: 'g2' })
-      c.setView({ kind: 'agentReady', intent: 'Open Calculator', variant: 'default', sentence: 'Open Calculator' })
-      g('thumbsUp')
+      void c.runAgent('Open Calculator', 'Open Calculator.')
       await settle()
       finish({ ok: false, title: 'Stopped', subtitle: 'The shortcut was stopped', compiled: true, durationMs: 300 })
       await settle()
-      expect(viewAs('working').intent).toBe('Open Calculator')
+      expect(conversation('working').said).toBe('Open Calculator.')
       // Its runs are no longer adopted either.
       emit({ type: 'started', runId: 's9', intent: 'Play Motion Sickness' })
-      expect(viewAs('working').intent).toBe('Open Calculator')
+      expect(conversation('working').said).toBe('Open Calculator.')
     })
 
     it('a shortcut\'s fallback that announces itself before the command\'s reply is not taken for the command', async () => {
@@ -2719,8 +2525,7 @@ describe('shortcuts and toasts', () => {
       let reply: (value: { ok: true; value: { runId: string } }) => void = () => {}
       vi.mocked(manual.agentRun).mockImplementation(() => new Promise((resolve) => (reply = resolve)))
       c.gesture({ gesture: 'shape', shapeId: 'g2' }) // a silent compiled replay
-      c.setView({ kind: 'agentReady', intent: 'Text Mom on my way', variant: 'default', sentence: 'Text Mom on my way' })
-      g('thumbsUp')
+      void c.runAgent('Text Mom on my way', 'Text Mom on my way.')
       await settle()
       // The replay failed first, so main started its agent fallback; the command then stops it.
       emit({ type: 'started', runId: 'f', intent: 'Play Motion Sickness' })
@@ -2729,7 +2534,7 @@ describe('shortcuts and toasts', () => {
       emit({ type: 'step', runId: 'u', step: { id: 'p', label: 'Thinking', status: 'current' } })
       reply({ ok: true, value: { runId: 'u' } })
       await settle()
-      expect(viewAs('working')).toMatchObject({ intent: 'Text Mom on my way', steps: [{ id: 'p', label: 'Thinking', status: 'current' }] })
+      expect(conversation('working')).toMatchObject({ said: 'Text Mom on my way.', steps: [{ id: 'p', label: 'Thinking', status: 'current' }] })
       emit({ type: 'confirm', runId: 'u', requestId: 'q1', tool: 'message_send', details: generic })
       viewAs('confirm')
       expect(manual.agentRespond).not.toHaveBeenCalled()
@@ -2738,7 +2543,7 @@ describe('shortcuts and toasts', () => {
       g('thumbsUp')
       expect(manual.agentRespond).toHaveBeenCalledWith('q1', true)
       emit({ type: 'done', runId: 'u', result: { title: 'Message sent', subtitle: 'to Mom', evidence: [] }, complete: true })
-      expect(viewAs('done')).toMatchObject({ ok: true, title: 'Message sent', intent: 'Text Mom on my way' })
+      expect(conversation('reply')).toMatchObject({ said: 'Text Mom on my way.', answer: { ok: true, title: 'Message sent' } })
     })
 
     it('a run nobody started is ignored, and its confirm declined', () => {
@@ -2810,73 +2615,53 @@ describe('LLM status notice (rate limits)', () => {
     return { interprets, spells }
   }
 
-  it('shows while the interpretation retries, through Understanding..., and goes with the answer', async () => {
+  it('shows on the conversation card while the interpretation retries, and goes with the answer', async () => {
     const llm = heldLlm()
-    signSentence(...MEETING)
+    const run = vi.spyOn(services, 'agentRun')
+    sendPhrase(...MEETING)
     await settle()
     expect(llm.interprets).toHaveLength(1)
     llm.interprets[0].status(RATE_LIMITED)
     expect(getApp().notice).toBe(RATE_LIMITED)
-    g('thumbsUp')
-    expect(viewAs('sentence').thinking).toBe(true)
-    expect(getApp().notice).toBe(RATE_LIMITED)
+    conversation('understanding')
 
     llm.interprets[0].answer({ ok: true, value: intentResult({ intent: 'Open Notes' }) })
     await settle()
-    expect(viewAs('agentReady').intent).toBe('Open Notes')
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'Open Notes' }))
     expect(getApp().notice).toBeNull()
   })
 
-  it('gives way to the final error, shown as before', async () => {
+  it('gives way to the final error, and the message goes to the agent anyway', async () => {
     const llm = heldLlm()
-    signSentence(...MEETING)
+    const run = vi.spyOn(services, 'agentRun')
+    sendPhrase(...MEETING)
     await settle()
     llm.interprets[0].status(RATE_LIMITED)
-    g('thumbsUp')
     llm.interprets[0].answer({ ok: false, error: 'Gemini is rate limited. Try again in a minute' })
     await settle()
     expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
-    expect(viewAs('agentReady')).toMatchObject({ intent: 'Meeting tomorrow at 3 pm' })
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'Meeting tomorrow at 3 pm' }))
+    expect(conversation('working').said).toBe('Meeting tomorrow at 3 pm')
     await settle(5000)
     expect(getApp().notice).toBeNull()
   })
 
-  it('goes at once when the sentence is edited, and the old call cannot bring it back', async () => {
+  it('goes when the phrase is cancelled, and the call with it', async () => {
     const llm = heldLlm()
-    signSentence(...MEETING)
-    await settle()
-    llm.interprets[0].status(RATE_LIMITED)
-    c.editSentence('open notes')
-    expect(getApp().notice).toBeNull()
-    await settle()
-    expect(llm.interprets).toHaveLength(2)
-
-    llm.interprets[0].status(RATE_LIMITED)
-    expect(getApp().notice).toBeNull()
-    llm.interprets[0].answer({ ok: false, error: 'Gemini is rate limited. Try again in a minute' })
-    await settle()
-    expect(getApp().notice).toBeNull()
-
-    // The new call's own status still shows.
-    llm.interprets[1].status(RATE_LIMITED)
-    expect(getApp().notice).toBe(RATE_LIMITED)
-  })
-
-  it('goes when the phrase is cancelled', async () => {
-    const llm = heldLlm()
-    signSentence(...MEETING)
+    sendPhrase(...MEETING)
     await settle()
     llm.interprets[0].status(RATE_LIMITED)
     g('fist')
     expect(viewAs('ready')).toBeTruthy()
     expect(getApp().notice).toBeNull()
+    expect(llm.interprets[0].signal?.aborted).toBe(true)
     llm.interprets[0].status(RATE_LIMITED)
     expect(getApp().notice).toBeNull()
   })
 
   it('never covers another notice, and never clears it', async () => {
     const llm = heldLlm()
-    signSentence(...MEETING)
+    sendPhrase(...MEETING)
     await settle()
     setApp({ notice: 'Add GEMINI_API_KEY to .env' })
     llm.interprets[0].status(RATE_LIMITED)
@@ -2888,7 +2673,7 @@ describe('LLM status notice (rate limits)', () => {
 
   it('a notice that comes up meanwhile is left alone when the call settles', async () => {
     const llm = heldLlm()
-    signSentence(...MEETING)
+    sendPhrase(...MEETING)
     await settle()
     llm.interprets[0].status(RATE_LIMITED)
     c.notify('Still typing the last pick')
@@ -2928,45 +2713,19 @@ describe('LLM status notice (rate limits)', () => {
     expect(getApp().notice).toBeNull()
   })
 
-  it('says on the Sentence card itself when the retries run out, without waiting for proceed', async () => {
-    const llm = heldLlm()
-    signSentence(...MEETING)
-    await settle()
-    llm.interprets[0].status(RATE_LIMITED)
-    llm.interprets[0].answer({ ok: false, error: 'Gemini is rate limited. Try again in a minute' })
-    await settle()
-    expect(viewAs('sentence').thinking).toBeFalsy()
-    expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
-    await settle(5000)
-    expect(getApp().notice).toBeNull()
-
-    // Proceeding later still says it, as before.
-    g('thumbsUp')
-    await settle()
-    expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
-    expect(viewAs('agentReady').intent).toBe('Meeting tomorrow at 3 pm')
-  })
-
-  it('a prefetch that fails without having shown a status stays quiet until proceed, as before', async () => {
-    const llm = heldLlm()
-    signSentence(...MEETING)
-    await settle()
-    llm.interprets[0].answer({ ok: false, error: 'Gemini is busy right now. Try again in a moment' })
-    await settle()
-    expect(getApp().notice).toBeNull()
-  })
-
   it("a new call's status takes the place of the last call's error", async () => {
     const llm = heldLlm()
-    signSentence(...MEETING)
+    sendPhrase(...MEETING)
     await settle()
     llm.interprets[0].status(RATE_LIMITED)
-    g('thumbsUp')
     llm.interprets[0].answer({ ok: false, error: 'Gemini is rate limited. Try again in a minute' })
     await settle()
     expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
 
-    g('swipeLeft') // Edit: back to the sentence, which is interpreted again
+    g('fist') // stops the agent the message went to
+    await settle(TOAST_MS)
+    expect(getApp().notice).toBe('Gemini is rate limited. Try again in a minute')
+    sendPhrase(word('hello'))
     await settle()
     expect(llm.interprets).toHaveLength(2)
     llm.interprets[1].status(RATE_LIMITED)
@@ -2976,32 +2735,21 @@ describe('LLM status notice (rate limits)', () => {
     expect(getApp().notice).toBeNull()
   })
 
-  it('picking an ambiguous sign drops the old sentence\'s call and its status', async () => {
+  it('cancels a call once the card drops it: cancelled or moved on from', async () => {
     const llm = heldLlm()
-    signSentence(...MEETING)
-    await settle()
-    llm.interprets[0].status(RATE_LIMITED)
-    c.ambiguousSign(['today', 'tonight'])
-    fingers(1)
-    expect(viewAs('building').sentence).toBe('Meeting tomorrow at 3 pm today')
-    expect(getApp().notice).toBeNull()
-    expect(llm.interprets[0].signal?.aborted).toBe(true)
-    llm.interprets[0].status(RATE_LIMITED)
-    expect(getApp().notice).toBeNull()
-  })
-
-  it('cancels a call once the card drops it: edited, cancelled or moved on from', async () => {
-    const llm = heldLlm()
-    signSentence(...MEETING)
+    sendPhrase(...MEETING)
     await settle()
     expect(llm.interprets[0].signal?.aborted).toBe(false)
-    c.editSentence('open notes')
+    g('fist')
     expect(llm.interprets[0].signal?.aborted).toBe(true)
+
+    sendPhrase(word('hello'))
     await settle()
     expect(llm.interprets[1].signal?.aborted).toBe(false)
-    g('fist')
+    c.collapse()
     expect(llm.interprets[1].signal?.aborted).toBe(true)
 
+    c.expand()
     setApp({ mode: 'spell' })
     sign(letter('K'), letter('R'))
     g('handsDown')
@@ -3013,14 +2761,13 @@ describe('LLM status notice (rate limits)', () => {
 
   it('keeps the call the card is waiting on, and leaves an answered one alone', async () => {
     const llm = heldLlm()
-    signSentence(...MEETING)
+    sendPhrase(...MEETING)
     await settle()
-    g('thumbsUp') // Understanding... waits on the same call
     expect(llm.interprets).toHaveLength(1)
     expect(llm.interprets[0].signal?.aborted).toBe(false)
     llm.interprets[0].answer({ ok: true, value: intentResult({ intent: 'Open Notes' }) })
     await settle()
-    expect(viewAs('agentReady').intent).toBe('Open Notes')
+    conversation('working')
     g('fist')
     expect(llm.interprets[0].signal?.aborted).toBe(false)
   })
@@ -3055,7 +2802,7 @@ const HELLO_GUESS: SignGuess = {
     { gloss: 'GOODBYE', confidence: 0.2, hands: 1 }
   ]
 }
-const LEARN_LIST: View = { kind: 'didYouMean', variant: 'list', options: ['HELLO', 'HI', 'GOODBYE'], purpose: 'learn' }
+const LEARN_LIST: View = { kind: 'didYouMean', options: ['HELLO', 'HI', 'GOODBYE'], purpose: 'learn' }
 
 describe('guess, confirm, learn', () => {
   let guesses: ReturnType<typeof scriptedGuesses>
@@ -3164,18 +2911,32 @@ describe('guess, confirm, learn', () => {
     expect(viewAs('building').tokens.map((t) => t.text)).toEqual(['meeting', 'tomorrow', 'hi', '3'])
   })
 
-  it('a guess answered after the phrase ended: the pick starts the next phrase with the word', async () => {
+  it('a guess still running when the phrase is sent is dropped: the message goes without it', async () => {
     sign(word('meeting'))
     c.token(word('tomorrow'))
     unknown()
-    g('handsDown') // the phrase ends while the guess runs: the guess goes on
-    expect(viewAs('sentence').sentence).toBe('Meeting tomorrow')
-    expect(guesses.calls[0].signal?.aborted).toBe(false)
+    g('handsDown')
+    expect(conversation('understanding').said).toBe('Meeting tomorrow')
+    expect(guesses.calls[0].signal?.aborted).toBe(true)
+    await answer({ ok: true, value: HELLO_GUESS })
+    conversation('understanding')
+  })
+
+  it("on the agent's reply: a guess is asked, and the pick starts the next message with the word", async () => {
+    const reply: View = { kind: 'conversation', phase: 'reply', said: 'Hello.', steps: [], answer: { ok: true, text: 'Hi!' } }
+    c.setView(reply)
+    unknown()
+    await answer({ ok: true, value: HELLO_GUESS })
+    expect(getApp().view).toEqual(LEARN_LIST)
+    g('fist')
+    expect(getApp().view).toBe(reply)
+    await settle(SIGN_GUESS_COOLDOWN_MS)
+    unknown()
     await answer({ ok: true, value: HELLO_GUESS })
     fingers(2)
     expect(viewAs('recognizing').token).toBe('hi')
     g('handsDown')
-    expect(viewAs('sentence')).toMatchObject({ sentence: 'Hi', tokens: [word('hi')] })
+    expect(conversation('understanding').said).toBe('Hi')
   })
 
   it('the X and Edit also decline', async () => {
@@ -3306,7 +3067,7 @@ describe('guess, confirm, learn', () => {
     expect(getApp().notice).toBeNull()
   })
 
-  it('never guesses without an LLM, in Spell mode, or while the Sentence card proceeds', async () => {
+  it('never guesses without an LLM, in Spell mode, or while a message is with the interpreter or the agent', async () => {
     const off = scriptedGuesses(mockServices(), () => 'Add GEMINI_API_KEY to .env')
     useServices(off.services)
     unknown()
@@ -3322,7 +3083,9 @@ describe('guess, confirm, learn', () => {
     expect(c.guessesSigns()).toBe(false)
     expect(c.wantsSignFrames()).toBe(false)
     setApp({ mode: 'command' })
-    c.setView({ kind: 'sentence', sentence: 'Hi', tokens: [word('hi')], thinking: true })
+    c.setView({ kind: 'conversation', phase: 'understanding', said: 'Hi', steps: [] })
+    expect(c.guessesSigns()).toBe(false)
+    c.setView({ kind: 'conversation', phase: 'working', said: 'Hi', steps: [] })
     expect(c.guessesSigns()).toBe(false)
     c.setView({ kind: 'collapsed' })
     expect(c.guessesSigns()).toBe(false)

@@ -27,6 +27,12 @@ export interface OsaOptions {
   timeoutMs?: number
   /** App the script talks to; used to word errors ("Spotify isn't running"). */
   app?: string
+  /**
+   * `app` is the exact name of the app the script drives: when it answers "isn't running" (-600,
+   * seen on a real Mac right after Calendar or Contacts had been quit), start it hidden and retry.
+   * Safe for scripts that send or create: a -600 means the app never got the command.
+   */
+  launch?: boolean
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000
@@ -38,7 +44,51 @@ export const SEP = { field: '\u001f', record: '\u001e', list: '\u001d' } as cons
 export const AS_SEPARATORS = 'set US to character id 31\nset RS to character id 30\nset GS to character id 29'
 
 export function runAppleScript(script: string, options?: OsaOptions): Promise<string> {
-  return osascript(['-e', script], options)
+  return retryWhenNotRunning(() => osascript(['-e', script], options), options)
+}
+
+/** How often, and how far apart, a script is retried after launching its app. */
+const LAUNCH_RETRIES = 4
+const LAUNCH_WAIT_MS = 1000
+
+export interface LaunchDeps {
+  /** Starts the app without bringing it to the front (`open -g -a`), so the user's front app stays put. */
+  openHidden(app: string): Promise<void>
+  sleep(ms: number): Promise<void>
+}
+
+const launchDeps: LaunchDeps = {
+  openHidden: (app) =>
+    new Promise((resolve, reject) =>
+      execFile('open', ['-g', '-a', app], { timeout: 10_000 }, (err, _stdout, stderr) =>
+        err ? reject(osaError(stderr || err.message, app)) : resolve()
+      )
+    ),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+const notRunning = (err: unknown): boolean => err instanceof MacError && err.kind === 'not-running'
+
+/** Runs `run`; if `options.launch` is set and the app isn't running, launches it and retries (see OsaOptions.launch). */
+export async function retryWhenNotRunning(
+  run: () => Promise<string>,
+  options?: OsaOptions,
+  deps: LaunchDeps = launchDeps
+): Promise<string> {
+  try {
+    return await run()
+  } catch (err) {
+    if (!options?.launch || !options.app || !notRunning(err)) throw err
+    await deps.openHidden(options.app)
+    for (let attempt = 1; ; attempt++) {
+      await deps.sleep(LAUNCH_WAIT_MS)
+      try {
+        return await run()
+      } catch (retryErr) {
+        if (attempt >= LAUNCH_RETRIES || !notRunning(retryErr)) throw retryErr
+      }
+    }
+  }
 }
 
 export function runJxa(script: string, options?: OsaOptions): Promise<string> {

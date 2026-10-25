@@ -182,6 +182,12 @@ export interface AgentResult {
   subtitle: string
   evidence: ToolCallRecord[]
   view?: ViewAction
+  /**
+   * The model's own final reply, from a turn that finished normally (never a declined, stopped or
+   * failed one). With no evidence it is the answer itself (a greeting, a question); after tools
+   * it is a secondary line under the evidence-based title.
+   */
+  reply?: string
 }
 
 export type AgentEvent =
@@ -221,6 +227,8 @@ export interface ShortcutRunResult {
   subtitle: string
   compiled: boolean
   durationMs: number
+  /** What the result opens (the peace sign's screenshot), from the tool outcome. */
+  view?: ViewAction
 }
 
 export interface CompletedTask {

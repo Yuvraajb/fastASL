@@ -2,6 +2,7 @@ import type { Mode } from '@shared/types'
 import type { PickProgress } from './store'
 import type { View } from './types'
 import { cameraFallbackNotice, IDENTIFYING, NOT_A_SIGN, QUICK_MENU } from './controller'
+import { MOCK_SCREENSHOT_PATH, MOCK_SCREENSHOT_SUBTITLE, MOCK_SCREENSHOT_THUMB } from './mockThumb'
 import type { MockPose } from './live'
 import { STREAM_LOST, STREAM_NOT_MJPEG } from '../engine/camera/cameraSource'
 
@@ -36,28 +37,79 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     },
     pose: 'c'
   },
-  sentence: {
-    view: {
-      kind: 'sentence',
-      sentence: 'Can we meet tomorrow?',
-      tokens: [
-        { text: 'can', kind: 'word' },
-        { text: 'we', kind: 'word' },
-        { text: 'meet', kind: 'word' },
-        { text: 'tomorrow', kind: 'word' }
-      ]
-    },
+  // Command mode: phrase end goes straight to the agent; the card shows the exchange.
+  conversationUnderstanding: {
+    view: { kind: 'conversation', phase: 'understanding', said: 'Hello', steps: [] },
     pose: 'palm'
   },
-  agentReady: {
+  conversationWorking: {
     view: {
-      kind: 'agentReady',
-      intent: 'Schedule a meeting tomorrow at 10am with the team',
-      variant: 'default',
-      sentence: 'Meeting tomorrow at 10am'
+      kind: 'conversation',
+      phase: 'working',
+      said: 'Meeting tomorrow at 10am with the team.',
+      steps: [
+        { id: 'plan', label: 'Thinking', status: 'done' },
+        { id: '1', label: 'Opening Calendar', status: 'done' },
+        { id: '2', label: 'Creating event', status: 'current' },
+        { id: '3', label: 'Adding attendees', status: 'pending' }
+      ]
     },
     pose: 'point'
   },
+  conversationReply: {
+    view: {
+      kind: 'conversation',
+      phase: 'reply',
+      said: 'Hello.',
+      steps: [],
+      answer: { ok: true, text: 'Hello! What can I do for you?' }
+    },
+    pose: 'palm'
+  },
+  conversationDone: {
+    view: {
+      kind: 'conversation',
+      phase: 'reply',
+      said: 'Meeting tomorrow at 10am with the team.',
+      steps: [],
+      answer: {
+        ok: true,
+        title: 'Meeting created',
+        subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
+        text: 'Team Sync is on your calendar for tomorrow at 10.',
+        view: { kind: 'openApp', app: 'Calendar' }
+      }
+    },
+    pose: 'ok'
+  },
+  conversationScreenshot: {
+    view: {
+      kind: 'conversation',
+      phase: 'reply',
+      said: 'Take a screenshot.',
+      steps: [],
+      answer: {
+        ok: true,
+        title: 'Screenshot taken',
+        subtitle: MOCK_SCREENSHOT_SUBTITLE,
+        text: 'Saved a screenshot to your Desktop.',
+        view: { kind: 'openFile', path: MOCK_SCREENSHOT_PATH },
+        thumb: MOCK_SCREENSHOT_THUMB
+      }
+    },
+    pose: 'ok'
+  },
+  conversationFailed: {
+    view: {
+      kind: 'conversation',
+      phase: 'reply',
+      said: 'What time is it?',
+      steps: [],
+      answer: { ok: false, title: "Couldn't start the agent", subtitle: 'Add FACTORY_API_KEY to .env' }
+    },
+    pose: 'palm'
+  },
+  // A gesture shortcut's agent fallback still shows the plain Working card.
   working: {
     view: {
       kind: 'working',
@@ -86,16 +138,6 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     },
     pose: 'thumbsUp'
   },
-  done: {
-    view: {
-      kind: 'done',
-      ok: true,
-      title: 'Meeting created',
-      subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
-      view: { kind: 'openApp', app: 'Calendar' }
-    },
-    pose: 'ok'
-  },
   collapsed: { view: { kind: 'collapsed' }, pose: 'palm' },
   listening: { view: { kind: 'recognizing', token: null, isWord: false }, pose: 'twoHands' },
   recognizingWord: { view: { kind: 'recognizing', token: 'good', isWord: true }, pose: 'thumbsUp' },
@@ -114,16 +156,6 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     },
     pose: 'twoHands'
   },
-  agentReadyEmail: {
-    view: {
-      kind: 'agentReady',
-      intent: 'Send this email to team@company.com',
-      variant: 'email',
-      target: 'team@company.com',
-      sentence: 'Meeting tomorrow at 3pm'
-    },
-    pose: 'twoHands'
-  },
   confirmMessage: {
     view: {
       kind: 'confirm',
@@ -137,33 +169,11 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     },
     pose: 'thumbsUp'
   },
+  // A close call between two signs; Did you mean for intents is gone (the agent gets the sentence).
   didYouMean: {
-    view: {
-      kind: 'didYouMean',
-      variant: 'list',
-      options: ['machine learning', 'make a learning plan', 'search for courses'],
-      purpose: 'intent'
-    },
+    view: { kind: 'didYouMean', options: ['where', 'what', 'why'], purpose: 'sign' },
     pick: { count: 1, progress: 0.55 },
     pose: 'palm'
-  },
-  didYouMeanQuote: {
-    view: {
-      kind: 'didYouMean',
-      variant: 'quote',
-      quote: 'Meeting tomorrow at 3pm',
-      options: ['Send "Meeting tomorrow at 3pm"'],
-      purpose: 'intent'
-    },
-    pose: 'twoHands'
-  },
-  contextActions: {
-    view: {
-      kind: 'contextActions',
-      sentence: 'Here is the project update for this week',
-      actions: ['Insert text', 'Send message', 'More options']
-    },
-    pose: 'thumbsUp'
   },
   quickMenu: { view: { kind: 'quickMenu', options: QUICK_MENU }, pick: { count: 1, progress: 0.3 }, pose: 'point' },
   dictation: {
@@ -171,13 +181,16 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     mode: 'dictation',
     pose: 'twoHands'
   },
+  // The peace sign: the screenshot shows in the toast, and thumbs up opens it in Preview.
   toast: {
     view: {
       kind: 'toast',
       title: 'Screenshot taken',
-      subtitle: 'Saved to Desktop',
+      subtitle: MOCK_SCREENSHOT_SUBTITLE,
       meta: 'compiled · 0.4 s',
       ok: true,
+      view: { kind: 'openFile', path: MOCK_SCREENSHOT_PATH },
+      thumb: MOCK_SCREENSHOT_THUMB,
       returnTo: 'collapsed'
     },
     pose: 'peace'
@@ -298,21 +311,22 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     pose: 'palm'
   },
   settingsSensitivity: { view: { kind: 'settings', settings: { page: 'sensitivity', current: 'medium' } }, pose: 'palm' },
+  // No interpreter: the signed words go to the agent as they are, and the card says why.
   missingKey: {
     view: {
-      kind: 'sentence',
-      sentence: 'What time is my next meeting?',
-      tokens: []
+      kind: 'conversation',
+      phase: 'working',
+      said: 'What time meeting',
+      steps: [{ id: 'plan', label: 'Thinking', status: 'current' }]
     },
-    notice: 'Add ANTHROPIC_API_KEY to .env',
-    pose: 'palm'
+    notice: 'Add GEMINI_API_KEY to .env',
+    pose: 'point'
   },
   palmHold: { view: { kind: 'collapsed' }, holdProgress: 0.65, pose: 'palm' },
   spellMode: {
     // The raw letters first, then Claude's fixes (which never add what wasn't spelled).
     view: {
       kind: 'didYouMean',
-      variant: 'list',
       quote: 'KRISNA',
       options: ['KRISNA', 'Krishna', 'Krisna'],
       purpose: 'spell'
@@ -321,7 +335,7 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     pose: 'c'
   },
   spellPending: {
-    view: { kind: 'didYouMean', variant: 'list', quote: 'KRISNA', options: ['KRISNA'], purpose: 'spell', pending: true },
+    view: { kind: 'didYouMean', quote: 'KRISNA', options: ['KRISNA'], purpose: 'spell', pending: true },
     mode: 'spell',
     pose: 'c'
   },
@@ -352,7 +366,7 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     pose: 'palm'
   },
   signGuess: {
-    view: { kind: 'didYouMean', variant: 'list', options: ['HELLO', 'HI', 'GOODBYE'], purpose: 'learn' },
+    view: { kind: 'didYouMean', options: ['HELLO', 'HI', 'GOODBYE'], purpose: 'learn' },
     pose: 'palm'
   },
   signLearned: {
@@ -389,16 +403,16 @@ export const SCREENSHOT_ORDER: string[] = [
   'recognizingWord',
   'building',
   'buildingWords',
-  'sentence',
-  'agentReady',
-  'agentReadyEmail',
+  'conversationWorking',
+  'conversationReply',
+  'conversationDone',
   'working',
   'confirm',
   'confirmMessage',
-  'done',
+  'conversationScreenshot',
   'didYouMean',
-  'didYouMeanQuote',
-  'contextActions',
+  'conversationFailed',
+  'conversationUnderstanding',
   'quickMenu',
   'dictation',
   'spellMode',

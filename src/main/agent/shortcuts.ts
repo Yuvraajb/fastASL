@@ -15,8 +15,9 @@ function failure(title: string, subtitle: string, compiled: boolean, durationMs:
 function toResult(outcome: RunOutcome, compiled: boolean, durationMs: number): ShortcutRunResult {
   switch (outcome.kind) {
     case 'done': {
-      const { title, subtitle } = outcome.result
-      return { ok: outcome.complete, title, subtitle, compiled, durationMs }
+      const { title, subtitle, view } = outcome.result
+      // The view lets the toast show (and open) what the shortcut made: the peace sign's screenshot.
+      return { ok: outcome.complete, title, subtitle, compiled, durationMs, ...(view && { view }) }
     }
     case 'stopped':
       return failure('Stopped', 'The shortcut was stopped', compiled, durationMs)

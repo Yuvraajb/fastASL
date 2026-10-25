@@ -29,35 +29,40 @@ export const JOIN_HANDLES_HANDLER = `on joinHandles(labels, vals)
 end joinHandles`
 
 /**
- * Every person whose name contains `needle`, with phones and emails. Each
- * property is fetched for all matches in one Apple event, so Contacts runs the
- * search a fixed number of times rather than once per property per person.
+ * Every person whose name contains `needle`, with phones and emails. The search runs exactly once
+ * (`set found to (every person whose …)` resolves it to person ids) and only the matches are read.
+ * A bulk read of a live `whose` reference re-runs the search for every property: with ~3,900
+ * contacts that took 24-32 s for "Mom" and timed out; resolved once it takes ~4 s.
  */
 export function contactSearchScript(needle: string): string {
   return `${JOIN_HANDLES_HANDLER}
 ${AS_SEPARATORS}
-tell application "Contacts"
-\tset found to a reference to (every person whose name contains ${q(needle)})
-\tif (count of found) is 0 then return ""
-\ttell found
-\t\tset {names, phoneLabels, phoneValues, emailLabels, emailValues} to {name, label of every phone, value of every phone, label of every email, value of every email}
-\tend tell
-end tell
-set n to count of names
-if (count of phoneLabels) is not n or (count of phoneValues) is not n or (count of emailLabels) is not n or (count of emailValues) is not n then ${CHANGED_ERROR}
 set out to {}
-repeat with i from 1 to n
-\tset end of out to ((item i of names) as text) & US & joinHandles(item i of phoneLabels, item i of phoneValues) & US & joinHandles(item i of emailLabels, item i of emailValues)
-end repeat
+tell application "Contacts"
+\tset found to (every person whose name contains ${q(needle)})
+\trepeat with i from 1 to count of found
+\t\tset p to item i of found
+\t\ttry -- a card deleted meanwhile is skipped
+\t\t\tset end of out to ((name of p) as text) & US & my joinHandles(label of every phone of p, value of every phone of p) & US & my joinHandles(label of every email of p, value of every email of p)
+\t\tend try
+\tend repeat
+end tell
 set AppleScript's text item delimiters to RS
 return out as text`
+}
+
+/** Contacts stores built-in labels as constants ("_$!<Mobile>!$_"); custom labels come through as typed. */
+export function cleanLabel(label: string): string {
+  if (label === 'missing value') return ''
+  const builtIn = /^_\$!<(.*)>!\$_$/.exec(label)
+  return builtIn ? builtIn[1].toLowerCase() : label
 }
 
 function parseHandles(text: string): ContactHandle[] {
   if (!text) return []
   return text.split(SEP.list).flatMap((entry) => {
     const [label = '', value = ''] = entry.split(LABEL_SEP)
-    return value ? [{ label: label === 'missing value' ? '' : label, value }] : []
+    return value ? [{ label: cleanLabel(label), value }] : []
   })
 }
 
@@ -133,6 +138,20 @@ export function groupPeople(cards: Contact[]): Contact[] {
   return groups.map(merge)
 }
 
+/**
+ * Best matches first: the exact name, then names that start with the query, then the rest (each
+ * group in Contacts order). "Dad" lists "Dad" before "Srikar Dad"; the list is cut at MAX_LISTED,
+ * so without this an exact match could be hidden behind "…and 8 more".
+ */
+export function rankContacts<T extends { name: string }>(people: T[], query: string): T[] {
+  const q = fold(query)
+  const rank = (name: string): number => (fold(name) === q ? 0 : fold(name).startsWith(q) ? 1 : 2)
+  return people
+    .map((person, index) => ({ person, index, rank: rank(person.name) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((r) => r.person)
+}
+
 const listNames = (names: string[]): string => names.slice(0, 3).join(', ') + (names.length > 3 ? ', …' : '')
 
 /**
@@ -144,7 +163,7 @@ export function pickContact(cards: Contact[], query: string): Contact | string {
   const name = query.trim()
   const exact = cards.filter((c) => fold(c.name) === fold(name))
   if (!exact.length) {
-    const similar = [...new Set(cards.filter((c) => matchesWords(c.name, name)).map((c) => c.name))]
+    const similar = [...new Set(rankContacts(cards.filter((c) => matchesWords(c.name, name)), name).map((c) => c.name))]
     return similar.length
       ? `No contact is named exactly “${name}”. Did you mean ${listNames(similar)}? Use the full name.`
       : `No contact named “${name}” in Contacts`
@@ -170,7 +189,7 @@ export function messageHandle(contact: Contact): string | null {
 export async function searchContacts(query: string): Promise<Contact[]> {
   const needle = searchNeedle(query)
   if (!needle) return []
-  return parseContacts(await runAppleScript(contactSearchScript(needle), { app: 'Contacts', timeoutMs: 20_000 }))
+  return parseContacts(await runAppleScript(contactSearchScript(needle), { app: 'Contacts', launch: true, timeoutMs: 20_000 }))
 }
 
 /** The person named exactly `query`. Rejects with a card-ready message. */
@@ -187,13 +206,15 @@ export const contactsFind = defineTool({
   name: 'contacts_find',
   description:
     'Look people up in Contacts by name; each word must start a word of the name ("Sar Ch" finds "Sarah Chen"). ' +
-    'Returns exact names with phone numbers and emails. message_send and mail_send need the exact full name, ' +
-    'so call this first when you only have part of a name.',
+    'Returns exact names (best match first) with phone numbers and emails. message_send, mail_send and facetime_call ' +
+    'need the exact full name, so call this first. A relation like "Mom" means the user\'s own: only a card named ' +
+    'exactly "Mom" is theirs; "Anisha Mom" or "Rishi\'s Mom" is someone else\'s.',
   schema: { query: z.string().trim().min(1) },
   risk: 'read',
   stepLabel: () => 'Searching Contacts',
   async run(args) {
-    const people = groupPeople((await searchContacts(args.query)).filter((c) => matchesWords(c.name, args.query)))
+    const matches = (await searchContacts(args.query)).filter((c) => matchesWords(c.name, args.query))
+    const people = rankContacts(groupPeople(matches), args.query)
     if (!people.length) {
       return { ok: true, text: `No contacts match "${args.query}".`, title: 'No matching contacts', subtitle: args.query }
     }

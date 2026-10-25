@@ -2,6 +2,8 @@ import { z } from 'zod'
 import { calendarCreateEvent, calendarListEvents } from './calendar'
 import { contactsFind } from './contacts'
 import { mailSend } from './mail'
+import { faceTimeCall } from './facetime'
+import { mediaControl } from './media'
 import { messageSend } from './messages'
 import { notesRead, notesSearch } from './notes'
 import { fail, failFrom } from './outcome'
@@ -36,6 +38,8 @@ export const TOOLS: readonly ToolDef[] = [
   spotifySearch,
   spotifyPlay,
   spotifyPause,
+  mediaControl,
+  faceTimeCall,
   openAppTool,
   webSearchTool,
   typeTextTool,

@@ -1,15 +1,14 @@
 import { useRef } from 'react'
+import { HandFist, ThumbsUp } from 'lucide-react'
 import type { View } from '../app/types'
 import { controller } from '../app/context'
-import { CheckBadge, Feed, Notice, ProgressLine, Stack } from '../ui'
+import { toastDuration } from '../app/controller'
+import { CheckBadge, Feed, Hint, Notice, ProgressLine, Stack } from '../ui'
 import { useCardFadeOut, useViewInstance } from './agent-parts'
 import './ToastView.css'
 
 type ToastState = Extract<View, { kind: 'toast' }>
 type Props = { view: ToastState }
-
-/** Matches the controller's TOAST_MS: the view is swapped back when this runs out. */
-const TOAST_MS = 2600
 
 /** Each new toast (even an identical one) remounts, restarting the countdown and fade. */
 export function ToastView({ view }: Props): React.JSX.Element {
@@ -17,14 +16,19 @@ export function ToastView({ view }: Props): React.JSX.Element {
   return <Toast key={instance} view={view} />
 }
 
-/** Reference image 2, panel 7 (+ image 1, panel 9): result, countdown line, thumbnail. No header. Click dismisses. */
+/**
+ * Reference image 2, panel 7 (+ image 1, panel 9): result, countdown line, thumbnail. No header.
+ * A click on the text dismisses. A screenshot shows itself in place of the camera tile, and a
+ * click or a thumbs up opens it in Preview (the toast stays longer then, toastDuration).
+ */
 function Toast({ view }: Props): React.JSX.Element {
-  const ref = useRef<HTMLButtonElement>(null)
-  useCardFadeOut(ref, TOAST_MS)
+  const ref = useRef<HTMLDivElement>(null)
+  const duration = toastDuration(view)
+  useCardFadeOut(ref, duration)
   return (
     <Stack>
-      <button ref={ref} type="button" className="toast" title="Dismiss" onClick={() => controller.tap('close')}>
-        <span className="toast__main">
+      <div ref={ref} className="toast">
+        <button type="button" className="toast__main" title="Dismiss" onClick={() => controller.tap('close')}>
           <span className="toast__head">
             <CheckBadge ok={view.ok} size={30} />
             <span className="toast__text" role="status">
@@ -33,11 +37,25 @@ function Toast({ view }: Props): React.JSX.Element {
               {view.meta ? <span className="toast__meta">{view.meta}</span> : null}
             </span>
           </span>
-          <ProgressLine duration={TOAST_MS} width={96} />
-        </span>
-        <Feed variant="thumb" width={60} height={60} />
-      </button>
+          <ProgressLine duration={duration} width={96} />
+        </button>
+        {view.thumb ? (
+          <button type="button" className="toast__shot" title="Open in Preview" onClick={() => controller.tap('primary')}>
+            <img src={view.thumb} alt="Screenshot" draggable={false} />
+          </button>
+        ) : (
+          <Feed variant="thumb" width={60} height={60} />
+        )}
+      </div>
       <Notice />
+      {view.thumb ? (
+        <Hint
+          items={[
+            { icon: ThumbsUp, label: 'open in Preview' },
+            { icon: HandFist, label: 'dismiss' }
+          ]}
+        />
+      ) : null}
     </Stack>
   )
 }

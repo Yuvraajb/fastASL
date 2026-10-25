@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/ipc'
 import type { AgentEvent, CustomGesture } from '@shared/types'
 import { runShortcut } from './agent/shortcuts'
-import { callTool, makeAgent } from './agent/testing/fakes'
+import { callTool, makeAgent, SCREENSHOT } from './agent/testing/fakes'
 import { registerIpc, type MainServices } from './ipc'
 
 const electron = vi.hoisted(() => ({
@@ -119,7 +119,8 @@ describe('agent IPC', () => {
       ok: true,
       title: 'Screenshot saved',
       subtitle: 'Desktop',
-      compiled: true
+      compiled: true,
+      view: { kind: 'openFile', path: SCREENSHOT }
     })
     expect(received).toEqual([])
     expect(ctx.sessions).toEqual([])
@@ -256,5 +257,22 @@ describe('LLM status IPC', () => {
       ok: false,
       error: 'Sign guessing is not available yet'
     })
+  })
+})
+
+describe('screenshot thumbnail IPC', () => {
+  it('hands the path to imageThumb, which decides (main/thumbs.ts refuses files fastASL did not take)', async () => {
+    const imageThumb = vi.fn((path: unknown) =>
+      path === SCREENSHOT ? { ok: true as const, value: 'data:image/png;base64,AAAA' } : { ok: false as const, error: 'Not a screenshot fastASL took' }
+    )
+    registerIpc(() => null, { imageThumb })
+    expect(await invoke(IPC.imageThumb, SCREENSHOT)).toEqual({ ok: true, value: 'data:image/png;base64,AAAA' })
+    expect(await invoke(IPC.imageThumb, '/Users/me/Documents/passport.png')).toEqual({ ok: false, error: 'Not a screenshot fastASL took' })
+    expect(imageThumb).toHaveBeenCalledTimes(2)
+  })
+
+  it('answers softly without the service', async () => {
+    registerIpc(() => null, {})
+    expect(await invoke(IPC.imageThumb, SCREENSHOT)).toEqual({ ok: false, error: 'Thumbnails is not available yet' })
   })
 })

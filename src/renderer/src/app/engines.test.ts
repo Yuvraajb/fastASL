@@ -187,11 +187,9 @@ describe('gesture control', () => {
     sent = tl.frames.length
   }
 
-  /** Two simulated signs, then hands down: the Sentence card. */
-  function toSentence(): void {
-    for (const text of ['meeting', 'tomorrow']) controller.token({ text, kind: 'word' })
-    controller.gesture({ gesture: 'handsDown' })
-    expect(getApp().view.kind).toBe('sentence')
+  /** Simulated signs on the card: the phrase being built. */
+  function signWords(...words: string[]): void {
+    for (const text of words) controller.token({ text, kind: 'word' })
   }
 
   beforeEach(() => {
@@ -340,40 +338,45 @@ describe('gesture control', () => {
     expect(getApp().view.kind).toBe('ready')
   })
 
-  it('sentence: a thumbs-up kept up through a 100 ms dropout proceeds once and stops at agent ready', async () => {
+  it('building: a thumbs-up kept up through a 100 ms dropout sends the phrase once, and does not approve the Confirm card that follows', async () => {
     vi.useFakeTimers()
     stop = startEngines(controller)
-    toSentence()
+    signWords('meeting', 'tomorrow')
     tl.hold(1000, THUMBS_UP).none(100).hold(3000, THUMBS_UP)
     await playTimed()
-    expect(getApp().view.kind).toBe('agentReady')
-  })
-
-  it('agent ready: a thumbs-up kept up through a dropout starts the agent but does not approve its confirm step', async () => {
-    vi.useFakeTimers()
-    stop = startEngines(controller)
-    toSentence()
-    controller.gesture({ gesture: 'thumbsUp' })
-    await vi.advanceTimersByTimeAsync(600)
-    expect(getApp().view.kind).toBe('agentReady')
-    tl.hold(1000, THUMBS_UP).none(100).hold(3000, THUMBS_UP)
-    await playTimed()
+    // Sent: the mock interpreter, then the mock agent, which asks to confirm the event it creates.
     expect(getApp().view.kind).toBe('confirm')
   })
 
   it('confirm: a thumbs-up raised before the step appeared has to be made again', async () => {
     vi.useFakeTimers()
     stop = startEngines(controller)
-    toSentence()
-    controller.gesture({ gesture: 'thumbsUp' })
+    signWords('meeting', 'tomorrow')
+    controller.gesture({ gesture: 'handsDown' })
     await vi.advanceTimersByTimeAsync(600)
-    // Start the agent, lower the hand, raise it again while the agent works; the confirm step appears.
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'working' })
+    // Raise a thumbs up while the agent works, lower it, raise it again; the confirm step appears.
     tl.hold(700, THUMBS_UP).none(500).hold(3000, THUMBS_UP)
     await playTimed()
     expect(getApp().view.kind).toBe('confirm')
     tl.none(500).hold(700, THUMBS_UP)
     await playTimed()
-    expect(getApp().view.kind).toBe('working')
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'working' })
+  })
+
+  it("the agent's reply: a thumbs-up already up as it appears does nothing; a fresh one is Ready's (the quick menu)", async () => {
+    vi.useFakeTimers()
+    stop = startEngines(controller)
+    signWords('hello')
+    controller.gesture({ gesture: 'handsDown' })
+    await vi.advanceTimersByTimeAsync(600)
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'working' })
+    tl.hold(2500, THUMBS_UP)
+    await playTimed()
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'reply', answer: { text: 'Hello! What can I do for you?' } })
+    tl.none(500).hold(1200, THUMBS_UP)
+    await playTimed()
+    expect(getApp().view).toEqual({ kind: 'quickMenu', options: QUICK_MENU })
   })
 })
 
@@ -472,19 +475,24 @@ describe('sign recognition', () => {
     expect(views).toEqual([]) // the card never changed
   })
 
-  it('two words, then both hands down: the Sentence', () => {
+  it('two words, then both hands down: sent at once, with no Sentence card', () => {
     stop = startEngines(controller)
     play([sign(WORDS.HELLO, 902)], 600)
+    expect(getApp().view).toEqual({ kind: 'recognizing', token: 'hello', isWord: true })
     play([sign(WORDS.PLAY, 903)], 1500)
-    expect(getApp().view).toMatchObject({ kind: 'sentence', sentence: 'Hello play' })
+    expect(getApp().view).toEqual({ kind: 'conversation', phase: 'understanding', said: 'Hello play', steps: [] })
   })
 
-  it('a sign after the Sentence starts the next phrase', () => {
+  it("a sign on the agent's reply starts the next phrase, which hands down sends too", async () => {
+    vi.useFakeTimers()
     stop = startEngines(controller)
     play([sign(WORDS.HELLO, 902)], 1500)
-    expect(getApp().view).toMatchObject({ kind: 'sentence', sentence: 'Hello' })
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: 'Hello' })
+    await vi.advanceTimersByTimeAsync(1200)
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'reply', said: 'Hello.', answer: { text: 'Hello! What can I do for you?' } })
     play([sign(WORDS.PLAY, 903)], 1500)
-    expect(getApp().view).toMatchObject({ kind: 'sentence', sentence: 'Play' })
+    expect(views).toContainEqual({ kind: 'recognizing', token: 'play', isWord: true })
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: 'Play' })
   })
 
   it('a twitch never shows Listening, and Listening does not flash for a movement that is no sign', () => {
@@ -656,7 +664,6 @@ describe('sign recognition', () => {
     play([rest, spell('LSLS', 700, 700, 972)], 1500)
     expect(getApp().view).toEqual({
       kind: 'didYouMean',
-      variant: 'list',
       options: ['LSLS'],
       purpose: 'spell',
       quote: 'LSLS',

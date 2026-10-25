@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   MacError,
   SEP,
@@ -6,6 +6,7 @@ import {
   cleanOsaMessage,
   jsString,
   osaError,
+  retryWhenNotRunning,
   runAppleScript,
   runJxa,
   splitRecords
@@ -192,5 +193,36 @@ describe.runIf(onMac)('runAppleScript / runJxa', () => {
     const err = await runAppleScript('delay 5', { timeoutMs: 300, app: 'Calendar' }).catch((e: unknown) => e)
     expect((err as MacError).kind).toBe('timeout')
     expect((err as MacError).message).toBe('Calendar took too long to respond')
+  })
+})
+
+describe('retryWhenNotRunning', () => {
+  const notRunning = (): MacError => new MacError("Calendar isn't running", 'not-running', -600)
+  const deps = () => ({ openHidden: vi.fn(async () => {}), sleep: vi.fn(async () => {}) })
+
+  it('launches the app hidden and retries when it is not running (seen right after Calendar was quit)', async () => {
+    const d = deps()
+    const run = vi.fn().mockRejectedValueOnce(notRunning()).mockRejectedValueOnce(notRunning()).mockResolvedValue('12')
+    expect(await retryWhenNotRunning(run, { app: 'Calendar', launch: true }, d)).toBe('12')
+    expect(d.openHidden).toHaveBeenCalledOnce()
+    expect(d.openHidden).toHaveBeenCalledWith('Calendar')
+    expect(run).toHaveBeenCalledTimes(3)
+  })
+
+  it('gives up after a few tries', async () => {
+    const d = deps()
+    const run = vi.fn().mockRejectedValue(notRunning())
+    await expect(retryWhenNotRunning(run, { app: 'Calendar', launch: true }, d)).rejects.toThrow("Calendar isn't running")
+    expect(run).toHaveBeenCalledTimes(5)
+  })
+
+  it('never retries other errors, or without launch and an app name', async () => {
+    const d = deps()
+    const timeout = vi.fn().mockRejectedValue(new MacError('Calendar took too long to respond', 'timeout'))
+    await expect(retryWhenNotRunning(timeout, { app: 'Calendar', launch: true }, d)).rejects.toThrow('too long')
+    await expect(retryWhenNotRunning(vi.fn().mockRejectedValue(notRunning()), { app: 'Calendar' }, d)).rejects.toThrow()
+    await expect(retryWhenNotRunning(vi.fn().mockRejectedValue(notRunning()), { launch: true }, d)).rejects.toThrow()
+    expect(d.openHidden).not.toHaveBeenCalled()
+    expect(timeout).toHaveBeenCalledOnce()
   })
 })

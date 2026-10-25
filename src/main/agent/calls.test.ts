@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { defineTool, type ToolDef, type ToolOutcome } from '../tools/types'
-import { callsComplete, confirmDetailsFor, summarize, type Ending } from './calls'
+import { callsComplete, cleanReply, confirmDetailsFor, summarize, type Ending } from './calls'
 import type { RecordedCall } from './types'
 import { makeTools } from './testing/fakes'
 
@@ -76,6 +76,40 @@ describe('summarize', () => {
     expect(summarize([], unfinished)).toMatchObject({ title: 'Nothing was done', subtitle: "The agent didn't run any action" })
     expect(summarize([denied], unfinished).subtitle).toBe('Calendar access was denied')
     expect(summarize([], declined).subtitle).toBe('You cancelled it')
+  })
+})
+
+describe('the reply in summarize', () => {
+  it('rides along with a finished turn, after tools or without any', () => {
+    expect(summarize([], { ...unfinished, reply: 'Hello! How can I help?' })).toEqual({
+      title: 'Nothing was done',
+      subtitle: "The agent didn't run any action",
+      evidence: [],
+      reply: 'Hello! How can I help?'
+    })
+    expect(summarize([shot], { ...complete, reply: 'Saved it.' })).toMatchObject({ title: 'Screenshot saved', subtitle: 'Desktop', reply: 'Saved it.' })
+  })
+
+  it('is dropped after a decline, a stop or an error: it could describe what did not happen', () => {
+    expect(summarize([], { ...declined, reply: 'Sent!' })).not.toHaveProperty('reply')
+    expect(summarize([sent], { complete: false, declined: false, stopped: true, reply: 'Sent!' })).not.toHaveProperty('reply')
+    expect(summarize([sent], { complete: false, declined: false, error: 'Droid process exited', reply: 'Sent!' })).not.toHaveProperty('reply')
+  })
+})
+
+describe('cleanReply', () => {
+  it('keeps plain words on one line', () => {
+    expect(cleanReply('Hello!\n\nHow can I help?')).toBe('Hello! How can I help?')
+    expect(cleanReply('**Sure.** It is `3:45 PM`.')).toBe('Sure. It is 3:45 PM.')
+    expect(cleanReply('Options:\n- Open Notes\n- Search the web\n1. Done')).toBe('Options: Open Notes Search the web Done')
+  })
+
+  it('gives nothing for an empty reply, and cuts a runaway one', () => {
+    expect(cleanReply(undefined)).toBeUndefined()
+    expect(cleanReply('  \n ')).toBeUndefined()
+    const long = cleanReply('word '.repeat(200))!
+    expect(long.length).toBe(400)
+    expect(long.endsWith('…')).toBe(true)
   })
 })
 

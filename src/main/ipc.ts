@@ -52,6 +52,8 @@ export interface MainServices {
   runShortcut?: (gestureId: string, emit: (e: AgentEvent) => void) => Promise<ShortcutRunResult>
   frontmostApp?: () => Promise<import('@shared/types').FrontmostApp | null>
   typeText?: (text: string) => Promise<Result<void>>
+  /** A screenshot's thumbnail as a PNG data URL; refuses any file fastASL didn't take (main/thumbs.ts). */
+  imageThumb?: (path: unknown) => Result<string> | Promise<Result<string>>
   mjpegProxyUrl?: (url: string) => Promise<string>
   assetBase?: () => Promise<string>
   capture?: (name: string) => Promise<string>
@@ -178,6 +180,10 @@ export function registerIpc(getOverlay: () => OverlayWindow | null, services: Ma
       execFile('open', ['-a', action.app])
     }
   })
+
+  ipcMain.handle(IPC.imageThumb, (_e, path: unknown) =>
+    services.imageThumb ? services.imageThumb(path) : notReady<string>('Thumbnails')
+  )
 
   ipcMain.handle(IPC.capture, (_e, name: string) => services.capture?.(name) ?? '')
 }

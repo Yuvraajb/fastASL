@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CustomGesture } from '@shared/types'
 import type { ToolOutcome } from '../tools/types'
 import { runShortcut } from './shortcuts'
-import { callTool, callTools, makeAgent, reply, request, type TurnScript } from './testing/fakes'
+import { callTool, callTools, makeAgent, reply, request, SCREENSHOT, type TurnScript } from './testing/fakes'
 
 const PEACE: CustomGesture = {
   id: 'builtin-peace',
@@ -44,7 +44,15 @@ describe('runShortcut', () => {
     const ctx = setup([PEACE], [], { apiKey: () => undefined, openSession })
     const result = await ctx.run('builtin-peace')
 
-    expect(result).toEqual({ ok: true, title: 'Screenshot saved', subtitle: 'Desktop', compiled: true, durationMs: expect.any(Number) })
+    // The toast gets the file to show and open (the card asks main for its thumbnail).
+    expect(result).toEqual({
+      ok: true,
+      title: 'Screenshot saved',
+      subtitle: 'Desktop',
+      compiled: true,
+      durationMs: expect.any(Number),
+      view: { kind: 'openFile', path: SCREENSHOT }
+    })
     expect(result.durationMs).toBeLessThan(500)
     expect(ctx.runs).toEqual(['take_screenshot'])
     expect(openSession).not.toHaveBeenCalled()
@@ -152,7 +160,7 @@ describe('runShortcut', () => {
     const started = await next
     if (!started.ok) throw new Error(started.error)
     expect((await started.value.completion).kind).toBe('done')
-    expect(ctx.sessions.flatMap((s) => s.prompts)).toEqual([expect.stringContaining('Task: Open Calculator')])
+    expect(ctx.sessions.flatMap((s) => s.prompts)).toEqual([expect.stringContaining('Message: Open Calculator')])
   })
 
   it('keeps the warm Droid session when a slow replay is replaced', async () => {

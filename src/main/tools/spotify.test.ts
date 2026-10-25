@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { EnvKey } from '@shared/types'
+import { exec } from '../mac/exec'
 import { SEP, runAppleScript } from '../mac/osascript'
-import { PAUSE_SCRIPT, formatTrack, playScript, spotifyPlay, toSpotifyUri } from './spotify'
+import { PAUSE_SCRIPT, formatTrack, playScript, spotifyPlay, spotifySearch, spotifySearchUri, toSpotifyUri } from './spotify'
 import { createSpotifyClient, parseTracks } from './spotifyApi'
 
 vi.mock('electron', () => ({ app: {}, shell: {} }))
 vi.mock('../mac/apps', () => ({ appPath: vi.fn(async () => '/Applications/Spotify.app') }))
+// Nothing is ever opened either.
+vi.mock('../mac/exec', () => ({ exec: vi.fn(async () => '') }))
 // Nothing is ever played: every AppleScript call is answered by this mock.
 vi.mock('../mac/osascript', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../mac/osascript')>()),
@@ -210,5 +213,27 @@ describe('spotify_play run', () => {
   it('fails when nothing is playing', async () => {
     reply('paused', 'false', 'Song A', 'Someone')
     expect((await spotifyPlay.run(args)).text).toBe('Spotify did not start playing. Make sure you are signed in to Spotify.')
+  })
+})
+
+describe('spotify_search without API keys', () => {
+  it("opens Spotify's own search page for the user to pick from", async () => {
+    const saved = [process.env.SPOTIFY_CLIENT_ID, process.env.SPOTIFY_CLIENT_SECRET]
+    delete process.env.SPOTIFY_CLIENT_ID
+    delete process.env.SPOTIFY_CLIENT_SECRET
+    try {
+      const outcome = await spotifySearch.run({ query: 'motion sickness' })
+      expect(exec).toHaveBeenCalledWith('open', ['spotify:search:motion%20sickness'])
+      expect(outcome).toMatchObject({ ok: true, title: 'Opened Spotify search', subtitle: 'motion sickness' })
+      expect(outcome.text).toContain('Add SPOTIFY_CLIENT_ID to .env')
+      expect(outcome.text).toContain('Do not call spotify_play')
+    } finally {
+      if (saved[0] !== undefined) process.env.SPOTIFY_CLIENT_ID = saved[0]
+      if (saved[1] !== undefined) process.env.SPOTIFY_CLIENT_SECRET = saved[1]
+    }
+  })
+
+  it('encodes the query so it stays one spotify: link', () => {
+    expect(spotifySearchUri('  AC/DC & "Back in Black" ')).toBe('spotify:search:AC%2FDC%20%26%20%22Back%20in%20Black%22')
   })
 })

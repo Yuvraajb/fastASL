@@ -55,6 +55,7 @@ export const IPC = {
   frontmostApp: 'mac:frontmostApp',
   typeText: 'mac:typeText',
   openTarget: 'mac:openTarget',
+  imageThumb: 'mac:imageThumb',
   // dev
   devCommand: 'dev:command',
   capture: 'dev:capture',
@@ -115,6 +116,11 @@ export interface FastAslApi {
   getFrontmostApp(): Promise<FrontmostApp | null>
   typeText(text: string): Promise<Result<void>>
   openTarget(action: ViewAction): Promise<void>
+  /**
+   * A small PNG data URL (320 px wide) of a screenshot fastASL took this session. Any other
+   * path is refused.
+   */
+  getImageThumb(path: string): Promise<Result<string>>
 
   onDevCommand(cb: (cmd: DevCommand) => void): () => void
   /** Screenshot mode only: capture the stage window to docs/screens/<name>.png. */

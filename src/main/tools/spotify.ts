@@ -1,10 +1,12 @@
 import { app } from 'electron'
 import { z } from 'zod'
 import { appPath } from '../mac/apps'
+import { exec } from '../mac/exec'
 import { AS_SEPARATORS, appleScriptString as q, runAppleScript, splitRecords } from '../mac/osascript'
 import { plural, truncate } from './format'
 import { fail } from './outcome'
 import { createSpotifyClient, type SpotifyTrack } from './spotifyApi'
+import type { ToolOutcome } from './types'
 import { defineTool } from './types'
 
 const SPOTIFY_BUNDLE_ID = 'com.spotify.client'
@@ -83,15 +85,43 @@ async function requireSpotify(): Promise<void> {
   if (!(await appPath(SPOTIFY_BUNDLE_ID))) throw new Error("Spotify isn't installed")
 }
 
+/** Spotify's own search page for `query` (the desktop app handles spotify: links). */
+export function spotifySearchUri(query: string): string {
+  return `spotify:search:${encodeURIComponent(query.trim())}`
+}
+
+/**
+ * Without API keys no track can be picked, so Spotify's own search page is opened for the user
+ * to pick from. Playing a `spotify:search:` URI directly doesn't work: on a real Mac it left
+ * Spotify stopped with no current track.
+ */
+async function openSearchPage(query: string, keyError: string): Promise<ToolOutcome> {
+  await exec('open', [spotifySearchUri(query)])
+  return {
+    ok: true,
+    text:
+      `Spotify search needs API keys (${keyError}), so no song could be picked automatically. ` +
+      `Opened Spotify's search page for "${query}" instead; the user can pick a song there. Do not call spotify_play.`,
+    title: 'Opened Spotify search',
+    subtitle: truncate(query, 60),
+    view: { kind: 'openApp', app: 'Spotify' }
+  }
+}
+
 export const spotifySearch = defineTool({
   name: 'spotify_search',
-  description: 'Search Spotify for songs. Returns up to 5 tracks with their spotify:track URIs for spotify_play.',
+  description:
+    'Search Spotify for a song, artist or album. Returns up to 5 tracks with their spotify:track URIs for spotify_play. ' +
+    "Without Spotify API keys it opens Spotify's search page instead, for the user to pick from.",
   schema: { query: z.string().trim().min(1) },
   risk: 'read',
   stepLabel: () => 'Searching Spotify',
   async run(args) {
     const result = await spotify.search(args.query)
-    if (!result.ok) return fail(result.error)
+    if (!result.ok) {
+      if (result.missingKey && (await appPath(SPOTIFY_BUNDLE_ID))) return openSearchPage(args.query, result.error)
+      return fail(result.error)
+    }
     const tracks = result.value
     if (!tracks.length) {
       return { ok: true, text: `No Spotify tracks match "${args.query}".`, title: 'No songs found', subtitle: args.query }

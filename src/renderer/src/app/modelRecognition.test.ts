@@ -237,7 +237,7 @@ describe('control gestures are not swallowed by model words', () => {
 
   it.each([
     ['a sure word (0.95) wins, and the thumbs-up held with it does not also end the phrase', { status: 'accepted', word: 'tomorrow', p: 0.95 } as const, 'building'],
-    ['no word: the thumbs-up acts once the model has answered', { status: 'rejected' } as const, 'sentence']
+    ['no word: the thumbs-up acts once the model has answered (it sends the phrase)', { status: 'rejected' } as const, 'conversation']
   ])('a thumbs-up that fires while the model is still judging waits for its answer: %s', async (_case, decision, kind) => {
     let answer!: (d: ModelDecision) => void
     const model = fakeModel(null)

@@ -61,6 +61,7 @@ const api: FastAslApi = {
   getFrontmostApp: () => ipcRenderer.invoke(IPC.frontmostApp),
   typeText: (text) => ipcRenderer.invoke(IPC.typeText, text),
   openTarget: (action) => ipcRenderer.invoke(IPC.openTarget, action),
+  getImageThumb: (path) => ipcRenderer.invoke(IPC.imageThumb, path),
 
   onDevCommand: (cb) => subscribe<DevCommand>(IPC.devCommand, cb),
   capture: (name) => ipcRenderer.invoke(IPC.capture, name),

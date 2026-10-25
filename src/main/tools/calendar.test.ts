@@ -56,14 +56,16 @@ describe('resolveRange', () => {
 })
 
 describe('listing', () => {
-  it('filters each calendar once by overlap with locale-free dates and reads in bulk', () => {
+  it('filters each calendar exactly once by overlap with locale-free dates and reads only the hits', () => {
     const script = listEventsScript({ start: new Date(2026, 9, 24), end: new Date(2026, 9, 25) })
     expect(script).toContain('set rangeStart to my makeDate(2026, 10, 24, 0, 0, 0)')
     expect(script).toContain('set rangeEnd to my makeDate(2026, 10, 25, 0, 0, 0)')
-    expect(script).toContain('tell (every event of cal whose start date < rangeEnd and end date > rangeStart)')
-    expect(script).toContain('set {titles, startDates, endDates, allDays} to {summary, start date, end date, allday event}')
-    expect(script).toContain('((item i of startDates) as «class isot» as string)')
-    expect(script).not.toMatch(/repeat with \w+ in/)
+    // Resolved to a list once: a bulk read of a live `whose` reference re-runs the slow date filter per property.
+    expect(script).toContain('set hits to (every event of cal whose start date < rangeEnd and end date > rangeStart)')
+    expect(script.match(/whose/g)).toHaveLength(1)
+    expect(script).not.toContain('tell (every event')
+    expect(script).toContain('((start date of ev) as «class isot» as string)')
+    expect(script).toContain('((end date of ev) as «class isot» as string)')
   })
 
   it('parses, names untitled events and sorts by start', () => {
@@ -108,6 +110,16 @@ describe('createEventScript', () => {
   it('prefers the default calendar when its id is known', () => {
     const script = createEventScript({ ...base, calendarId: 'ABC-123' })
     expect(script).toContain('set targetCal to first calendar whose calendarIdentifier is "ABC-123" and writable is true')
+  })
+
+  it('falls back to a usually-default calendar name before the first writable calendar', () => {
+    // macOS 26 can't read calendarIdentifier, and the first writable calendar was "Finished" on a real Mac.
+    const script = createEventScript({ ...base, calendarId: 'ABC-123' })
+    const first = script.indexOf('set targetCal to item 1 of writableCals')
+    const preferred = script.indexOf('repeat with preferred in {"Calendar", "Home", "Personal", "Work"}')
+    expect(first).toBeGreaterThan(-1)
+    expect(preferred).toBeGreaterThan(first)
+    expect(script).toContain('set nameHits to (calendars whose writable is true and name is (preferred as text))')
   })
 
   it('omits url and attendees when not given', () => {
@@ -193,6 +205,7 @@ describe('calendar_create_event run', () => {
       view: { kind: 'openApp', app: 'Calendar' }
     })
     expect(vi.mocked(readDefault)).toHaveBeenCalledWith('com.apple.iCal', 'defaultCalendarID')
+    expect(runMock.mock.calls[0][1]).toMatchObject({ app: 'Calendar', launch: true })
   })
 
   it('says so when Calendar dropped some guests', async () => {

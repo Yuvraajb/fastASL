@@ -12,14 +12,15 @@ import type {
   Result,
   ShortcutRunResult,
   SignGuess,
-  SignTemplate
+  SignTemplate,
+  ViewAction
 } from '@shared/types'
 import { CAPTURE_REASONS, type ShapeCapture } from '../engine/gestures/customShapes'
 import { dominantSlot, keepActiveHand } from '../engine/recognition/features'
 import { wordTemplate } from '../engine/recognition/teach'
 import { getApp, setApp } from './store'
 import type { Services } from './services'
-import type { SettingsPage, Token, View } from './types'
+import { isReply, type Answer, type SettingsPage, type Token, type View } from './types'
 import { live } from './live'
 
 type HoldPage = Extract<SettingsPage, { page: 'newGestureHold' }>
@@ -60,8 +61,17 @@ export const QUICK_MENU = ['Create event', 'Send message', 'Search web', 'Take n
 export const SETTINGS_ROOT = ['Teach a sign', 'New gesture', 'My gestures', 'Camera source', 'Sensitivity']
 const MODES: Mode[] = ['command', 'dictation', 'spell']
 
-const DONE_AUTO_COLLAPSE_MS = 4000
-const TOAST_MS = 2600
+/** A toast's countdown; one with a screenshot thumbnail stays long enough for a thumbs up to open it. */
+export const TOAST_MS = 2600
+export const TOAST_THUMB_MS = 6000
+export const toastDuration = (view: { thumb?: string }): number => (view.thumb ? TOAST_THUMB_MS : TOAST_MS)
+/**
+ * The reply card stays this long with no movement in front of the camera, then gives way to
+ * Ready. Long enough to read a two-sentence reply and start signing the next message.
+ */
+export const REPLY_IDLE_MS = 20_000
+/** A screenshot thumbnail that takes longer than this is left out rather than holding up the card. */
+const THUMB_WAIT_MS = 1500
 /** Why typing failed (often a permission to grant in System Settings) needs time to read. */
 const TYPING_NOTICE_MS = 8000
 /** The dictation card keeps this much of the typed text (it shows the last two lines). */
@@ -69,14 +79,8 @@ const DICTATION_KEEP = 120
 /** Typed text continues a run (spaced from it) this long after the last typing, card or not. */
 const TYPED_RUN_MS = 2 * 60_000
 
-/** Below this Claude is guessing, so the card always asks (Did you mean). */
-const LOW_CONFIDENCE = 0.6
-/** Below this, listed alternatives are close enough to the intent to ask too. */
-const CLOSE_CALL = 0.75
-const INSERT_TEXT = 'Insert text'
-const MORE_OPTIONS = 'More options'
-/** Claude's app-specific actions shown between Insert text and More options (4 rows, 4 fingers). */
-const MAX_SUGGESTED_ACTIONS = 2
+/** Below this the interpreter is guessing: what was signed goes to the agent instead of its reading. */
+export const LOW_CONFIDENCE = 0.6
 
 /** New gesture › hold: 3, 2, 1, then app/shapeInput records the shape (CAPTURE_MS). */
 const COUNTDOWN_FROM = 3
@@ -130,15 +134,6 @@ function taughtWords(templates: readonly SignTemplate[]): string[] {
   return [...new Set(templates.filter((t) => t.kind === 'word').map((t) => t.label))]
 }
 
-const isInsertAction = (action: string): boolean => /\b(insert|type)\b/i.test(action)
-const isMoreAction = (action: string): boolean => /\bmore\b/i.test(action)
-
-/** Insert text and More options are always offered, whatever Claude suggested for the app. */
-function contextActionsFor(suggested: string[]): string[] {
-  const own = suggested.filter((a) => !isInsertAction(a) && !isMoreAction(a)).slice(0, MAX_SUGGESTED_ACTIONS)
-  return [INSERT_TEXT, ...own, MORE_OPTIONS]
-}
-
 /** The agent run on the card. Only its events are shown; anything else is stale. */
 interface AgentRunState {
   /**
@@ -147,8 +142,11 @@ interface AgentRunState {
    */
   runId: string | null
   intent: string
-  /** Run by a gesture shortcut: the shortcut's toast shows the result, not the Done card. */
+  /** Run by a gesture shortcut: the shortcut's toast shows the result, on the plain Working card meanwhile. */
   shortcut: boolean
+  /** A command's conversation card: what the user signed (and for which quick-menu pick). */
+  said: string
+  prefix?: string
   held: AgentEvent[]
 }
 
@@ -165,6 +163,41 @@ function failureText(failure: { error: string; missingKey?: EnvKey }): string {
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** Tools that only look things up: a run of nothing else is answered in the model's words. */
+const LOOKUP_TOOLS: ReadonlySet<string> = new Set([
+  'get_frontmost_app',
+  'contacts_find',
+  'calendar_list_events',
+  'notes_search',
+  'notes_read',
+  'spotify_search'
+])
+
+/**
+ * The agent's result as the conversation card shows it. No tool ran, or only lookups did, and the
+ * model answered: its reply is the answer (a greeting, the time, tomorrow's meetings, or why it
+ * couldn't call Mom), not a lookup's headline like "Found 18 contacts". Otherwise the title and
+ * subtitle come from the tool outcomes, with the model's own line under them.
+ */
+export function answerFor(result: AgentResult, complete: boolean): Answer {
+  const lookupsOnly = result.evidence.every((e) => LOOKUP_TOOLS.has(e.tool))
+  if (lookupsOnly && result.reply) return { ok: true, text: result.reply }
+  return {
+    ok: complete,
+    title: result.title,
+    subtitle: result.subtitle,
+    ...(result.reply ? { text: result.reply } : {}),
+    ...(result.view ? { view: result.view } : {})
+  }
+}
+
+const IMAGE_FILE = /\.(png|jpe?g|heic|tiff?|gif)$/i
+
+/** The image a result opens (take_screenshot's file), which the card shows as a thumbnail. */
+export function imagePath(view: ViewAction | undefined): string | null {
+  return view?.kind === 'openFile' && IMAGE_FILE.test(view.path) ? view.path : null
 }
 
 /** IPC calls can also reject (main-process crash); treat that as a soft failure too. */
@@ -205,9 +238,14 @@ function isListening(view: View): boolean {
   return view.kind === 'recognizing' && view.token === null
 }
 
+/** Command and Spell mode's views where a recognized sign joins (or starts) the phrase. */
+function collectsPhrase(view: View): boolean {
+  return view.kind === 'ready' || view.kind === 'recognizing' || view.kind === 'building' || isReply(view)
+}
+
 /**
  * Where a guessed sign can start and land: the views that add a recognized sign to the phrase
- * (or type it, in Dictation). Not the Sentence card while it is being proceeded.
+ * (or type it, in Dictation), the agent's reply included. Not while the agent works on one.
  */
 function guessView(view: View): boolean {
   switch (view.kind) {
@@ -216,8 +254,8 @@ function guessView(view: View): boolean {
     case 'building':
     case 'dictation':
       return true
-    case 'sentence':
-      return !view.thinking
+    case 'conversation':
+      return view.phase === 'reply'
     default:
       return false
   }
@@ -244,28 +282,25 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
       return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
     case 'building':
       return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
-    case 'sentence':
-      return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight'])
-    case 'agentReady':
-      return new Set(['thumbsUp', 'fist', 'swipeLeft'])
+    case 'conversation':
+      // The reply stays ready for the next message: Ready's gestures (thumbs up opens the result).
+      if (view.phase === 'reply') return activeGestures({ kind: 'ready' }, mode)
+      return new Set(['fist'])
     case 'working':
       return new Set(['fist'])
     case 'confirm':
       return new Set(['thumbsUp', 'fist'])
     case 'didYouMean':
-      if (view.variant === 'quote') return new Set(['thumbsUp', 'fist', 'swipeLeft'])
-      // Swipe left edits what the list was made from: the sentence, or the spelled letters.
+      // Swipe left edits what a spelling list was made from: the spelled letters.
       if (view.purpose === 'sign' || view.purpose === 'learn') return new Set(['fingers', 'fist', 'thumbsUp'])
       return new Set(['fingers', 'fist', 'thumbsUp', 'swipeLeft'])
-    case 'done':
-      return new Set(['thumbsUp', 'fist', 'fingers', 'swipeUp'])
-    case 'contextActions':
     case 'quickMenu':
       return new Set(['fingers', 'fist'])
     case 'dictation':
       return new Set(['fist', 'swipeLeft', 'swipeRight', 'swipeUp'])
     case 'toast':
-      return new Set(['fist'])
+      // A screenshot's thumbnail: thumbs up opens it in Preview.
+      return new Set(view.thumb && view.view ? ['thumbsUp', 'fist'] : ['fist'])
     case 'settings':
       switch (view.settings.page) {
         case 'teachSpell':
@@ -303,6 +338,8 @@ export function gestureScreen(view: View): string {
   }
   // The guesses come up while the hand may still hold the sign's last shape (two fingers, say).
   if (view.kind === 'settings' && view.settings.page === 'teachShow') return `teachShow:${view.settings.phase}`
+  // The reply brings Ready's gestures: a thumbs up or fist already up while the agent worked must be made again.
+  if (view.kind === 'conversation') return `conversation:${view.phase}`
   return view.kind
 }
 
@@ -317,9 +354,11 @@ export function takesSigns(view: View): boolean {
     case 'ready':
     case 'recognizing':
     case 'building':
-    case 'sentence':
     case 'dictation':
       return true
+    case 'conversation':
+      // The reply: the next sign starts the next message.
+      return view.phase === 'reply'
     case 'settings':
       return view.settings.page === 'teachSpell'
     default:
@@ -332,13 +371,8 @@ export function optionsFor(view: View): string[] {
   switch (view.kind) {
     case 'didYouMean':
       return view.options
-    case 'contextActions':
-      return view.actions
     case 'quickMenu':
       return view.options
-    case 'done':
-      // Only a completed task can become a gesture shortcut.
-      return view.ok ? ['View', 'New command', 'Save as gesture'] : ['View', 'New command']
     case 'settings':
       return settingsOptions(view.settings)
     default:
@@ -492,6 +526,19 @@ export class Controller {
     this.clearTimers()
     setApp({ view, pick: null, signing: false })
     this.dropStaleLlmCalls()
+    if (isReply(view)) this.idleAfterReply(view)
+  }
+
+  /**
+   * The reply card gives way to Ready after REPLY_IDLE_MS with no movement. A movement still being
+   * judged then (Listening) holds it, since a sign from it starts the next message.
+   */
+  private idleAfterReply(view: View, ms = REPLY_IDLE_MS): void {
+    this.later(ms, () => {
+      if (this.view !== view) return
+      if (getApp().signing) return this.idleAfterReply(view, 2000)
+      this.setView(this.idleView())
+    })
   }
 
   private later(ms: number, fn: () => void): void {
@@ -526,11 +573,6 @@ export class Controller {
     if (notice !== null && notice !== this.llmStatus?.text && notice !== this.llmErrorNotice) return
     this.llmStatus = { text, current }
     setApp({ notice: text })
-  }
-
-  /** Whether the status notice of the call `current` belongs to is on screen. */
-  private showsLlmStatus(current: () => boolean): boolean {
-    return this.llmStatus?.current === current && getApp().notice === this.llmStatus.text
   }
 
   /** An LLM call's error as the notice, for the usual 5 s. */
@@ -685,19 +727,21 @@ export class Controller {
       case 'recognizing':
       case 'building':
         if (isListening(view)) return this.readyGesture(input)
+        // Hands down ends the phrase, which goes to the agent at once (as do a thumbs up and a swipe right).
         if (g === 'thumbsUp' || g === 'swipeRight' || g === 'handsDown') this.endPhrase()
         else if (g === 'swipeLeft') this.deleteLastToken()
         else if (g === 'fist') this.cancel()
         return
-      case 'sentence':
-        if (g === 'swipeLeft') this.deleteLastToken()
-        else if (g === 'swipeRight' || g === 'thumbsUp') void this.proceed()
-        else if (g === 'fist') this.cancel()
-        return
-      case 'agentReady':
-        if (g === 'thumbsUp') void this.runAgent(view.intent, view.sentence)
-        else if (g === 'fist') this.cancel()
-        else if (g === 'swipeLeft') this.change()
+      case 'conversation':
+        if (view.phase === 'reply') {
+          // A thumbs up opens what the agent made (the screenshot in Preview); with nothing to open it is Ready's.
+          if (g === 'thumbsUp' && view.answer?.view) return this.openResult(view.answer.view)
+          return this.readyGesture(input)
+        }
+        if (g !== 'fist') return
+        // Before the agent starts there is nothing to stop: the phrase is dropped.
+        if (view.phase === 'understanding') this.cancel()
+        else this.stopAgent()
         return
       case 'working':
         if (g === 'fist') this.stopAgent()
@@ -712,13 +756,6 @@ export class Controller {
         else if (g === 'swipeLeft') this.change()
         else if (g === 'fist') return view.purpose === 'learn' ? this.declineGuess() : this.cancel()
         return
-      case 'done':
-        if (g === 'thumbsUp') this.expand()
-        else if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
-        else if (g === 'swipeUp') this.openSettings()
-        else if (g === 'fist') this.collapse()
-        return
-      case 'contextActions':
       case 'quickMenu':
         if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
         else if (g === 'fist') this.cancel()
@@ -730,7 +767,8 @@ export class Controller {
         else if (g === 'fist') this.switchMode('command')
         return
       case 'toast':
-        if (g === 'fist') this.leaveToast(view.returnTo)
+        if (g === 'thumbsUp' && view.view) this.openFromToast(view)
+        else if (g === 'fist') this.leaveToast(view.returnTo)
         return
       case 'settings': {
         const page = view.settings
@@ -770,6 +808,7 @@ export class Controller {
     if (target === 'option' && index !== undefined) return this.pickOption(index)
     if (target === 'close') {
       if (view.kind === 'working') this.stopAgent()
+      else if (view.kind === 'conversation' && view.phase === 'working') this.stopAgent()
       else if (view.kind === 'confirm') void this.respondConfirm(false)
       else if (view.kind === 'settings') this.settingsBack()
       else if (view.kind === 'toast') this.leaveToast(view.returnTo)
@@ -783,15 +822,10 @@ export class Controller {
     }
     if (target === 'proceed') {
       if (view.kind === 'building' || view.kind === 'recognizing') this.endPhrase()
-      else if (view.kind === 'sentence') void this.proceed()
       return
     }
     // primary / secondary
     switch (view.kind) {
-      case 'agentReady':
-        if (target === 'primary') void this.runAgent(view.intent, view.sentence)
-        else this.change()
-        return
       case 'confirm':
         void this.respondConfirm(target === 'primary')
         return
@@ -799,16 +833,13 @@ export class Controller {
         if (target === 'primary') this.pickOption(0)
         else this.change()
         return
-      case 'done':
-        if (target === 'primary') this.expand()
-        else if (view.view) void this.services.openTarget(view.view)
-        return
-      case 'sentence':
-        if (target === 'primary') void this.proceed()
-        else this.cancel()
+      case 'conversation':
+        // The reply's thumbnail (or result) opens what the agent made.
+        if (target === 'primary' && view.answer?.view) this.openResult(view.answer.view)
         return
       case 'toast':
-        if (target === 'secondary') this.leaveToast(view.returnTo)
+        if (target === 'primary' && view.view) this.openFromToast(view)
+        else if (target === 'secondary') this.leaveToast(view.returnTo)
         return
       default:
         if (target === 'secondary') this.cancel()
@@ -847,9 +878,9 @@ export class Controller {
       return this.dictate(token, view.kind === 'dictation' ? view.text : '')
     }
     if (view.kind === 'didYouMean' && view.purpose === 'sign') return
-    if (!['ready', 'recognizing', 'building', 'sentence'].includes(view.kind)) return
-    // A sign after a finished sentence starts the next phrase: the card moves on.
-    if (view.kind === 'sentence') this.startNextPhrase()
+    if (!collectsPhrase(view)) return
+    // A sign on the agent's reply starts the next message: the card moves on to it.
+    if (isReply(view)) this.startNextPhrase()
     this.phraseVersion++
     this.tokens.push(token)
     this.forgetInterpretation()
@@ -888,10 +919,10 @@ export class Controller {
   ambiguousSign(options: string[]): void {
     // Dictation types as you sign: a question per word would stall it, so it takes the best guess.
     if (getApp().mode === 'dictation') return this.token({ text: options[0], kind: 'word' })
-    if (!['ready', 'recognizing', 'building', 'sentence'].includes(this.view.kind)) return
-    // The phrase grows (or is edited): an interpretation of the Sentence card is out of date.
-    this.forgetInterpretation()
-    this.setView({ kind: 'didYouMean', variant: 'list', options: options.slice(0, 3), purpose: 'sign' })
+    if (!collectsPhrase(this.view)) return
+    // On the reply, the pick starts the next message.
+    if (isReply(this.view)) this.startNextPhrase()
+    this.setView({ kind: 'didYouMean', options: options.slice(0, 3), purpose: 'sign' })
   }
 
   // ---------------------------------------------------------------- guess, confirm, learn
@@ -944,7 +975,7 @@ export class Controller {
     if (!res.ok) return this.guessFailed(res.error)
     if (!res.value.length) return // not a sign: carry on, as for any movement nothing matched
     const view = this.view
-    const list: View = { kind: 'didYouMean', variant: 'list', options: res.value, purpose: 'learn' }
+    const list: View = { kind: 'didYouMean', options: res.value, purpose: 'learn' }
     this.learning = { list, features: movement.features, hands: res.hands, back: isListening(view) ? this.idleView() : view }
     this.setView(list)
   }
@@ -994,7 +1025,7 @@ export class Controller {
     this.learning = null
     if (!learning || this.view !== learning.list) return
     this.setView(learning.back)
-    // On the Sentence card (the phrase ended meanwhile) the word starts the next phrase, like any sign there.
+    // On the agent's reply (the phrase was sent meanwhile) the word starts the next message, like any sign there.
     this.token({ text: gloss.toLowerCase(), kind: 'word' })
     void this.learnSign(gloss, learning.features, learning.hands.get(gloss))
   }
@@ -1042,12 +1073,7 @@ export class Controller {
     this.phraseVersion++
     this.forgetInterpretation()
     if (!this.tokens.length) return this.cancel()
-    if (this.view.kind === 'sentence') {
-      this.setView({ kind: 'sentence', sentence: assembleSentence(this.tokens), tokens: [...this.tokens] })
-      this.prefetchInterpretation()
-    } else {
-      this.resumeBuilding()
-    }
+    this.resumeBuilding()
   }
 
   /** Back to the token strip with the phrase so far (or to listening when it is empty). */
@@ -1056,15 +1082,37 @@ export class Controller {
     this.setView({ kind: 'building', tokens: [...this.tokens], current: null, sentence: assembleSentence(this.tokens) })
   }
 
+  /** Hands down (or a thumbs up, a swipe right, the > button): Spell mode lists spellings; Command mode sends the phrase. */
   private endPhrase(): void {
     if (!this.tokens.length) return this.cancel()
     if (getApp().mode === 'spell') return void this.spellSuggestions()
-    this.setView({ kind: 'sentence', sentence: assembleSentence(this.tokens), tokens: [...this.tokens] })
-    this.prefetchInterpretation()
+    void this.sendPhrase()
   }
 
-  /** Start Claude early so "proceed" feels instant. */
-  private prefetchInterpretation(): Promise<Interpretation> {
+  /**
+   * Command mode's phrase end: the conversation card at once ("Understanding"), the interpreter,
+   * then straight to the agent, with nothing to confirm in between. An interpreter that fails
+   * (no key, a rate limit, a timeout) or is unsure doesn't hold the message up: what was signed
+   * goes instead. Writes are still confirmed by the agent's Confirm card.
+   */
+  private async sendPhrase(): Promise<void> {
+    const raw = assembleSentence(this.tokens)
+    const prefix = this.intentPrefix
+    const pending = this.interpretPhrase()
+    const understanding: View = { kind: 'conversation', phase: 'understanding', said: raw, ...(prefix ? { prefix } : {}), steps: [] }
+    this.setView(understanding)
+    const { result, error } = await pending
+    if (this.view !== understanding) return // cancelled, collapsed or moved on meanwhile
+    if (this.signingTask) return this.taskSigned(result, error, raw)
+    if (error) this.notifyLlmError(error)
+    const reading = result && result.confidence >= LOW_CONFIDENCE ? result : null
+    const sentence = reading?.sentence.trim() || raw
+    const intent = reading?.intent?.trim() || (prefix ? `${prefix}: ${sentence}` : sentence)
+    void this.runAgent(intent, sentence, prefix)
+  }
+
+  /** The interpreter's reading of the phrase. Its call is the card's until the phrase changes or goes. */
+  private interpretPhrase(): Promise<Interpretation> {
     const tokens = this.tokens.map((t) => t.text)
     const sentence = assembleSentence(this.tokens)
     const intentPrefix = this.intentPrefix
@@ -1089,39 +1137,13 @@ export class Controller {
         )
       )
       this.llmCalls.delete(abort)
-      const retrying = this.showsLlmStatus(current)
       this.clearLlmStatus(current)
-      if (res.ok) return { result: res.value, error: null }
-      const error = failureText(res)
-      // The card said it was retrying: when that fails, it says so now, not only on proceed.
-      if (retrying && current()) this.notifyLlmError(error)
-      return { result: null, error }
+      return res.ok ? { result: res.value, error: null } : { result: null, error: failureText(res) }
     })()
     this.interpretation = interpretation
     this.llmCalls.set(abort, current)
     this.dropStaleLlmCalls()
     return interpretation
-  }
-
-  private async proceed(): Promise<void> {
-    const view = this.view
-    if (view.kind !== 'sentence') return
-    const pending = this.interpretation ?? this.prefetchInterpretation()
-    const thinking: View = { ...view, thinking: true }
-    this.setView(thinking)
-    const { result, error } = await pending
-    // Edited, re-signed or cancelled meanwhile: this answer is for an old sentence.
-    if (this.view !== thinking) return
-    const sentence = view.sentence
-    if (this.signingTask) return this.taskSigned(result, error, sentence)
-    if (!result) {
-      // Claude unavailable: still let the agent try with the raw sentence and the quick-menu pick.
-      if (error) this.notifyLlmError(error)
-      const intent = this.intentPrefix ? `${this.intentPrefix}: ${sentence}` : sentence
-      this.setView({ kind: 'agentReady', intent, variant: 'default', sentence })
-      return
-    }
-    this.routeIntent(result, sentence)
   }
 
   /** New gesture › Sign a new task: Claude's intent (else the sentence) is the task; then the shape. */
@@ -1133,52 +1155,11 @@ export class Controller {
     this.startShapeCapture(task)
   }
 
-  private routeIntent(result: IntentResult, rawSentence: string): void {
-    const sentence = result.sentence || rawSentence
-    const { intent } = result
-    const alternatives = result.alternatives.filter((a) => a && a !== intent)
-    const guessing = result.confidence < LOW_CONFIDENCE && (intent !== null || alternatives.length > 0)
-    const closeCall = intent !== null && alternatives.length > 0 && result.confidence < CLOSE_CALL
-    if (guessing || closeCall) {
-      // Numbered, so whatever will run is on screen: the intent first, then the alternatives.
-      // Without an intent the sentence may be text to type, so Insert text is offered too.
-      const options = intent ? [intent, ...alternatives].slice(0, 3) : [...alternatives.slice(0, 3), INSERT_TEXT]
-      this.setView({ kind: 'didYouMean', variant: 'list', options, purpose: 'intent', quote: sentence })
-      return
-    }
-    if (!intent) {
-      this.setView({ kind: 'contextActions', sentence, actions: contextActionsFor(result.context_actions) })
-      return
-    }
-    const email = intent.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)
-    this.setView({
-      kind: 'agentReady',
-      intent,
-      variant: email ? 'email' : 'default',
-      target: email?.[0],
-      sentence
-    })
-  }
-
+  /** "Edit" on a list (swipe left, the button): back to the phrase it came from. On "Is this X?" it declines. */
   private change(): void {
     const view = this.view
     if (view.kind === 'didYouMean' && view.purpose === 'learn') return this.declineGuess()
-    // "Edit" on a spelling or sign list goes back to signing, not to the agent sentence.
-    if (view.kind === 'didYouMean' && view.purpose !== 'intent') return this.resumeBuilding()
-    const sentence = assembleSentence(this.tokens)
-    if (!sentence) return this.cancel()
-    this.setView({ kind: 'sentence', sentence, tokens: [...this.tokens] })
-    this.prefetchInterpretation()
-  }
-
-  /** Inline keyboard edit of the sentence (pencil icon). */
-  editSentence(text: string): void {
-    const words = text.trim().split(/\s+/).filter(Boolean)
-    this.phraseVersion++
-    this.tokens = words.map((w) => ({ text: w, kind: 'word' as const }))
-    if (!this.tokens.length) return this.cancel()
-    this.setView({ kind: 'sentence', sentence: text.trim(), tokens: [...this.tokens] })
-    this.prefetchInterpretation()
+    this.resumeBuilding()
   }
 
   private pickOption(index: number): void {
@@ -1200,35 +1181,16 @@ export class Controller {
             current: choice,
             sentence: assembleSentence(this.tokens)
           })
-        } else if (view.purpose === 'spell') {
+        } else {
           // Spellings still on their way would bring back the list being picked from.
           if (view.pending && !this.inserting) this.setView({ ...view, pending: false })
           void this.insert(choice, 'Typed')
-        } else if (choice === INSERT_TEXT) {
-          void this.contextAction(choice, view.quote ?? assembleSentence(this.tokens))
-        } else {
-          // Either variant: Agent ready shows the intent before anything runs.
-          this.setView({ kind: 'agentReady', intent: choice, variant: 'default', sentence: view.quote ?? choice })
         }
-        return
-      case 'contextActions':
-        void this.contextAction(choice, view.sentence)
         return
       case 'quickMenu':
+        // The details are signed next, and the pick prefixes them.
         this.intentPrefix = choice
-        // From Context actions › More options: the signed sentence is the details, so interpret it now.
-        if (view.fromSentence) {
-          this.forgetInterpretation()
-          this.setView({ kind: 'sentence', sentence: assembleSentence(this.tokens), tokens: [...this.tokens] })
-          void this.proceed()
-          return
-        }
         this.setView(this.idleView())
-        return
-      case 'done':
-        if (index === 0 && view.view) void this.services.openTarget(view.view)
-        else if (index === 1) this.expand()
-        else if (index === 2) this.startNewGesture(view.intent)
         return
       case 'settings':
         this.settingsPick(view.settings, index)
@@ -1236,19 +1198,10 @@ export class Controller {
     }
   }
 
-  private async contextAction(action: string, sentence: string): Promise<void> {
-    if (isInsertAction(action)) return this.insert(sentence, 'Text inserted')
-    if (isMoreAction(action)) {
-      this.setView({ kind: 'quickMenu', options: QUICK_MENU, fromSentence: true })
-      return
-    }
-    this.setView({ kind: 'agentReady', intent: `${action}: "${sentence}"`, variant: 'default', sentence })
-  }
-
   /** The raw letters can be picked at once; Claude's spellings join them when they arrive. */
   private async spellSuggestions(): Promise<void> {
     const letters = this.tokens.map((t) => t.text).join('')
-    const list: View = { kind: 'didYouMean', variant: 'list', options: [letters], purpose: 'spell', quote: letters }
+    const list: View = { kind: 'didYouMean', options: [letters], purpose: 'spell', quote: letters }
     const pending: View = { ...list, pending: true }
     this.setView(pending)
     const current = (): boolean => this.view === pending
@@ -1286,31 +1239,77 @@ export class Controller {
 
   // ---------------------------------------------------------------- agent
 
-  async runAgent(intent: string, sentence: string): Promise<void> {
+  /**
+   * Sends one message of the conversation: `intent` is what the agent is asked, `sentence` what
+   * the user signed (shown as theirs on the card), `prefix` a quick-menu pick it was signed for.
+   */
+  async runAgent(intent: string, sentence: string, prefix?: string): Promise<void> {
     this.subscribe() // dispose() may have run (React StrictMode re-mounts App)
-    // The run uses up the phrase, however it ends: Done, Settings and Ready start a new one.
+    // The run uses up the phrase, however it ends: the next sign, Settings and Ready start a new one.
     this.resetPhrase()
     // The agent may switch apps or type itself: what fastASL types next starts a new run.
     this.lastTyped = null
     this.steps = []
     // One run at a time: the main process stops whatever ran before, a pending shortcut included.
     this.shortcut = null
-    const run: AgentRunState = { runId: null, intent, shortcut: false, held: [] }
+    const run: AgentRunState = { runId: null, intent, shortcut: false, said: sentence, ...(prefix ? { prefix } : {}), held: [] }
     this.agentRun = run
-    this.setView({ kind: 'working', intent, steps: [] })
+    this.setView(this.runningView(run))
     const frontmost = await this.services.frontmostApp().catch(() => null)
     if (this.agentRun !== run) return // stopped before the agent started
     const res = await settled(this.services.agentRun({ intent, sentence, frontmost }))
     if (this.agentRun !== run) return // stopped meanwhile (clearRun released what it held)
     if (!res.ok) {
       this.clearRun()
-      this.setView({ kind: 'done', ok: false, title: "Couldn't start the agent", subtitle: failureText(res), intent })
-      this.later(DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
+      this.showAnswer(run, { ok: false, title: "Couldn't start the agent", subtitle: failureText(res) })
       return
     }
     run.runId = res.value.runId
     // The held events can be told apart now: this run's are shown, the others dropped.
     for (const e of run.held.splice(0)) this.onAgentEvent(e)
+  }
+
+  /** The card while a run works: the conversation for a command, the plain Working card for a shortcut. */
+  private runningView(run: AgentRunState): View {
+    const steps = [...this.steps]
+    if (run.shortcut) return { kind: 'working', intent: run.intent, steps }
+    return { kind: 'conversation', phase: 'working', said: run.said, ...(run.prefix ? { prefix: run.prefix } : {}), steps }
+  }
+
+  /** The agent's answer under what the user signed. The card stays ready for the next message. */
+  private showAnswer(run: AgentRunState, answer: Answer): void {
+    const prefix = run.prefix ? { prefix: run.prefix } : {}
+    this.setView({ kind: 'conversation', phase: 'reply', said: run.said, ...prefix, steps: [...this.steps], answer })
+  }
+
+  /** A result that is a screenshot: its thumbnail first (waited for briefly), unless the card moves on meanwhile. */
+  private async answerWithThumb(run: AgentRunState, answer: Answer, path: string): Promise<void> {
+    const from = this.view
+    const thumb = await this.loadThumb(path)
+    if (this.view !== from) return // stopped, collapsed or moved on while it loaded
+    this.showAnswer(run, thumb ? { ...answer, thumb } : answer)
+  }
+
+  /** A screenshot's thumbnail from main (which serves only screenshots fastASL took), or nothing within THUMB_WAIT_MS. */
+  private async loadThumb(path: string): Promise<string | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), THUMB_WAIT_MS)
+    })
+    let call: Promise<Result<string>>
+    try {
+      call = settled(this.services.imageThumb(path))
+    } catch (err) {
+      call = Promise.resolve({ ok: false, error: errorText(err) })
+    }
+    const res = await Promise.race([call, timeout])
+    clearTimeout(timer)
+    return res?.ok ? res.value : undefined
+  }
+
+  /** Thumbs up on a result: opens it (the screenshot in Preview). The card stays. */
+  private openResult(view: ViewAction): void {
+    void this.services.openTarget(view).catch(() => undefined)
   }
 
   /** Takes the run off the card. Events held for a run that was never named are then another run's. */
@@ -1348,7 +1347,8 @@ export class Controller {
   private async respondConfirm(approved: boolean): Promise<void> {
     const view = this.view
     if (view.kind !== 'confirm') return
-    this.setView({ kind: 'working', intent: this.agentRun?.intent ?? '', steps: [...this.steps] })
+    const run = this.agentRun
+    this.setView(run ? this.runningView(run) : { kind: 'working', intent: '', steps: [...this.steps] })
     await this.services.agentRespond(view.requestId, approved)
   }
 
@@ -1358,7 +1358,7 @@ export class Controller {
    */
   private adopt(e: Extract<AgentEvent, { type: 'started' }>): void {
     if (!this.shortcut || (this.agentRun && !this.agentRun.shortcut)) return
-    this.agentRun = { runId: e.runId, intent: e.intent, shortcut: true, held: [] }
+    this.agentRun = { runId: e.runId, intent: e.intent, shortcut: true, said: e.intent, held: [] }
     this.setView({ kind: 'working', intent: e.intent, steps: [] })
   }
 
@@ -1384,7 +1384,9 @@ export class Controller {
         if (i >= 0) this.steps[i] = e.step
         else this.steps.push(e.step)
         const view = this.view
-        if (view.kind === 'working') this.setView({ ...view, steps: [...this.steps] })
+        if (view.kind === 'working' || (view.kind === 'conversation' && view.phase === 'working')) {
+          this.setView({ ...view, steps: [...this.steps] })
+        }
         return
       }
       case 'confirm':
@@ -1392,30 +1394,22 @@ export class Controller {
         return
       case 'done':
       case 'error':
-      case 'stopped':
+      case 'stopped': {
         this.agentRun = null
         // A shortcut's result is its toast (runShortcut), which says the same thing.
         if (run.shortcut) return
         if (e.type === 'stopped') return this.agentStopped(run.runId) // stopped by the main process, not the user
         if (e.type === 'error') {
           const subtitle = failureText({ error: e.message, missingKey: e.missingKey })
-          this.setView({ kind: 'done', ok: false, title: "Couldn't finish", subtitle, intent: run.intent })
-          this.later(DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
-          return
+          return this.showAnswer(run, { ok: false, title: "Couldn't finish", subtitle })
         }
         // Title and subtitle come from tool results; an unfinished task says why in the subtitle.
         if (e.complete) this.lastCompleted = { intent: run.intent, title: e.result.title }
-        this.setView({
-          kind: 'done',
-          ok: e.complete,
-          title: e.result.title,
-          subtitle: e.result.subtitle,
-          view: e.result.view,
-          intent: run.intent
-        })
-        // Failures stay twice as long (matches the DoneView progress line).
-        this.later(e.complete ? DONE_AUTO_COLLAPSE_MS : DONE_AUTO_COLLAPSE_MS * 2, () => this.collapse())
-        return
+        const answer = answerFor(e.result, e.complete)
+        const shot = imagePath(answer.view)
+        if (shot) return void this.answerWithThumb(run, answer, shot)
+        return this.showAnswer(run, answer)
+      }
     }
   }
 
@@ -1443,14 +1437,25 @@ export class Controller {
     this.shortcut = pending
     const res = await pending
     if (this.shortcut !== pending) return // stopped, or replaced by a newer run
+    // The peace sign's screenshot shows as a thumbnail, which thumbs up opens in Preview.
+    const shot = res.ok ? imagePath(res.view) : null
+    const thumb = shot ? await this.loadThumb(shot) : undefined
+    if (this.shortcut !== pending) return // stopped, or replaced while the thumbnail loaded
     this.shortcut = null
     const meta = res.ok && res.compiled ? `compiled · ${(res.durationMs / 1000).toFixed(1)} s` : undefined
-    this.showToast({ kind: 'toast', title: res.title, subtitle: res.subtitle, ok: res.ok, meta, returnTo })
+    const opens = res.ok && res.view ? { view: res.view, ...(thumb ? { thumb } : {}) } : {}
+    this.showToast({ kind: 'toast', title: res.title, subtitle: res.subtitle, ok: res.ok, meta, returnTo, ...opens })
   }
 
   private showToast(toast: Extract<View, { kind: 'toast' }>): void {
     this.setView(toast)
-    this.later(TOAST_MS, () => this.leaveToast(toast.returnTo))
+    this.later(toastDuration(toast), () => this.leaveToast(toast.returnTo))
+  }
+
+  /** Thumbs up (or a click) on a toast's thumbnail: opens it in Preview, and the toast goes. */
+  private openFromToast(toast: Extract<View, { kind: 'toast' }>): void {
+    if (toast.view) this.openResult(toast.view)
+    this.leaveToast(toast.returnTo)
   }
 
   /** A toast ends a flow: whatever phrase led to it is finished. */
@@ -1839,14 +1844,12 @@ export function mockPoseFor(view: View): typeof live.mockPose {
       return view.token ? 'fist' : 'twoHands'
     case 'building':
       return 'c'
-    case 'agentReady':
-      return 'point'
+    case 'conversation':
+      return view.phase === 'reply' ? 'ok' : 'point'
     case 'working':
       return 'point'
     case 'confirm':
       return 'thumbsUp'
-    case 'done':
-      return 'ok'
     case 'toast':
       return 'peace'
     default:

@@ -6,8 +6,11 @@ import { StatusLabel } from './StatusLabel'
 import { CloseButton } from './CloseButton'
 import './Header.css'
 
-/** Cards where a movement being judged shows as "Listening..." in the header (store.signing). */
-const SIGNING_VIEWS: ReadonlySet<View['kind']> = new Set(['ready', 'recognizing', 'building', 'sentence', 'dictation'])
+/**
+ * Cards where a movement being judged shows as "Listening..." in the header (store.signing). The
+ * conversation card takes signs only once the agent has answered (controller.takesSigns).
+ */
+const SIGNING_VIEWS: ReadonlySet<View['kind']> = new Set(['ready', 'recognizing', 'building', 'conversation', 'dictation'])
 const LISTENING: StatusInfo = { label: 'Listening...', tone: 'active' }
 /** An unknown sign is with the LLM (the notice IDENTIFYING, which Notice leaves to the header). */
 const IDENTIFYING_STATUS: StatusInfo = { label: 'Identifying...', tone: 'idle' }

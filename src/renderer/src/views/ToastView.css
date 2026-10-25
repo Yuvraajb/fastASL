@@ -3,13 +3,6 @@
   align-items: center;
   gap: 12px;
   width: 100%;
-  text-align: left;
-}
-
-.toast:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.5);
-  outline-offset: 4px;
-  border-radius: 12px;
 }
 
 .toast__main {
@@ -18,6 +11,32 @@
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  text-align: left;
+}
+
+.toast__main:focus-visible,
+.toast__shot:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+
+/* A screenshot in place of the camera tile: 16:10, like the screen it shows. */
+.toast__shot {
+  flex: none;
+  width: 96px;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.toast__shot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .toast__head {

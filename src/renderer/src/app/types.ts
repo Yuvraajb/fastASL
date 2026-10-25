@@ -51,41 +51,65 @@ export type SettingsPage =
   | { page: 'camera'; current: 'builtin' | 'mjpeg'; url: string; editing?: boolean }
   | { page: 'sensitivity'; current: Sensitivity }
 
+/**
+ * The agent's answer on the conversation card. With `title` it did something (or failed): the
+ * title and subtitle come from tool outcomes or the error, as the old Done card's did, and `text`
+ * is the model's own short line under them. Without `title`, `text` is the answer itself (a
+ * greeting, a question about the time): the agent ran no tool.
+ */
+export interface Answer {
+  /** The task got done, or the agent answered in words. False: it failed or stopped short. */
+  ok: boolean
+  title?: string
+  subtitle?: string
+  text?: string
+  /** What the result opens (thumbs up): the screenshot in Preview, Calendar, a search. */
+  view?: ViewAction
+  /** A screenshot's thumbnail (PNG data URL). */
+  thumb?: string
+}
+
 /** Every card state. Exactly one is shown at a time. */
 export type View =
   | { kind: 'collapsed' }
   | { kind: 'ready'; hint?: string }
   | { kind: 'recognizing'; token: string | null; isWord: boolean }
   | { kind: 'building'; tokens: Token[]; current: string | null; sentence: string }
-  | { kind: 'sentence'; sentence: string; tokens: Token[]; thinking?: boolean }
+  /**
+   * Command mode: one exchange with the agent, on one card. understanding: the interpreter reads
+   * the phrase; working: the agent runs (its live steps); reply: its answer. The reply card stays
+   * ready: the next recognized sign starts a new phrase.
+   */
   | {
-      kind: 'agentReady'
-      intent: string
-      /** "email" variant shows a recipient row + full-width Send / Change buttons (ref image 2). */
-      variant: 'default' | 'email'
-      target?: string
-      sentence: string
+      kind: 'conversation'
+      phase: 'understanding' | 'working' | 'reply'
+      /** What the user signed: the assembled phrase, then the interpreter's sentence once it answered. */
+      said: string
+      /** A quick-menu pick the phrase was signed for ("Create event"). */
+      prefix?: string
+      /** The agent's live steps (working). */
+      steps: AgentStep[]
+      /** The agent's answer (reply). */
+      answer?: Answer
     }
+  /** Agent runs that are not a conversation (a gesture shortcut's agent fallback). */
   | { kind: 'working'; intent: string; steps: AgentStep[] }
   | { kind: 'confirm'; requestId: string; details: ConfirmDetails }
   | {
+      /** Numbered alternatives, picked by fingers. */
       kind: 'didYouMean'
-      /** list = numbered alternatives (pick by fingers); quote = "Yes, send" / "Edit". */
-      variant: 'list' | 'quote'
       quote?: string
       options: string[]
       /**
-       * sign: recognition was unsure between taught signs. learn: the LLM's guesses for a
-       * movement nothing taught matched ("Is this HELLO?"); a pick adds the word and learns it.
+       * sign: recognition was unsure between signs. learn: the LLM's guesses for a movement
+       * nothing matched ("Is this HELLO?"); a pick adds the word and learns it. spell: Spell
+       * mode's spellings of the letters.
        */
-      purpose: 'sign' | 'intent' | 'spell' | 'learn'
+      purpose: 'sign' | 'spell' | 'learn'
       /** Spell: Claude's spellings are on their way (the raw letters can be picked meanwhile). */
       pending?: boolean
     }
-  | { kind: 'done'; title: string; subtitle: string; ok: boolean; view?: ViewAction; intent?: string }
-  | { kind: 'contextActions'; sentence: string; actions: string[] }
-  /** `fromSentence`: opened by Context actions › More options, so a pick applies to the signed sentence. */
-  | { kind: 'quickMenu'; options: string[]; fromSentence?: boolean }
+  | { kind: 'quickMenu'; options: string[] }
   | { kind: 'dictation'; text: string }
   | {
       kind: 'toast'
@@ -93,12 +117,21 @@ export type View =
       subtitle?: string
       meta?: string
       ok: boolean
+      /** What the result opens: thumbs up (or the thumbnail) opens it. */
+      view?: ViewAction
+      /** A screenshot's thumbnail (PNG data URL), shown instead of the camera tile. */
+      thumb?: string
       /** Where the card goes afterwards: the pill, the idle view, or a settings page (after teaching a sign). */
       returnTo: 'collapsed' | 'ready' | SettingsPage
     }
   | { kind: 'settings'; settings: SettingsPage }
 
 export type ViewKind = View['kind']
+
+/** The conversation card showing the agent's answer: it takes signs, like Ready. */
+export function isReply(view: View): view is Extract<View, { kind: 'conversation' }> & { phase: 'reply' } {
+  return view.kind === 'conversation' && view.phase === 'reply'
+}
 
 export type StatusTone = 'active' | 'idle'
 
@@ -110,9 +143,8 @@ export interface StatusInfo {
 /** Default card width per state (px). Collapsed / toast size to content. */
 export function cardWidth(view: View): number {
   switch (view.kind) {
-    case 'agentReady':
+    case 'conversation':
     case 'confirm':
-    case 'done':
       return 340
     case 'toast':
       return 320
@@ -134,20 +166,19 @@ export function statusFor(view: View, mode: Mode): StatusInfo | null {
       return view.token ? { label: 'Recognizing...', tone: 'idle' } : { label: 'Listening...', tone: 'active' }
     case 'building':
       return { label: 'Building...', tone: 'idle' }
-    case 'sentence':
-      return { label: 'Sentence', tone: 'idle' }
-    case 'agentReady':
-      return { label: 'Agent ready', tone: 'active' }
+    case 'conversation': {
+      const answer = view.answer
+      if (view.phase !== 'reply' || !answer) return { label: 'Working...', tone: 'idle' }
+      // An answer in words is a reply; a task (or a failure) is done, as on the old Done card.
+      if (answer.title === undefined) return { label: 'Reply', tone: 'active' }
+      return { label: 'Done', tone: answer.ok ? 'active' : 'idle' }
+    }
     case 'working':
       return { label: 'Working...', tone: 'idle' }
     case 'confirm':
       return { label: 'Confirm', tone: 'idle' }
     case 'didYouMean':
       return { label: 'Confirm', tone: 'idle' }
-    case 'done':
-      return { label: 'Done', tone: view.ok ? 'active' : 'idle' }
-    case 'contextActions':
-      return { label: 'Sentence', tone: 'idle' }
     case 'quickMenu':
       return { label: 'Ready', tone: 'active' }
     case 'dictation':

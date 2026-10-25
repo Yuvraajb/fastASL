@@ -4,7 +4,7 @@ import { controller } from '../app/context'
 import type { GestureInput } from '../app/controller'
 import { applyScene } from '../app/scenes'
 import { getApp, setApp } from '../app/store'
-import type { Token } from '../app/types'
+import { isReply, type Token } from '../app/types'
 
 const SIM_WORDS = ['meeting', 'tomorrow', 'at', '3', 'pm']
 const SIM_LETTERS = ['K', 'R', 'I', 'S', 'H', 'N', 'A']
@@ -21,8 +21,8 @@ function simToken(): Token {
 export function simulateGesture(g: SimGesture): void {
   if (g === 'signToken') {
     const view = getApp().view
-    // A new phrase (or empty dictation box) starts the simulated word list over.
-    if (view.kind === 'ready' || (view.kind === 'dictation' && !view.text)) simIndex = 0
+    // A new phrase (from Ready or the agent's reply, or an empty dictation box) starts the simulated word list over.
+    if (view.kind === 'ready' || isReply(view) || (view.kind === 'dictation' && !view.text)) simIndex = 0
     controller.token(simToken())
     return
   }

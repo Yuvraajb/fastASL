@@ -73,9 +73,29 @@ export interface Ending {
   stopped?: boolean
   /** Why an agent turn broke off, when it did. */
   error?: string
+  /** The model's final text, from a turn that finished normally (see AgentResult.reply). */
+  reply?: string
 }
 
-/** Why a run stopped short of the task, for the Done card's subtitle. */
+/** Longest model reply passed to the card; the prompt asks for one or two sentences. */
+const MAX_REPLY = 400
+
+/**
+ * The model's reply as card text: plain words on one line. Markdown emphasis, code marks and
+ * list bullets are dropped, whitespace (newlines too) collapses, and a runaway reply is cut.
+ */
+export function cleanReply(text: string | undefined): string | undefined {
+  if (!text) return undefined
+  const plain = text
+    .replace(/^\s*(?:[-*•]|\d+[.)])\s+/gm, '')
+    .replace(/\*\*|__|`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!plain) return undefined
+  return plain.length > MAX_REPLY ? `${plain.slice(0, MAX_REPLY - 1).trimEnd()}…` : plain
+}
+
+/** Why a run stopped short of the task, for the result's subtitle. */
 function shortfall(calls: readonly RecordedCall[], { declined, stopped, error }: Ending, wroteSomething: boolean): string {
   if (declined) return wroteSomething ? 'You cancelled the rest' : 'You cancelled it'
   if (stopped) return wroteSomething ? 'You stopped the rest' : 'You stopped it'
@@ -86,23 +106,28 @@ function shortfall(calls: readonly RecordedCall[], { declined, stopped, error }:
 }
 
 /**
- * The Done card, built only from tool outcomes; the model's own text is never
- * used. A write that ran is always the headline (so nobody repeats it); a
- * finished task shows its last successful call; otherwise the subtitle says why
- * the task stopped short.
+ * The result card, its title and subtitle built only from tool outcomes. A write
+ * that ran is always the headline (so nobody repeats it); a finished task shows
+ * its last successful call; otherwise the subtitle says why the task stopped
+ * short. The model's own text rides along as `reply` only from a turn that
+ * finished normally: never after a decline or a stop, where it could describe
+ * something that didn't happen.
  */
 export function summarize(calls: readonly RecordedCall[], ending: Ending): AgentResult {
   const evidence = calls.map((c) => c.record)
   const ok = calls.filter((c) => c.outcome.ok)
   const write = ok.filter((c) => c.def.risk === 'write').at(-1)
+  const reply = ending.declined || ending.stopped || ending.error !== undefined ? undefined : cleanReply(ending.reply)
+  const withReply = reply ? { reply } : {}
   // Lookups made for a task the user then cancelled are not worth a headline.
   const best = write ?? (ending.declined ? undefined : ok.at(-1))
-  if (!best) return { title: 'Nothing was done', subtitle: shortfall(calls, ending, false), evidence }
+  if (!best) return { title: 'Nothing was done', subtitle: shortfall(calls, ending, false), evidence, ...withReply }
   const { title, subtitle, text, view } = best.outcome
   return {
     title: title ?? firstLine(text),
     subtitle: ending.complete ? (subtitle ?? (title ? firstLine(text) : '')) : shortfall(calls, ending, !!write),
     evidence,
-    ...(view && { view })
+    ...(view && { view }),
+    ...withReply
   }
 }

@@ -1,28 +1,9 @@
-import { Check, X } from 'lucide-react'
 import type { View } from '../app/types'
-import { controller } from '../app/context'
-import {
-  ActivityBars,
-  Button,
-  ButtonRow,
-  Feed,
-  Header,
-  Hint,
-  Notice,
-  OptionList,
-  QuoteBox,
-  SectionTitle,
-  Spinner,
-  Stack
-} from '../ui'
+import { Feed, Header, Hint, Notice, OptionList, SectionTitle, Spinner, Stack } from '../ui'
 import './DidYouMeanView.css'
 
 type DidYouMean = Extract<View, { kind: 'didYouMean' }>
 type Props = { view: DidYouMean }
-
-export function DidYouMeanView({ view }: Props): React.JSX.Element {
-  return view.variant === 'quote' ? <QuoteVariant view={view} /> : <ListVariant view={view} />
-}
 
 const fingersHint = (count: number): string => (count > 1 ? `hold up 1–${count} fingers` : 'hold up 1 finger')
 
@@ -41,7 +22,7 @@ function listHint(view: DidYouMean): string[] | null {
 }
 
 /** Reference image 1, panel 12: numbered alternatives, picked by finger count. Swipe left edits what they came from. */
-function ListVariant({ view }: Props): React.JSX.Element {
+export function DidYouMeanView({ view }: Props): React.JSX.Element {
   const hint = listHint(view)
   return (
     <Stack>
@@ -62,33 +43,6 @@ function ListVariant({ view }: Props): React.JSX.Element {
       </Stack>
       <Notice />
       {hint ? <Hint items={hint} /> : null}
-    </Stack>
-  )
-}
-
-/** Reference image 2, panel 6: confirm the interpreted sentence before it is sent. */
-function QuoteVariant({ view }: Props): React.JSX.Element {
-  return (
-    <Stack>
-      <Header view={view} close />
-      <SectionTitle>Did you mean?</SectionTitle>
-      <QuoteBox
-        text={view.quote ?? view.options[0] ?? ''}
-        className="dym__panel"
-        aside={<Feed variant="thumb" width={84} height={64} />}
-      />
-      <Notice />
-      <ButtonRow>
-        <Button icon={Check} iconPosition="leading" stretch="flex" onClick={() => controller.tap('primary')}>
-          Yes, send
-        </Button>
-        <Button variant="secondary" icon={X} iconPosition="leading" stretch="flex" onClick={() => controller.tap('secondary')}>
-          Edit
-        </Button>
-      </ButtonRow>
-      <div className="dym__bars">
-        <ActivityBars height={16} />
-      </div>
     </Stack>
   )
 }

@@ -19,7 +19,8 @@ end tell
 return "sent"`
 }
 
-async function resolveRecipient(name: string): Promise<{ label: string; handle: string }> {
+/** A phone number or email passes through; a name must exactly match one person in Contacts. */
+export async function resolveRecipient(name: string): Promise<{ label: string; handle: string }> {
   const trimmed = name.trim()
   if (isEmail(trimmed)) return { label: trimmed, handle: trimmed }
   if (PHONE.test(trimmed)) return { label: trimmed, handle: trimmed.replace(/[^\d+]/g, '') }
@@ -43,7 +44,7 @@ export const messageSend = defineTool({
   confirmDetails: (args) => ({ kind: 'message', to: args.contact_name, text: args.text }),
   async run(args) {
     const { label, handle } = await resolveRecipient(args.contact_name)
-    await runAppleScript(sendMessageScript(handle, args.text), { app: 'Messages', timeoutMs: 20_000 })
+    await runAppleScript(sendMessageScript(handle, args.text), { app: 'Messages', launch: true, timeoutMs: 20_000 })
     return {
       ok: true,
       text: `Sent an iMessage to ${label} (${handle}).`,

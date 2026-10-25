@@ -21,7 +21,7 @@ ask before adding tokens or changing a primitive's props.
 
 The card (`CardShell`) already gives you the dark glass, 22px radius, 1px border and
 **14px padding**. Content width is therefore **272px** (300px card) or **312px**
-(340px card: agentReady, confirm, done). Toast is 320 (content 292).
+(340px card: conversation, confirm). Toast is 320 (content 292).
 
 Every view's root is a `<Stack>` (flex column, **10px gap**). Order, top to bottom:
 
@@ -51,8 +51,8 @@ Every view's root is a `<Stack>` (flex column, **10px gap**). Order, top to bott
 | `--fs-body` | 13px / 500-600 | Title "fastASL" (600), buttons (600), steps, options, details |
 | `--fs-title` | 15px / 600, line-height 20px | `SectionTitle` (menu / page headings), toast title, detail title |
 | `--fs-quote` | 16px / 600 | Quoted running sentence (`QuoteBox`) only |
-| `--fs-result` | 17px / 600 | Done title (ref3-08) |
-| `--fs-sentence` | 21px / 600, line-height 1.25, max 3 lines | Sentence (ref3-04), agent intent (ref3-05) |
+| `--fs-result` | 17px / 600 | Result title on the conversation card (ref3-08's Done title), a long reply |
+| `--fs-sentence` | 21px / 600, line-height 1.25, max 3-4 lines | The agent's reply on the conversation card (the size of ref3-04's sentence) |
 | `--fs-token` | 22px / 600 | Recognized letter / word (`TokenPill`) |
 
 Letter-spacing: `-0.01em` on 15px and up, `-0.005em` on 13px semibold.
@@ -441,14 +441,11 @@ the same styles.
 
 These are compositions, not components. Match the crop listed.
 
-- **Sentence** (ref3-04): `Header` · `Feed` 16:10 · 12px/600 `--text-1` label "Sentence" · sentence 21px/600 left-aligned, max 3 lines (`-webkit-line-clamp: 3`) with `IconButton icon={Pencil} variant="filled" size={30} iconSize={15}` bottom-right · `Notice` · `Footer micOff`. `thinking` → swap the pencil for `<Spinner />`.
-- **Agent ready** (ref3-05, 340px): `Header` · `Feed aspect={2.2}` · intent 21px/600 · `ButtonRow` round X + primary "Send to agent →". Email variant (ref2-04): `Panel` (13px) "Send this email to:" + target, then full-width primary "Send" (leading Send icon) and full-width secondary "Change".
-- **Working** (ref3-06): `Header view={view} close` · `Feed aspect={16/9}` · `StepsList` · `Hint items={[{ icon: HandFist, label: 'fist to stop' }]}`.
+- **Conversation** (Command mode's exchange with the agent, 340px; replaced Sentence, Agent ready and Done): `Header view={view} close` (status "Working...", then "Reply" or "Done") · `Feed aspect={2.4}` · 11px/600 `--text-3` label "You" over the signed sentence in quotes, 13px/500 `--text-2`, max 2 lines · then by phase: `StepsList` (an "Understanding" step, then the agent's steps) with `Hint` "fist to stop"; or the reply: label "Agent" over its words at `--fs-sentence` (21px/600, max 4 lines; `--fs-result` past 90 characters), or a result row: `CheckBadge size={26}` + title `--fs-result` + subtitle 13px `--text-1` + an optional 168px 16:10 screenshot thumbnail (radius 10) + the model's line 13px `--text-2` · `Hint` "sign to reply" (with "thumbs up = open …" when the result opens something).
+- **Working** (ref3-06; a gesture shortcut's agent fallback): `Header view={view} close` · `Feed aspect={16/9}` · `StepsList` · `Hint items={[{ icon: HandFist, label: 'fist to stop' }]}`.
 - **Confirm** (ref3-07, 340px): `Header` · row: `Panel` (lucide icon + 13px lines, title `--fs-title`/600 white, rest `--text-2`) + `Feed variant="thumb"` (~104px wide, stretch to panel height) · `ButtonRow` secondary Cancel + primary "Confirm ✓".
-- **Done** (ref3-08, 340px): `Header` (status "Done") · row: `Feed variant="thumb" width={110} height={124}` + column (`CheckBadge`, title `--fs-result` 17px/600, subtitle 13px `--text-2`) · `ButtonRow` secondary "View" + secondary "New command >".
-- **Toast** (ref2-07 / ref1-09, 320px, no header): row: `CheckBadge size={32}` + title `--fs-title` 15px/600 + subtitle 13px `--text-2` + `Feed variant="thumb" width={64} height={64}` on the right; `ProgressLine` under the text.
-- **Did you mean** list (ref1-12): `Header view={view} close` · `SectionTitle` "Did you mean..." ("Pick a spelling" in Spell mode) · `OptionList` · `Hint` "hold up 1–N fingers · swipe ← edit". A spelling list that is still waiting for Claude shows a `Spinner` line "Finding spellings..." under the options. Quote variant (ref2-06): `QuoteBox` with a thumb `aside`, `ButtonRow` primary "Yes, send" (leading Check) + secondary "Edit" (leading X), `ActivityBars` centered.
-- **Context actions** (ref1-11): `Feed` 16:10 · `OptionList iconStyle="circle"` (last item `muted`; badges trail).
+- **Toast** (ref2-07 / ref1-09, 320px, no header): row: `CheckBadge size={32}` + title `--fs-title` 15px/600 + subtitle 13px `--text-2` + `Feed variant="thumb" width={64} height={64}` on the right; `ProgressLine` under the text. A screenshot replaces the feed tile with a 96px 16:10 thumbnail, and a `Hint` "thumbs up = open in Preview · fist = dismiss" follows.
+- **Did you mean** list (ref1-12): `Header view={view} close` · `SectionTitle` "Did you mean..." ("Pick a spelling" in Spell mode, "Is this HELLO?" for a guess) · `OptionList` · `Hint` "hold up 1–N fingers · swipe ← edit".
 - **Quick menu** (ref2-09): `Header` · `SectionTitle` "What would you like to do?" · `OptionList` with icons (badges trail) · `ActivityBars` centered · `Hint`.
 - **Dictation** (ref1-10): `Header` · `Feed recording` · `ActivityBars` · dictated text `--fs-title`/500 in a `Panel` with a 2px white caret.
 - **Settings**: `Header view={view} close` · `SectionTitle` page title · `OptionList` (`sub`, `mono`, `tag`; `selected` for the current value; `badge="leading"` only if a page really needs number-then-icon) · `Hint`.

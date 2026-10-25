@@ -14,6 +14,7 @@ import { createAgentServices } from './agent'
 import { TOOLS } from './tools'
 import { getFrontmostApp } from './mac/frontmost'
 import { typeText } from './mac/typeText'
+import { imageThumb } from './thumbs'
 
 const screenshots = process.env.FASTASL_SCREENSHOTS === '1'
 const dev = !app.isPackaged || process.env.FASTASL_DEV === '1'
@@ -117,6 +118,7 @@ const services: MainServices = {
   identifySign: devLogged(llmLabel, 'identifySign', llm.identifySign, { describe: signLogLine }),
   frontmostApp: getFrontmostApp,
   typeText: devLogged('mac', 'typeText', typeAtCursor),
+  imageThumb: (path) => imageThumb(path),
   capture: async (name: string) => {
     if (!stage) return ''
     const dir = join(process.cwd(), 'docs', 'screens')

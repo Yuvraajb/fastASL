@@ -52,6 +52,8 @@ describe('AgentService', () => {
     ])
     const done = ofType(ctx.events, 'done')[0]
     expect(done.result).toMatchObject({ title: 'Screenshot saved', subtitle: 'Desktop' })
+    // The model's own words never become the title; they ride along as the reply (a secondary line).
+    expect(done.result.reply).toBe('I emailed your boss!')
     expect(done.complete).toBe(true)
     expect(done.result.evidence).toEqual([
       { tool: 'take_screenshot', args: {}, ok: true, result: 'Saved Screenshot.png to Desktop' }
@@ -70,7 +72,7 @@ describe('AgentService', () => {
     expect(prompt).toContain('Saturday, October 24, 2026')
     expect(prompt).toContain('America/Los_Angeles')
     expect(prompt).toContain('Frontmost app: Messages')
-    expect(prompt).toContain('Task: Remind me tomorrow')
+    expect(prompt).toContain('Message: Remind me tomorrow')
   })
 
   it('asks before a write tool and runs it once approved', async () => {
@@ -222,6 +224,7 @@ describe('AgentService', () => {
       complete: false,
       result: { title: 'Message sent', subtitle: 'You stopped the rest' }
     })
+    expect(ofType(ctx.events, 'done')[0].result.reply).toBeUndefined()
     expect(ofType(ctx.events, 'step').filter((e) => e.step.status !== 'current')).toHaveLength(1) // just Thinking
     expect(ctx.recent).toEqual([])
   })
@@ -237,13 +240,77 @@ describe('AgentService', () => {
     expect((await second.completion).kind).toBe('done')
   })
 
-  it('says nothing was done when the model only talks', async () => {
+  it('says nothing was done when the model only talks, carrying its words as the reply, not as a result', async () => {
     const ctx = makeAgent([reply('Your meeting is booked!')])
     await (await startRun(ctx)).completion
     expect(ofType(ctx.events, 'done')[0].result).toEqual({
       title: 'Nothing was done',
       subtitle: "The agent didn't run any action",
-      evidence: []
+      evidence: [],
+      reply: 'Your meeting is booked!'
+    })
+  })
+
+  describe('the reply (conversational turns)', () => {
+    it("a greeting: no tool runs, the model's final text is the reply, and it is no completed task", async () => {
+      const ctx = makeAgent([reply('Hi! What can I do for you?')])
+      const outcome = await (await startRun(ctx, 'Hello.')).completion
+      const done = ofType(ctx.events, 'done')[0]
+      expect(done).toMatchObject({ complete: false, result: { evidence: [], reply: 'Hi! What can I do for you?' } })
+      expect(outcome).toMatchObject({ kind: 'done', complete: false, succeeded: [] })
+      expect(ctx.recent).toEqual([])
+      expect(ctx.agent.lastRunCalls()).toEqual([])
+    })
+
+    it('the reply is the final message, as plain text on one line', async () => {
+      const turn: TurnScript = async function* () {
+        yield resultMessage('success', "**It's 3:45 PM** on\n`Saturday`.\n\n- Anything else?")
+      }
+      const ctx = makeAgent([turn])
+      await (await startRun(ctx, 'What time is it?')).completion
+      expect(ofType(ctx.events, 'done')[0].result.reply).toBe("It's 3:45 PM on Saturday. Anything else?")
+    })
+
+    it('an empty final message gives no reply', async () => {
+      const ctx = makeAgent([reply('  \n ')])
+      await (await startRun(ctx)).completion
+      expect(ofType(ctx.events, 'done')[0].result).not.toHaveProperty('reply')
+    })
+
+    it('a declined write gives no reply: the text could describe what did not happen', async () => {
+      const ctx = makeAgent([callTool('send_message', { to: 'Mom', text: 'hi' }, 'Sent it to Mom!')])
+      const { completion } = await startRun(ctx)
+      await ctx.agent.respond((await waitForConfirm(ctx.events)).requestId, false)
+      await completion
+      expect(ofType(ctx.events, 'done')[0].result).toEqual({ title: 'Nothing was done', subtitle: 'You cancelled it', evidence: [] })
+    })
+
+    it('a turn that broke off after a tool ran gives no reply', async () => {
+      const ctx = makeAgent([callTool('read_calendar', {}, 'Your calendar is clear!')])
+      const broken: TurnScript = async function* (session) {
+        await session.callTool('take_screenshot', {})
+        yield resultMessage('error_during_execution', 'Model overloaded')
+      }
+      const failing = makeAgent([broken])
+      await (await startRun(failing)).completion
+      expect(ofType(failing.events, 'done')[0].result).toMatchObject({ title: 'Screenshot saved', subtitle: 'Model overloaded' })
+      expect(ofType(failing.events, 'done')[0].result.reply).toBeUndefined()
+      // A tool that failed in a turn that finished still carries the model's words (it says why).
+      await (await startRun(ctx)).completion
+      expect(ofType(ctx.events, 'done')[0].result).toMatchObject({ title: 'Nothing was done', reply: 'Your calendar is clear!' })
+    })
+
+    it('an interrupted turn gives no reply, even with nothing declined', async () => {
+      const interrupted: TurnScript = async function* () {
+        yield resultMessage('interrupted', "I'll send it now.")
+      }
+      const ctx = makeAgent([interrupted])
+      await (await startRun(ctx)).completion
+      expect(ofType(ctx.events, 'done')[0].result).toEqual({
+        title: 'Nothing was done',
+        subtitle: "The agent didn't run any action",
+        evidence: []
+      })
     })
   })
 

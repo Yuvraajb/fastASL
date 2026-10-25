@@ -1,0 +1,167 @@
+/* The exchange: "You" and the signed sentence, small and secondary, then the agent. */
+.conv__said,
+.conv__reply {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 2px;
+}
+
+.conv__said {
+  gap: 1px;
+}
+
+.conv__reply {
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.conv__who {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--text-3);
+}
+
+.conv__said-text {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* The agent's words: the sentence size, like the old Agent ready intent. */
+.conv__reply-text {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-sentence);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+/* Two sentences: the Done title size, one more line. */
+.conv__reply-text--long {
+  font-size: var(--fs-result);
+  line-height: 22px;
+  -webkit-line-clamp: 5;
+}
+
+/* What the agent did: badge (or the screenshot) + the Done card's title and subtitle, its own line under them. */
+.conv__answer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 2px 0;
+  animation: fa-fade-in var(--dur) var(--ease-spring) both;
+}
+
+.conv__result {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.conv__result .check-badge {
+  flex: none;
+  margin-top: -2px;
+}
+
+.conv__result-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.conv__title {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-result);
+  font-weight: 600;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.conv__subtitle {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* A file name breaks anywhere and may take a third line next to the thumbnail. */
+.conv__subtitle--file {
+  -webkit-line-clamp: 3;
+}
+
+/* The screenshot, 16:10 like a Mac screen; a click (or thumbs up) opens it in Preview. */
+.conv__thumb {
+  display: block;
+  flex: none;
+  width: 120px;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.conv__thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The model's own line under a result. */
+.conv__note {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--text-2);
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Roomier rows, like the Working card. */
+.steps.conv__steps {
+  gap: 6px;
+  margin: 2px 0;
+}
+
+/* Next to a badge, the line starts under the title (badge 26 + gap 12). */
+.conv__note--under-title {
+  margin-top: -4px;
+  padding-left: 38px;
+}

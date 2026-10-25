@@ -76,9 +76,11 @@ export function resolveRange(args: RangeArgs, now: Date): DateRange | string {
 }
 
 /**
- * Each calendar is filtered with four bulk property reads (one Apple event
- * each) and the lists are zipped locally, so the date filter runs four times
- * per calendar however many events match, never once per event property.
+ * The date filter is the slow part (a subscribed holiday calendar alone took 6-9 s on a real Mac),
+ * so it runs exactly once per calendar: `set hits to (every event … whose …)` resolves it to a list
+ * of event ids, and only the matching events are read. A bulk read of a live `whose` reference
+ * (`tell (every event whose …) to get {summary, start date, …}`) re-runs the filter for every
+ * property, which made "tomorrow" take ~65 s instead of ~17 s and time out.
  */
 export function listEventsScript(range: { start: Date; end: Date }): string {
   return `${MAKE_DATE_HANDLER}
@@ -90,17 +92,16 @@ tell application "Calendar"
 \tset cals to (get calendars)
 \trepeat with c from 1 to count of cals
 \t\tset cal to item c of cals
-\t\tset {calName, titles, startDates, endDates, allDays} to {"", {}, {}, {}, {}}
+\t\tset {calName, hits} to {"", {}}
 \t\ttry -- one unreadable (e.g. subscribed) calendar shouldn't hide the rest
 \t\t\tset calName to name of cal
-\t\t\ttell (every event of cal whose start date < rangeEnd and end date > rangeStart)
-\t\t\t\tset {titles, startDates, endDates, allDays} to {summary, start date, end date, allday event}
-\t\t\tend tell
+\t\t\tset hits to (every event of cal whose start date < rangeEnd and end date > rangeStart)
 \t\tend try
-\t\tset n to count of titles
-\t\tif (count of startDates) is not n or (count of endDates) is not n or (count of allDays) is not n then error "Calendar changed while it was being read. Try again." number 9004
-\t\trepeat with i from 1 to n
-\t\t\tset end of out to ((item i of titles) as text) & US & ${appleScriptIso('item i of startDates')} & US & ${appleScriptIso('item i of endDates')} & US & calName & US & ((item i of allDays) as text)
+\t\trepeat with i from 1 to count of hits
+\t\t\tset ev to item i of hits
+\t\t\ttry -- an event deleted meanwhile is skipped
+\t\t\t\tset end of out to ((summary of ev) as text) & US & ${appleScriptIso('start date of ev')} & US & ${appleScriptIso('end date of ev')} & US & calName & US & ((allday event of ev) as text)
+\t\t\tend try
 \t\tend repeat
 \tend repeat
 end tell
@@ -143,7 +144,8 @@ export const calendarListEvents = defineTool({
     const now = new Date()
     const range = resolveRange(args, now)
     if (typeof range === 'string') return fail(range)
-    const events = parseEvents(await runAppleScript(listEventsScript(range), { app: 'Calendar', timeoutMs: 30_000 }))
+    // ~17 s on a Mac with a subscribed holiday calendar, plus launching Calendar when it is closed.
+    const events = parseEvents(await runAppleScript(listEventsScript(range), { app: 'Calendar', launch: true, timeoutMs: 60_000 }))
     if (!events.length) {
       const title = `No events ${range.phrase}`
       return { ok: true, text: `${title}.`, title, subtitle: 'Your calendar is clear' }
@@ -179,6 +181,9 @@ export interface NewEvent {
  * event), then reads the saved event back so the card reports what Calendar
  * actually stored.
  */
+/** Names macOS and iCloud give the everyday calendar, tried in order when Calendar's default can't be found. */
+export const PREFERRED_CALENDARS = ['Calendar', 'Home', 'Personal', 'Work'] as const
+
 export function createEventScript(ev: NewEvent): string {
   const description = [ev.notes.trim(), ev.videoLink ? `Join: ${ev.videoLink}` : ''].filter(Boolean).join('\n\n')
   const props = [`summary:${q(ev.title)}`, 'start date:startDate', 'end date:endDate', `description:${q(description)}`]
@@ -199,11 +204,21 @@ export function createEventScript(ev: NewEvent): string {
       '\tend try'
     )
   }
+  // On macOS 26 Calendar can't read calendarIdentifier ("AppleEvent handler failed"), so the lookup above
+  // finds nothing there; then a calendar with a usual default name beats the first writable one (on a
+  // real Mac that was "Finished", which is where a test event landed).
   lines.push(
     '\tif targetCal is missing value then',
     '\t\tset writableCals to calendars whose writable is true',
     '\t\tif writableCals is {} then error "There’s no calendar you can add events to." number 9001',
     '\t\tset targetCal to item 1 of writableCals',
+    `\t\trepeat with preferred in {${PREFERRED_CALENDARS.map(q).join(', ')}}`,
+    '\t\t\tset nameHits to (calendars whose writable is true and name is (preferred as text))',
+    '\t\t\tif nameHits is not {} then',
+    '\t\t\t\tset targetCal to item 1 of nameHits',
+    '\t\t\t\texit repeat',
+    '\t\t\tend if',
+    '\t\tend repeat',
     '\tend if',
     `\tset ev to make new event at end of events of targetCal with properties {${props.join(', ')}}`
   )
@@ -294,7 +309,7 @@ export const calendarCreateEvent = defineTool({
       videoLink: args.video_link,
       calendarId
     })
-    const created = parseCreatedEvent(await runAppleScript(script, { app: 'Calendar', timeoutMs: 30_000 }))
+    const created = parseCreatedEvent(await runAppleScript(script, { app: 'Calendar', launch: true, timeoutMs: 30_000 }))
     if (!created) return fail('Calendar did not confirm the new event')
 
     const now = new Date()

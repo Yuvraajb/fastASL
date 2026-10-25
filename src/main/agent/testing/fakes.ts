@@ -16,6 +16,9 @@ import { defineTool, type ToolDef, type ToolOutcome } from '../../tools/types'
 import { AgentService, type AgentDeps } from '../agentService'
 import type { DroidSessionLike, SessionFactory, SessionOptions } from '../types'
 
+/** Where the fake take_screenshot says it saved the file (its outcome opens it, like the real tool's). */
+export const SCREENSHOT = '/Users/me/Desktop/Screenshot.png'
+
 export function makeTools() {
   const runs: string[] = []
   const tools: ToolDef[] = [
@@ -27,7 +30,13 @@ export function makeTools() {
       stepLabel: () => 'Taking screenshot',
       run: async () => {
         runs.push('take_screenshot')
-        return { ok: true, text: 'Saved Screenshot.png to Desktop', title: 'Screenshot saved', subtitle: 'Desktop' }
+        return {
+          ok: true,
+          text: 'Saved Screenshot.png to Desktop',
+          title: 'Screenshot saved',
+          subtitle: 'Desktop',
+          view: { kind: 'openFile', path: SCREENSHOT }
+        }
       }
     }),
     defineTool({

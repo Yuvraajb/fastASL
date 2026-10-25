@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SEP, runAppleScript } from '../mac/osascript'
 import {
   JOIN_HANDLES_HANDLER,
+  cleanLabel,
   contactSearchScript,
   contactsFind,
   groupPeople,
@@ -9,6 +10,7 @@ import {
   messageHandle,
   parseContacts,
   pickContact,
+  rankContacts,
   searchNeedle,
   type Contact
 } from './contacts'
@@ -34,15 +36,15 @@ beforeEach(() => {
 })
 
 describe('contactSearchScript', () => {
-  it('runs the search once and reads every property in bulk', () => {
+  it('runs the search exactly once and reads only the matching people', () => {
     const script = contactSearchScript('O"Neil')
-    expect(script).toContain('set found to a reference to (every person whose name contains "O\\"Neil")')
-    expect(script).toContain('if (count of found) is 0 then return ""')
-    expect(script).toContain(
-      'set {names, phoneLabels, phoneValues, emailLabels, emailValues} to ' +
-        '{name, label of every phone, value of every phone, label of every email, value of every email}'
-    )
-    expect(script).not.toMatch(/repeat with \w+ in/)
+    // Resolved to a list, not kept as a live reference: every property read of a reference re-runs the search.
+    expect(script).toContain('set found to (every person whose name contains "O\\"Neil")')
+    expect(script.match(/whose/g)).toHaveLength(1)
+    expect(script).not.toContain('a reference to')
+    expect(script).toContain('set p to item i of found')
+    expect(script).toContain('my joinHandles(label of every phone of p, value of every phone of p)')
+    expect(script).toContain('my joinHandles(label of every email of p, value of every email of p)')
   })
 
   it.runIf(process.platform === 'darwin')('zips label and value lists in real AppleScript', async () => {
@@ -193,5 +195,58 @@ describe('contacts_find', () => {
   it('says when nobody matches', async () => {
     runMock.mockResolvedValueOnce('')
     expect(await contactsFind.run({ query: 'Zed' })).toMatchObject({ ok: true, title: 'No matching contacts' })
+  })
+
+  it('lists the exact name first and shows readable labels (a real Mac: 18 cards contain "Mom")', async () => {
+    runMock.mockResolvedValueOnce(
+      [
+        card("Abhinandan's Mom", handles(['_$!<Mobile>!$_', '+1 555 0101'])),
+        card('Srikar Dad', handles(['_$!<Home>!$_', '+1 555 0102'])),
+        card('Dad', handles(['_$!<Mobile>!$_', '+1 555 0103']), handles(['_$!<Home>!$_', 'dad@example.com'])),
+        card('Dadi Rao', handles(['iPhone', '+1 555 0104']))
+      ].join(SEP.record)
+    )
+    const outcome = await contactsFind.run({ query: 'dad' })
+    expect(outcome.text.split('\n')).toEqual([
+      '1. Dad: mobile +1 555 0103, home dad@example.com',
+      '2. Dadi Rao: iPhone +1 555 0104',
+      '3. Srikar Dad: home +1 555 0102'
+    ])
+    expect(outcome.subtitle).toBe('Dad')
+  })
+})
+
+describe('cleanLabel', () => {
+  it("turns Contacts' built-in label constants into words and keeps custom labels", () => {
+    expect(cleanLabel('_$!<Mobile>!$_')).toBe('mobile')
+    expect(cleanLabel('_$!<HomePage>!$_')).toBe('homepage')
+    expect(cleanLabel('iPhone')).toBe('iPhone')
+    expect(cleanLabel('missing value')).toBe('')
+  })
+
+  it('keeps the mobile number first for iMessage after cleaning', () => {
+    const [c] = parseContacts(card('Dad', handles(['_$!<Home>!$_', '+1 555 0100'], ['_$!<Mobile>!$_', '+1 555 0199'])))
+    expect(c.phones.map((p) => p.label)).toEqual(['home', 'mobile'])
+    expect(messageHandle(c)).toBe('+15550199')
+  })
+})
+
+describe('rankContacts', () => {
+  it('puts the exact name, then names starting with the query, before the rest, keeping order within each', () => {
+    const names = ['Anisha Mom', 'Mom Machli', "Rishi's Mom", 'mom', 'Momo Tanaka']
+    expect(rankContacts(names.map((name) => ({ name })), 'Mom').map((p) => p.name)).toEqual([
+      'mom',
+      'Mom Machli',
+      'Momo Tanaka',
+      'Anisha Mom',
+      "Rishi's Mom"
+    ])
+  })
+
+  it('suggests the closest names first when there is no exact match', () => {
+    const cards = [person("Abhinandan's Mom", ['1']), person('Anisha Mom', ['2']), person('Mom Machli', ['3'])]
+    expect(pickContact(cards, 'Mom')).toBe(
+      "No contact is named exactly “Mom”. Did you mean Mom Machli, Abhinandan's Mom, Anisha Mom? Use the full name."
+    )
   })
 })

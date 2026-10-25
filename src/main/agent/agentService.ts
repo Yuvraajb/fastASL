@@ -60,8 +60,8 @@ function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> 
 
 /**
  * The fastASL agent: one persistent Droid session, one run at a time. Every
- * write tool goes through a Confirm card, and the Done card is built from tool
- * outcomes only.
+ * write tool goes through a Confirm card, and a result's title and subtitle are
+ * built from tool outcomes only (the model's reply rides along, AgentResult.reply).
  */
 export class AgentService {
   private session: Promise<Result<DroidSessionLike>> | null = null
@@ -231,7 +231,9 @@ export class AgentService {
       run.emit({ type: 'error', runId: run.runId, message: error })
       return { kind: 'failed', message: error }
     }
-    return this.finish(run, { finished: result?.success === true, error })
+    // The model's last message is its answer only when the turn ended normally (not cancelled or broken off).
+    const reply = result?.success ? { reply: result.text } : {}
+    return this.finish(run, { finished: result?.success === true, error, ...reply })
   }
 
   private async replaySteps(run: Run, calls: readonly ToolCallRecord[]): Promise<RunOutcome> {
@@ -266,12 +268,13 @@ export class AgentService {
   }
 
   /**
-   * Emits Done. `turn` is how the agent turn itself ended; a replay has none and
-   * is not saved as a recent task. Only a complete run counts as a success.
+   * Emits Done. `turn` is how the agent turn itself ended (and the model's last text, when it
+   * finished); a replay has none and is not saved as a recent task. Only a complete run counts
+   * as a success: a reply with no tool call is an answer, not a task done.
    */
-  private finish(run: Run, turn?: { finished: boolean; error?: string }): RunOutcome {
+  private finish(run: Run, turn?: { finished: boolean; error?: string; reply?: string }): RunOutcome {
     const complete = (turn?.finished ?? true) && callsComplete(run.calls, run.declined)
-    const result = summarize(run.calls, { complete, declined: run.declined, error: turn?.error })
+    const result = summarize(run.calls, { complete, declined: run.declined, error: turn?.error, reply: turn?.reply })
     const succeeded = run.calls.filter((c) => c.outcome.ok).map((c) => c.record)
     this.lastCalls = complete ? succeeded : []
     run.emit({ type: 'done', runId: run.runId, result, complete })

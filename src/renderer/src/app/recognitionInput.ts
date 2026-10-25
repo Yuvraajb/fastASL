@@ -8,6 +8,7 @@ import { RecognitionSession, type Movement, type RecognitionEvent } from '../eng
 import type { Classification } from '../engine/recognition/recognizer'
 import { TEACH_REASONS, TeachSession } from '../engine/recognition/teach'
 import { decide, describeTop, ISLR_MAX_RANK, withTaught, yieldToGesture, type FinalDecision, type TaughtDecision } from '../engine/model/decide'
+import { dumpMovement } from '../engine/model/dump'
 import type { ModelVerdict, MovementWindow, SignModel } from '../engine/model/signModel'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
 import {
@@ -356,7 +357,10 @@ export function connectRecognition(
     if (judging) resolveJudging(judging.verdict === null)
     const j: Judging = { movement, local, dtw, since: lastT, verdict: null }
     judging = j
-    model.classify(windowFor(movement)).then(
+    const win = windowFor(movement)
+    // Dev calibration: the movement's points, to replay live signing offline through both models.
+    if (window.fastasl?.isDev) console.log(`[model-dump] ${dumpMovement(win)}`)
+    model.classify(win).then(
       (verdict) => {
         if (judging === j) j.verdict = verdict
       },

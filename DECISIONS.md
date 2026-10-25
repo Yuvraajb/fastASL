@@ -758,3 +758,123 @@ Decisions made while building, in the order they came up. Each entry: what, why,
       - Accuracy on the user's own signing at a desk.
       - The GPU cost on other Macs.
       - How the 0.9 gesture bar feels live.
+
+## Conversational command mode
+
+178. **Command mode is now a conversation with the agent.** Live testing: after signing HELLO the card stopped on the Sentence card ("Sentence / Hello", a pencil, "swipe ← delete · swipe → continue"). The user wanted the Droid agent's answer instead, and signing that keeps going rather than pausing after one sign. Now, in Command mode:
+    - signing builds the phrase on the Building card for as long as the user signs;
+    - lowering both hands sends it at once: the interpreter, then the agent, with nothing to approve in between;
+    - one card shows the exchange: what the user signed, the agent's live steps, then its reply;
+    - the next sign starts the next message, to the same persistent Droid session.
+
+    Dictation and Spell mode are unchanged. So are the recognition code and its thresholds.
+
+179. **Signing builds the phrase until both hands go down.** The first sign still shows Recognizing, and the next ones the Building card (tokens and the assembled sentence). Nothing ends the phrase but hands down (`handsDown`, about 1.2 s with no hands), a thumbs up, a swipe right or the ">" button; those used to open the Sentence card and now send. Thumbs up stays because TESTING (pretrained model, 14) relies on it, and a sign that ends in a thumbs up (TOMORROW) already wins over it (172). The Building card has a new hint, "hands down to send · swipe ← delete", and its ">" button is labelled "Send".
+
+180. **Phrase end sends at once (`controller.sendPhrase`).**
+    - The card switches to the conversation card in its `understanding` phase, with the assembled sentence and one step, "Understanding". The interpreter call is the old prefetch, renamed `interpretPhrase`: the same request, status line ("Rate limited, retrying..."), abort and cancel in main.
+    - When it answers, the agent gets `intent = interpretation.intent ?? interpretation.sentence` and `sentence = interpretation.sentence`. A quick-menu pick with no intent from the interpreter becomes `"<pick>: <sentence>"`, as before.
+    - **An interpreter that fails** (no key, a rate limit, a timeout, a crashed bridge) shows its error as the notice, and the assembled sentence goes to the agent anyway.
+    - **A low-confidence reading** (below 0.6) is not asked about. Its intent may be a wrong guess, so the assembled sentence goes instead, for both `intent` and `sentence`. There is no Did you mean for intents any more. Sign-level Did you mean (`sign`, `learn`) stays.
+    - New gesture › Sign a new task takes the same path and ends in the shape recording, not the agent.
+
+181. **Retired with the pause.** These views were reachable only from it, so they are gone:
+    - **The Sentence card**, with its pencil edit and its swipe hints. To fix a word, swipe left on the Building card (it deletes the last word) and sign it again.
+    - **Agent ready**, both variants (the email one too), and its thumbs up.
+    - **The Done card.** The conversation card's reply replaces it. "View" is a thumbs up on the reply. "Save as gesture" (3 fingers) is gone from the card: a reply card takes signs, and a held finger count would compete with letters like W. Settings › New gesture still lists the last completed task first.
+    - **Context actions** and **Did you mean for intents** (and its unused "Yes, send / Edit" quote variant). The agent now decides what to do with text that is not a command; it has `type_text` for the front app.
+    - `quickMenu.fromSentence` and `controller.editSentence`.
+
+    The quick menu stays: a thumbs up in Ready, or on a reply that opens nothing. `insert()` stays for Spell mode's picks.
+
+182. **The conversation card (`kind: 'conversation'`, `views/ConversationView.tsx`).** It is 340 px wide, like Confirm, so the window keeps its width through confirm steps.
+    - **Layout.** `Header` with the X, then `Feed` (aspect 2.4), then "You" (11 px, `--text-3`) over the signed sentence in quotes (13 px, `--text-2`, two lines at most).
+    - **While it works**, a `StepsList`: "Understanding", then the agent's steps (`visibleSteps`, "Starting agent..." before the first). The hint reads "fist to stop".
+    - **The reply** has two forms (183). The hint reads "sign to reply", led by "open …" with a thumbs-up icon when the result opens something.
+    - **Header status.** "Working..." (gray) until it answers. Then "Reply" (green) for an answer in words, or "Done" (green, or gray when it failed) for a task, as the old Done card had.
+    - **A quick-menu pick** shows in the label: "You · Create event".
+    - **The X** stops a working agent (the Stopped toast), drops the phrase while the interpreter reads, and goes back to Ready from the reply.
+
+183. **An answer in words, or a result (`answerFor`).**
+    - **No tool ran and the model answered** (a greeting, a question about the time): the label "Agent" over its reply at `--fs-sentence` (21 px, four lines at most), or `--fs-result` past 90 characters. Status "Reply".
+    - **Tools ran:** a check badge (an X when not complete) with the title and subtitle from the tool outcomes, exactly as the Done card's were. The model's own line goes under them in `--text-2`. A screenshot's thumbnail takes the badge's place (189). Status "Done".
+    - **A failure to start or finish** uses the result form: "Couldn't start the agent" / "Add FACTORY_API_KEY to .env", or "Couldn't finish" / the error.
+    - **Not verified live: a model that claims a task in words without calling a tool.** It would show as a reply ("Reply", no badge, labelled "Agent"), not as a result. Before, the card said "Nothing was done". The prompt still forbids such claims (185), and the title of anything that ran still comes only from tools.
+
+184. **The reply is the Droid result's `text`, carried as `AgentResult.reply`.**
+    - `AgentService.conclude` passes `result.text` (the SDK's final assistant message) only when the turn ended in `success`. `summarize` drops it after a decline, a stop or an error, where it could describe something that didn't happen.
+    - `cleanReply` makes it card text: Markdown emphasis, code marks and list bullets go, whitespace (newlines too) collapses, and it is cut at 400 characters.
+    - A no-tool turn is still `complete: false`. So a greeting is never a recent task, never compiled into a shortcut, and a shortcut's agent fallback that only talks still toasts as failed.
+
+185. **Agent prompt (`SYSTEM_PROMPT`).**
+    - **New rule:** conversational messages (greetings, thanks, small talk, questions about the agent, the date or the time) get a brief, friendly reply of one or two plain-English sentences with no tool calls. Tasks use the fastasl tools as before.
+    - **Also new:** it is one ongoing conversation, and replies are plain text (no Markdown, lists or emoji).
+    - **Changed:** "Ask nothing" now applies to tasks. The turn's last line is `Message:` instead of `Task:`, because a greeting isn't a task.
+    - **Kept word for word:** every safety rule (fastasl tools only; no files, shell or web; confirmation cards; contacts_find before sending; never claim what no tool result says; stop when a tool fails or is cancelled).
+
+186. **The reply card stays ready.**
+    - **Gestures.** It has Ready's gestures. A thumbs up opens what the result opens (the screenshot in Preview, Calendar, a search), and the card stays; with nothing to open it is Ready's quick menu. A fist collapses the card, swipes switch modes, a swipe up opens Settings, and a saved shape runs its shortcut.
+    - **Signs.** It takes signs: a recognized sign starts the next phrase (`startNextPhrase`, as 157 did on the Sentence card), a close call asks Did you mean, and an unknown movement may be guessed ("Is this HELLO?"). Listening shows in its header.
+    - **Gestures held over.** `gestureScreen` differs per phase, so a thumbs up or fist already up while the agent worked has to be made again on the reply.
+    - **Idle.** After `REPLY_IDLE_MS` (20 s) with no movement it gives way to Ready. That is long enough to read two sentences and start the next message, and short enough that an old answer doesn't sit on screen. A movement still being judged (Listening) holds it, checked again every 2 s. Settings, a mode switch or any other card clears the timer.
+
+187. **Writes still wait for the Confirm card; a fist still stops.**
+    - **Confirm.** Every send, create or delete shows Confirm (thumbs up allows, a fist cancels), then the card goes back to the conversation's step list.
+    - **Fist while the agent works.** It stops the agent (the Stopped toast, then Ready). A write that had already gone through is still reported (the toast or "… before you stopped").
+    - **Fist while the interpreter reads.** It drops the phrase and cancels the call in main. The agent never starts.
+
+188. **A sign guess still running when the phrase is sent is dropped.** Guess, confirm, learn waits about 1.25 s after a movement (146), and hands down takes 1.2 s. So an unknown last sign usually has no guess yet when the phrase goes. If one is in flight, it is cancelled, and the message goes without that word. Before, the guess came up on the Sentence card. Guesses mid-phrase, in Ready and on the reply card work as before.
+
+189. **Screenshots show themselves.** `take_screenshot` saves to `~/Desktop` as "fastASL Screenshot <date> at <time>.png", which is where the peace sign's file goes.
+    - **The peace-sign toast** shows the screenshot (96 px, 16:10) in place of the camera tile, with "Desktop · fastASL Screenshot ….png". It stays 6 s instead of 2.6 s (`toastDuration`), with the hint "open in Preview · dismiss" (thumbs-up and fist icons). A thumbs up or a click on the picture opens it with `openTarget` `openFile` (Preview), and the toast goes.
+    - **The agent's screenshot** shows on the reply as a 120 px thumbnail beside "Screenshot taken" and the file name. A thumbs up or a click opens it, and the card stays.
+    - **When the renderer asks.** Only for an `openFile` result whose path is an image. It waits at most 1.5 s, then shows the card without the picture. A stop or a card change meanwhile wins.
+    - **Plumbing.** `ShortcutRunResult` gained `view`, so the toast knows the file.
+
+190. **`imageThumb` serves only screenshots fastASL took.**
+    - **The list.** `tools/screenshots.ts` keeps the paths `take_screenshot` wrote this session (the last 50, normalized with `path.resolve`, so `..` can neither reach past one nor hide one). It is filled from the tool itself, which covers both the agent and compiled replays.
+    - **The call.** `main/thumbs.ts` refuses any other value before opening anything: another file, a relative trick, a non-string. For a listed file it returns `nativeImage.createFromPath(path).resize({ width: 320 }).toDataURL()`, a PNG data URL. An unreadable or vanished file says "Couldn't read the screenshot".
+    - **Wiring.** IPC `mac:imageThumb` (`IPC.imageThumb`); `FastAslApi.getImageThumb` in the preload; `MainServices.imageThumb`; `Services.imageThumb` in the renderer. A renderer hot-reloaded onto an older preload answers "Restart fastASL to show thumbnails" and shows no picture. The CSP already allowed `img-src data:`.
+
+191. **Mocks and screenshots.**
+    - **Mock services** script the conversation. A greeting, a thanks or a question is answered in words. "screenshot" takes one, with a stand-in thumbnail (`app/mockThumb.ts`). Anything else books the calendar event behind Confirm, then replies.
+    - **Scenes.** `conversationUnderstanding`, `conversationWorking`, `conversationReply`, `conversationDone`, `conversationScreenshot` and `conversationFailed` are new. `toast` has the thumbnail, `missingKey` is the conversation card with an interpreter error, and `didYouMean` is a sign-level list. `sentence`, `agentReady`, `agentReadyEmail`, `done`, `didYouMeanQuote` and `contextActions` are gone.
+    - **Numbering.** The new scenes took the retired ones' places in `SCREENSHOT_ORDER`, so every other screenshot kept its number and file.
+    - **Regenerated** (one id per `node scripts/screens.mjs <id>` run): 08, 09, 10, 11, 15, 16, 17, 18, 22, 32 and 44. The six retired PNGs were deleted.
+    - **Dev menu.** Option+1…9 now opens Ready, Recognizing, Building, Conversation (working), Reply, Confirm, Reply (task done), Reply (screenshot) and Collapsed.
+
+192. **Verified, and not verified.**
+    - **Checks.** `npm run typecheck` passes. `npx vitest run`: 1128 passed, 2 skipped (1116 before; the old Sentence, Agent ready, Context actions and Done tests were replaced). `npx electron-vite build --outDir <scratch>` succeeds, and the running app's `out/` was not touched.
+    - **New and replaced tests.**
+      - Controller: phrase end goes straight to the interpreter and then the agent; an interpreter failure (no key, rate limit, timeout, crash) still sends; low confidence sends what was signed; the reply is shown (words, task, failure); the next sign starts a new phrase; Confirm gates writes; a fist stops the agent, and drops the phrase while the interpreter reads; the reply's gestures and 20 s idle; the screenshot thumbnail, refused or late; the toast's thumbnail and thumbs up.
+      - Engines, through real synthetic frames: hands down sends; a sign on the reply starts the next phrase; a thumbs up held through the send doesn't approve the Confirm that follows; one held into the reply doesn't act. That last test fails when `gestureScreen` stops telling the phases apart.
+      - agentService and calls: `reply` on a greeting, cleaned, and dropped after a decline, an interruption, a stop or an error.
+      - Main: the thumbnail is refused for any path take_screenshot didn't write, and the IPC channel works.
+      - The prompt: the conversational rule is there, and every safety rule is kept.
+    - **Not verified.**
+      - The real Droid agent answering a greeting (no live agent run was made, so `DroidResultMessage.text` on a real turn was not seen).
+      - A real camera.
+      - A real screenshot's thumbnail through Electron's `nativeImage` (tested with a fake loader).
+      - Preview opening it from the card.
+      - How 20 s feels in use.
+
+## Real Mac tools and agent prompt (live tested)
+
+193. **Every Mac tool was run for real through the Factory Droid agent** (26 live turns on the demo Mac). Local actions were actually performed: screenshots, opening Music, Mail and Spotify, play and pause, typing into a scratch TextEdit document, reading Calendar, Notes and Contacts. Email, Messages and FaceTime went as far as their Confirm cards and were declined, so nothing reached a contact. One labelled test event ("fastASL test (delete me)") was created.
+194. **Tool fixes found that way:**
+    - calendar_list_events (64–69 s) and contacts_find (24–32 s) ran their AppleScript filter several times per calendar or contact. They now filter once (~6–17 s and ~4 s), with a 60 s limit for calendar listing.
+    - A quit app returning -600 ("isn't running") is launched hidden and retried.
+    - New events went to the "Finished" calendar (calendar IDs can't be read on macOS 26.3). They now go to a calendar named Calendar, Home, Personal or Work.
+    - Contacts list exact names first, with clean phone and email labels.
+    - spotify_search without API keys opens Spotify's own search page and says so.
+195. **New tools.** media_control (play, pause, next, previous for Spotify or Music, no keys needed). facetime_call (a write, behind a Confirm card, video by default so the user can sign).
+196. **Agent prompt tuned on those runs.**
+    - Questions that need data are tasks ("What meetings do I have tomorrow?").
+    - Tools start their own apps (no extra open_app).
+    - It never invents what a message should say: it asks.
+    - "Mom" and "Dad" match only a contact named exactly that.
+    - Music goes through media_control or spotify_search then spotify_play.
+    - With no fitting tool, it says so and offers the closest option.
+    - Tool descriptions for open_app, contacts_find and mail_send say the same.
+197. **A run of lookups only is answered in the model's words.** When only lookups ran (contacts_find, calendar_list_events, notes_search and so on), the conversation card shows the agent's reply, not a lookup headline like "Found 18 contacts" for a call it couldn't place.
+

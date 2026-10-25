@@ -3,7 +3,7 @@ import './StatusLabel.css'
 
 export interface StatusLabelProps {
   label: string
-  /** active = green dot (Ready, Listening, Agent ready, Done); idle = gray dot. */
+  /** active = green dot (Ready, Listening, Reply, Done); idle = gray dot. */
   tone: StatusTone
   className?: string
 }
