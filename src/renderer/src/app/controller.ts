@@ -46,6 +46,13 @@ export const UNDERSTANDING_STEP: AgentStep = { id: 'understanding', label: 'Unde
 export const GESTURE_TASK_LABEL = 'Gesture task'
 /** New gesture offers these after the recent tasks: tasks no sign can say yet. */
 export const GESTURE_SUGGESTIONS = ['Open 6 Claude Code terminals']
+/**
+ * The exact calls of a suggested task, saved with the gesture as its compiled sequence, so even
+ * its first run replays them with no model (no Droid round trip, nothing to misread).
+ */
+export const SUGGESTED_CALLS: Readonly<Record<string, ToolCallRecord[]>> = {
+  'Open 6 Claude Code terminals': [{ tool: 'claude_code_open', args: { count: 6 }, ok: true }]
+}
 /** The transcript's line when the agent was stopped, or a sent phrase was dropped before it reached the agent. */
 export const STOPPED_NOTE = 'Stopped'
 export const CANCELLED_NOTE = 'Cancelled'
@@ -2101,7 +2108,15 @@ export class Controller {
     try {
       // Added to the file, not the store: a shortcut may have been compiled into it meanwhile.
       const gestures = (await window.fastasl?.getGestures()) ?? []
-      const gesture: CustomGesture = { id: `gesture-${Date.now()}`, name: nextGestureName(gestures), task: page.task, shape, createdAt: Date.now() }
+      const compiled = SUGGESTED_CALLS[page.task]
+      const gesture: CustomGesture = {
+        id: `gesture-${Date.now()}`,
+        name: nextGestureName(gestures),
+        task: page.task,
+        shape,
+        ...(compiled ? { compiled } : {}),
+        createdAt: Date.now()
+      }
       const all = [...gestures, gesture]
       await window.fastasl?.saveGestures(all)
       setApp({ gestures: all })

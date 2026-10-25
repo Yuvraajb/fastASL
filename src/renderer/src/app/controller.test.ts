@@ -560,6 +560,21 @@ describe('settings', () => {
     expect(viewAs('settings').settings).toEqual({ page: 'sensitivity', current: 'high' })
   })
 
+  it('a gesture made for Open 6 Claude Code terminals is saved with its calls compiled (no model, even the first time)', async () => {
+    c.openSettings()
+    fingers(2)
+    await settle()
+    fingers(2)
+    await settle(3000)
+    c.shapeCaptured({ ok: true, shape: [[0.1, 0.2]] })
+    await settle()
+    const saved = api.saveGestures.mock.calls.at(-1)?.[0] ?? []
+    expect(saved.at(-1)).toMatchObject({
+      task: 'Open 6 Claude Code terminals',
+      compiled: [{ tool: 'claude_code_open', args: { count: 6 }, ok: true }]
+    })
+  })
+
   it('new gesture offers Open 6 Claude Code terminals after the recent tasks, once', async () => {
     c.openSettings()
     fingers(2)
