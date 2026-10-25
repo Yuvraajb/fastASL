@@ -17,6 +17,7 @@ import type {
   TemplateStore,
   ViewAction
 } from '@shared/types'
+import { contactAliases } from './agent/directCommands'
 import { keyStatus } from './env'
 import * as store from './store'
 import type { OverlayWindow } from './window'
@@ -120,6 +121,7 @@ export function registerIpc(getOverlay: () => OverlayWindow | null, services: Ma
   ipcMain.on(IPC.setFocusable, (_e, focusable: boolean) => getOverlay()?.setFocusable(Boolean(focusable)))
 
   ipcMain.handle(IPC.envStatus, () => keyStatus())
+  ipcMain.handle(IPC.contactAliases, () => Object.fromEntries(contactAliases()))
   ipcMain.handle(IPC.getSettings, () => store.getSettings())
   ipcMain.handle(IPC.saveSettings, (_e, patch: Partial<Settings>) => store.saveSettings(patch))
   ipcMain.handle(IPC.getTemplates, () => store.getTemplates())

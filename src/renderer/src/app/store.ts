@@ -56,6 +56,8 @@ export interface AppState {
    * for the agent (the quick menu still sends one). See Controller.endPhrase.
    */
   captioning: boolean
+  /** Signs that name a contact (FRIEND -> Darren Wu), from FASTASL_CONTACT_ALIASES. */
+  contactAliases: Record<string, string>
 }
 
 export const useApp = create<AppState>(() => ({
@@ -84,7 +86,8 @@ export const useApp = create<AppState>(() => ({
   modelWords: [],
   chat: [],
   composing: { tokens: [] },
-  captioning: false
+  captioning: false,
+  contactAliases: {}
 }))
 
 export const getApp = (): AppState => useApp.getState()

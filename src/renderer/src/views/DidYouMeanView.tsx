@@ -11,6 +11,7 @@ const fingersHint = (count: number): string => (count > 1 ? `hold up 1–${count
 function listTitle(view: DidYouMean): string {
   if (view.purpose === 'spell') return 'Pick a spelling'
   if (view.purpose === 'learn') return `Is this ${view.options[0] ?? 'a sign'}?`
+  if (view.purpose === 'meeting') return 'What time?'
   return 'Did you mean...'
 }
 
@@ -18,6 +19,7 @@ function listTitle(view: DidYouMean): string {
 function listHint(view: DidYouMean): string[] | null {
   if (view.purpose === 'learn') return [fingersHint(view.options.length), 'thumbs up = 1', 'fist = no']
   if (view.purpose === 'sign') return null
+  if (view.purpose === 'meeting') return [fingersHint(view.options.length), 'fist = cancel']
   return [fingersHint(view.options.length), 'swipe ← edit']
 }
 

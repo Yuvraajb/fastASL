@@ -143,9 +143,9 @@ export type View =
       /**
        * sign: recognition was unsure between signs. learn: the LLM's guesses for a movement
        * nothing matched ("Is this HELLO?"); a pick adds the word and learns it. spell: Spell
-       * mode's spellings of the letters.
+       * mode's spellings of the letters. meeting: MEETING FRIEND's time, 1-4 PM by fingers.
        */
-      purpose: 'sign' | 'spell' | 'learn'
+      purpose: 'sign' | 'spell' | 'learn' | 'meeting'
       /** Spell: Claude's spellings are on their way (the raw letters can be picked meanwhile). */
       pending?: boolean
     }

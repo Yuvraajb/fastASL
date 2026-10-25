@@ -954,3 +954,15 @@ Setup: `FASTASL_CONTACT_ALIASES="friend=<a contact's full name>"` in .env, a con
 4. **With captions on** (`FASTASL_CAPTIONS=1`): sign CALL FRIEND. **Expected:** the same Confirm (it isn't just captioned). Sign HELLO FRIEND: captioned, not sent.
 5. **Not a nickname.** Sign CALL DAD with no `dad=` alias. **Expected:** it goes to the agent as before (contacts_find, then a Confirm for whatever it finds).
 
+## MEETING FRIEND (pick a time, email + invite)
+
+Setup: `FASTASL_CONTACT_ALIASES="friend=<full name>"`, and that contact needs an **email address** in Contacts. A Mail account set up. Sends a real email and invite: use a teammate.
+
+1. **Ask.** Sign MEETING FRIEND, lower your hands. **Expected:** a card "What time?" / "Meeting with <name>" listing 1 PM to 4 PM, hint "hold up 1–4 fingers · fist = cancel".
+2. **Pick.** Hold up 2 fingers. **Expected:** the chat shows "Meeting with <name> today at 2 PM" and one Confirm: "Meeting with <name>", the time, "Calendar invite to <name>", "Email <name> the time".
+3. **Confirm.** Thumbs up. **Expected:** Mail comes up in the top-left quarter of the screen and Calendar below it on that day (day view); the event appears; then "Meeting set up · invite + email sent". The first time, macOS asks to let fastASL control Mail and Calendar: allow both. The contact gets the invite and an email "Meeting today at 2:00 PM".
+4. **Tomorrow / late.** Sign TOMORROW MEETING FRIEND, pick 1: tomorrow at 1 PM. After 4 PM, a plain MEETING FRIEND books tomorrow too.
+5. **Cancel.** A fist on the time card, or on the Confirm: nothing opens or is sent.
+6. **No email.** With a contact that has only a phone number: "<name> has no email address in Contacts", nothing opens.
+7. **Not this.** TOMORROW MEETING WHAT TIME still goes to the agent (or the captions) as a message.
+

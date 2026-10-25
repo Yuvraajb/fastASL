@@ -27,6 +27,8 @@ import {
   CANCELLED_NOTE,
   GESTURE_SUGGESTIONS,
   isCallPhrase,
+  localIso,
+  meetingRequest,
   GESTURE_TASK_LABEL,
   STOPPED_NOTE,
   UNDERSTANDING_STEP,
@@ -1977,6 +1979,57 @@ describe('the conversation with the agent', () => {
       fingers(1)
       expect(getApp().view).toEqual({ kind: 'ready', hint: 'Create event: sign the details' })
       expect(interpret).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('MEETING FRIEND: pick a time, then one confirmed action', () => {
+  const ALIASES = { friend: 'Darren Wu' }
+
+  it('reads MEETING plus a nickname (and TODAY / TOMORROW), nothing else', () => {
+    expect(meetingRequest(['meeting', 'friend'], ALIASES)).toEqual({ name: 'Darren Wu', day: 'today' })
+    expect(meetingRequest(['friend', 'meeting', 'tomorrow'], ALIASES)).toEqual({ name: 'Darren Wu', day: 'tomorrow' })
+    expect(meetingRequest(['tomorrow', 'meeting', 'what', 'time'], ALIASES)).toBeNull()
+    expect(meetingRequest(['meeting', 'dad'], ALIASES)).toBeNull()
+    expect(meetingRequest(['call', 'friend'], ALIASES)).toBeNull()
+    expect(localIso(new Date(2026, 9, 5, 14, 0))).toBe('2026-10-05T14:00:00')
+  })
+
+  it('asks for the time (1-4 PM by fingers), then runs meeting_invite with no model', async () => {
+    vi.setSystemTime(new Date(2026, 9, 25, 10, 0))
+    setApp({ contactAliases: ALIASES })
+    const run = vi.spyOn(services, 'agentRun')
+    sign(word('meeting'), word('friend'))
+    g('handsDown')
+    expect(getApp().view).toEqual({ kind: 'didYouMean', options: ['1 PM', '2 PM', '3 PM', '4 PM'], purpose: 'meeting', quote: 'Meeting with Darren Wu' })
+    expect(activeGestures(getApp().view)).toEqual(new Set(['fingers', 'fist']))
+    fingers(2)
+    await settle()
+    expect(run).toHaveBeenCalledWith({
+      intent: 'Meeting with Darren Wu today at 2 PM',
+      sentence: 'Meeting with Darren Wu today at 2 PM',
+      frontmost: { name: 'Mail', windowTitle: 'New Message' },
+      calls: [{ tool: 'meeting_invite', args: { contact_name: 'Darren Wu', start_iso: '2026-10-25T14:00:00', end_iso: '2026-10-25T15:00:00' }, ok: true }]
+    })
+    expect(getApp().chat.find((m) => m.from === 'you')).toMatchObject({ text: 'Meeting with Darren Wu today at 2 PM' })
+  })
+
+  it('TOMORROW, or an hour already past, books tomorrow; a fist cancels; captions mode still asks', async () => {
+    vi.setSystemTime(new Date(2026, 9, 25, 15, 30))
+    setApp({ contactAliases: ALIASES })
+    const run = vi.spyOn(services, 'agentRun')
+    c.setCaptioning(true)
+    sign(word('meeting'), word('friend'))
+    g('handsDown')
+    g('fist')
+    expect(getApp().view).toMatchObject({ kind: 'ready' })
+    sign(word('meeting'), word('friend'))
+    g('handsDown')
+    fingers(1)
+    await settle()
+    expect(run.mock.calls[0][0]).toMatchObject({
+      sentence: 'Meeting with Darren Wu tomorrow at 1 PM',
+      calls: [{ args: { start_iso: '2026-10-26T13:00:00', end_iso: '2026-10-26T14:00:00' } }]
     })
   })
 })

@@ -25,6 +25,7 @@ export default function App(): React.JSX.Element {
     let stopEngines: (() => void) | null = null
     if (window.fastasl?.nativeVibrancy) document.documentElement.dataset.vibrancy = '1'
     void window.fastasl?.getEnvStatus().then((keyStatus) => setApp({ keyStatus }))
+    void window.fastasl?.getContactAliases?.().then((contactAliases) => setApp({ contactAliases }))
     void controller.loadTemplates()
     void controller.loadGestures()
     void controller.loadSettings().then(() => {

@@ -96,7 +96,7 @@ export class AgentService {
 
   /** Like run(), but also hands back a promise for the run's outcome. Never throws. */
   start(req: AgentRunRequest, emit: Emit): Promise<Result<{ runId: string; completion: Promise<RunOutcome> }>> {
-    const direct = this.deps.directCommand?.(req.sentence)
+    const direct = req.calls?.length ? { intent: req.intent, calls: req.calls } : this.deps.directCommand?.(req.sentence)
     if (direct) return this.startDirect(direct, emit)
     const stops = this.stopCount
     return this.enqueue(async () => {

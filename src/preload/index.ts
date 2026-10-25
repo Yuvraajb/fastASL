@@ -33,6 +33,7 @@ const api: FastAslApi = {
   setFocusable: (focusable) => ipcRenderer.send(IPC.setFocusable, focusable),
 
   getEnvStatus: () => ipcRenderer.invoke(IPC.envStatus),
+  getContactAliases: () => ipcRenderer.invoke(IPC.contactAliases),
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   saveSettings: (patch) => ipcRenderer.invoke(IPC.saveSettings, patch),
   getTemplates: () => ipcRenderer.invoke(IPC.getTemplates),

@@ -132,6 +132,17 @@ describe('AgentService', () => {
       expect(ctx.sessions).toHaveLength(0)
     })
 
+    it('runs fixed calls sent with the request (a picked meeting time) the same way', async () => {
+      const ctx = makeAgent([])
+      const calls = [{ tool: 'send_message', args: { to: 'Darren Wu', text: '2 PM' }, ok: true }]
+      const started = await ctx.agent.start({ intent: 'Meeting at 2 PM', sentence: 'Meeting at 2 PM', frontmost: null, calls }, ctx.emit)
+      if (!started.ok) throw new Error(started.error)
+      await ctx.agent.respond((await waitForConfirm(ctx.events)).requestId, true)
+      await started.value.completion
+      expect(ctx.runs).toEqual(['send_message'])
+      expect(ctx.sessions).toHaveLength(0)
+    })
+
     it('a declined Confirm runs nothing, and other sentences still go to the agent', async () => {
       const ctx = makeAgent([callTool('take_screenshot', {})], { directCommand: direct })
       const started = await ctx.agent.start({ intent: 'Call friend', sentence: 'Call friend', frontmost: null }, ctx.emit)

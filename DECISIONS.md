@@ -1057,3 +1057,17 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - TIME within 2.5 s after FRIEND: dropped, logged as `[stream] time dropped`.
     - Cost: a real TIME signed less than 2.5 s after FRIEND is lost, and TIME then FRIEND within 1.5 s reads as one FRIEND. Neither is in the demo phrases.
 
+## MEETING FRIEND: pick a time by fingers, one Confirm
+
+226. **MEETING plus a contact nickname asks for a time (1-4 PM, by fingers), then one confirmed action sets up the meeting.**
+    - **Phrase** (`meetingRequest`): MEETING and one nickname from FASTASL_CONTACT_ALIASES, maybe TODAY or TOMORROW, any order, nothing else. TOMORROW MEETING WHAT TIME stays a message. It works with the caption window open too. The overlay gets the nicknames from main (`getContactAliases`).
+    - **Picker:** the "Did you mean" card, purpose `meeting`: "What time?", "Meeting with Darren Wu", options 1 PM to 4 PM, hold up 1-4 fingers; a fist cancels. No thumbs up there: it would quietly mean 1 PM.
+    - **Time:** an hour from the picked time, today; tomorrow when TOMORROW was signed or the hour has passed. Sent as local ISO with no offset.
+    - **One action, one Confirm:** the pick sends fixed calls with the request (`AgentRunRequest.calls`, run like CALL FRIEND's direct path, no model): one `meeting_invite` (`tools/meeting.ts`), a single write, so a single Confirm card listing the time, the invite and the email. It then:
+      1. puts Mail in the top-left quarter and Calendar below it, on the meeting's day in day view (`mac/arrange.ts`, JXA, placement never fails the action);
+      2. creates "Meeting with <name>" in Calendar's default calendar with the contact invited (the existing createEventScript);
+      3. emails them "Meeting today at 2:00 PM" with the time and a note about the invite (the existing sendMailScript).
+      Two writes behind one Confirm is a deliberate exception: the user picked the time with fingers and then confirms a card that names both.
+    - **Needs:** the contact must have an email address in Contacts (Darren Wu had only a phone number; the action refuses before anything opens); a Mail account; Automation access to Mail and Calendar, asked by macOS once.
+    - **Checked:** Calendar answered scripting on the user's Mac; Mail didn't answer within 10 s from the terminal (most likely a pending macOS permission prompt), so the layout and sending weren't run live. Tests: controller (phrase, picker, times, captions), `meeting.test.ts`, `arrange.test.ts`, `agentService.test.ts` (fixed calls). `npx vitest run`: 1309 passed, 9 skipped.
+

@@ -13,6 +13,7 @@ import type {
   ShortcutRunResult,
   SignGuess,
   SignTemplate,
+  ToolCallRecord,
   ViewAction
 } from '@shared/types'
 import { CAPTURE_REASONS, type ShapeCapture } from '../engine/gestures/customShapes'
@@ -234,6 +235,35 @@ export function assembleSentence(tokens: Token[]): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
 }
 
+/** MEETING FRIEND's time choices: hold up 1-4 fingers. */
+export const MEETING_TIMES = ['1 PM', '2 PM', '3 PM', '4 PM'] as const
+
+export interface MeetingRequest {
+  /** The contact's full name in Contacts. */
+  name: string
+  day: 'today' | 'tomorrow'
+}
+
+/**
+ * MEETING plus a contact nickname (FRIEND), maybe TODAY or TOMORROW, in any order and nothing
+ * else: set up a meeting with that contact. Anything more (TOMORROW MEETING WHAT TIME) is a
+ * message, as before.
+ */
+export function meetingRequest(words: readonly string[], aliases: Readonly<Record<string, string>>): MeetingRequest | null {
+  const lower = words.map((w) => w.toLowerCase())
+  if (!lower.includes('meeting')) return null
+  const rest = lower.filter((w) => w !== 'meeting' && w !== 'today' && w !== 'tomorrow')
+  const name = rest.length === 1 ? aliases[rest[0]] : undefined
+  if (!name || lower.length > 3) return null
+  return { name, day: lower.includes('tomorrow') ? 'tomorrow' : 'today' }
+}
+
+/** Local ISO 8601 with no offset ("2026-10-25T14:00:00"): main reads it in the local time zone. */
+export function localIso(d: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`
+}
+
 /**
  * CALL plus one word (CALL FRIEND): a command even while the caption camera is open, so a call
  * can be started by sign during a captioned session. Main runs it with no model when the word is
@@ -328,6 +358,8 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
     case 'confirm':
       return new Set(['thumbsUp', 'fist'])
     case 'didYouMean':
+      // A meeting time is picked by fingers only: a thumbs up would quietly mean 1 PM.
+      if (view.purpose === 'meeting') return new Set(['fingers', 'fist'])
       // Swipe left edits what a spelling list was made from: the spelled letters.
       if (view.purpose === 'sign' || view.purpose === 'learn') return new Set(['fingers', 'fist', 'thumbsUp'])
       return new Set(['fingers', 'fist', 'thumbsUp', 'swipeLeft'])
@@ -483,6 +515,8 @@ function gestureList(gestures: readonly CustomGesture[], focusId?: string): Sett
 export class Controller {
   private tokens: Token[] = []
   private intentPrefix: string | undefined
+  /** MEETING FRIEND, waiting for its time on the picker. */
+  private meeting: MeetingRequest | null = null
   /** New gesture › Sign a new task: the phrase signed next becomes the gesture's task, not an agent run. */
   private signingTask = false
   private interpretation: Promise<Interpretation> | null = null
@@ -657,6 +691,7 @@ export class Controller {
   private resetPhrase(): void {
     this.phraseVersion++
     this.tokens = []
+    this.meeting = null
     this.forgetInterpretation()
     this.intentPrefix = undefined
     this.signingTask = false
@@ -1233,9 +1268,38 @@ export class Controller {
   private endPhrase(): void {
     if (!this.tokens.length) return this.cancel()
     if (getApp().mode === 'spell') return void this.spellSuggestions()
+    if (!this.intentPrefix && !this.signingTask) {
+      const meeting = meetingRequest(phraseWords(this.tokens), getApp().contactAliases)
+      if (meeting) return this.askMeetingTime(meeting)
+    }
     const command = this.intentPrefix || this.signingTask || isCallPhrase(phraseWords(this.tokens))
     if (getApp().captioning && !command) return this.captionPhrase()
     void this.sendPhrase()
+  }
+
+  /** MEETING FRIEND: the time is picked by fingers (1-4 PM), then one confirmed action does the rest. */
+  private askMeetingTime(meeting: MeetingRequest): void {
+    this.resetPhrase()
+    this.meeting = meeting
+    const quote = `Meeting with ${meeting.name}${meeting.day === 'tomorrow' ? ' tomorrow' : ''}`
+    this.setView({ kind: 'didYouMean', options: [...MEETING_TIMES], purpose: 'meeting', quote })
+  }
+
+  /**
+   * The picked hour: an hour long, today (tomorrow when it has passed, or was signed). Mail and
+   * Calendar come up, the event invites the contact and an email tells them the time, all as one
+   * action with one Confirm card (main's meeting_invite).
+   */
+  private scheduleMeeting(meeting: MeetingRequest, index: number): void {
+    const now = new Date()
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + (meeting.day === 'tomorrow' ? 1 : 0), 13 + index)
+    if (start <= now) start.setDate(start.getDate() + 1)
+    const end = new Date(start.getTime() + 60 * 60_000)
+    const tomorrow = start.getDate() !== now.getDate()
+    const sentence = `Meeting with ${meeting.name} ${tomorrow ? 'tomorrow' : 'today'} at ${MEETING_TIMES[index]}`
+    const calls = [{ tool: 'meeting_invite', args: { contact_name: meeting.name, start_iso: localIso(start), end_iso: localIso(end) }, ok: true }]
+    this.resetPhrase()
+    void this.runAgent(sentence, sentence, undefined, calls)
   }
 
   /**
@@ -1349,7 +1413,9 @@ export class Controller {
     const choice = options[index]
     switch (view.kind) {
       case 'didYouMean':
-        if (view.purpose === 'learn') {
+        if (view.purpose === 'meeting') {
+          if (this.meeting) this.scheduleMeeting(this.meeting, index)
+        } else if (view.purpose === 'learn') {
           this.confirmGuess(choice)
         } else if (view.purpose === 'sign') {
           this.phraseVersion++
@@ -1425,7 +1491,7 @@ export class Controller {
    * Sends one message of the conversation: `intent` is what the agent is asked, `sentence` what
    * the user signed (shown as theirs on the card), `prefix` a quick-menu pick it was signed for.
    */
-  async runAgent(intent: string, sentence: string, prefix?: string): Promise<void> {
+  async runAgent(intent: string, sentence: string, prefix?: string, calls?: ToolCallRecord[]): Promise<void> {
     this.subscribe() // dispose() may have run (React StrictMode re-mounts App)
     // The bubble sent at phrase end, which now gets the interpreter's sentence (taken before the
     // reset below, which would call it dropped).
@@ -1446,7 +1512,7 @@ export class Controller {
     this.setView(this.runningView(run))
     const frontmost = await this.services.frontmostApp().catch(() => null)
     if (this.agentRun !== run) return // stopped before the agent started
-    const res = await settled(this.services.agentRun({ intent, sentence, frontmost }))
+    const res = await settled(this.services.agentRun({ intent, sentence, frontmost, ...(calls ? { calls } : {}) }))
     if (this.agentRun !== run) return // stopped meanwhile (clearRun released what it held)
     if (!res.ok) {
       this.clearRun()

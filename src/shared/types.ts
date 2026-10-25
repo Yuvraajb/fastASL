@@ -203,6 +203,11 @@ export interface AgentRunRequest {
   intent: string
   sentence: string
   frontmost: FrontmostApp | null
+  /**
+   * Fixed tool calls to run instead of the agent (MEETING FRIEND once its time is picked): no
+   * model, a write still goes through its Confirm card.
+   */
+  calls?: ToolCallRecord[]
 }
 
 // ---------------------------------------------------------------------------

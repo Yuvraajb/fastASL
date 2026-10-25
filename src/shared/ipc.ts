@@ -28,6 +28,7 @@ export const IPC = {
   setFocusable: 'window:setFocusable',
   // app data
   envStatus: 'app:envStatus',
+  contactAliases: 'app:contactAliases',
   getSettings: 'settings:get',
   saveSettings: 'settings:save',
   getTemplates: 'templates:get',
@@ -89,6 +90,8 @@ export interface FastAslApi {
   setFocusable(focusable: boolean): void
 
   getEnvStatus(): Promise<KeyStatus>
+  /** FASTASL_CONTACT_ALIASES: sign word (lower case) -> full name in Contacts (FRIEND -> Darren Wu). */
+  getContactAliases(): Promise<Record<string, string>>
   getSettings(): Promise<Settings>
   saveSettings(patch: Partial<Settings>): Promise<Settings>
   getTemplates(): Promise<TemplateStore>

@@ -34,7 +34,8 @@ const SAMPLE_ARGS: Record<string, Record<string, unknown>> = {
   web_search: { query: 'weather' },
   type_text: { text: 'hello' },
   take_screenshot: {},
-  claude_code_open: { count: 6 }
+  claude_code_open: { count: 6 },
+  meeting_invite: { contact_name: 'Darren Wu', start_iso: '2026-10-25T14:00:00', end_iso: '2026-10-25T15:00:00' }
 }
 
 describe('tool registry', () => {
@@ -46,7 +47,7 @@ describe('tool registry', () => {
 
   it('asks for confirmation exactly for tools that send or create', () => {
     const write = TOOLS.filter((t) => t.risk === 'write').map((t) => t.name)
-    expect(write.sort()).toEqual(['calendar_create_event', 'facetime_call', 'mail_send', 'message_send'])
+    expect(write.sort()).toEqual(['calendar_create_event', 'facetime_call', 'mail_send', 'meeting_invite', 'message_send'])
   })
 
   it('gives every write tool a confirm card', () => {
