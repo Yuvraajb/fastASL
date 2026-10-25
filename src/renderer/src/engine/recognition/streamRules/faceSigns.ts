@@ -127,14 +127,21 @@ export const FACE_SIGN_PARAMS = {
     graceMs: 100
   },
   yes: {
-    /** One nod: the knuckles go down and back up by this much (palm lengths). */
-    swing: 0.25,
+    /** One swing of the knuckles relative to the wrist, in palm lengths. */
+    swing: 0.07,
     /** Swings (down, up, down ...) needed. */
     swings: 3,
     /** Within this long. */
     windowMs: 1200,
     /** Share of the window's frames that must be a fist. */
-    fistShare: 0.8
+    fistShare: 0.8,
+    /** Measure the knuckles relative to the wrist (a nod), not in the image (any up and down). */
+    relative: true,
+    /** Over the last stillMs the palm stays within `travel` palm lengths of where it is now. */
+    stillMs: 600,
+    travel: 0.5,
+    /** Thumb extension above which the fist is an A hand, not an S (allowed on 1 - fistShare of frames). */
+    thumb: 0.8
   },
   no: {
     /** Open: index tip at least this far from the thumb tip (palm lengths). */
@@ -144,7 +151,14 @@ export const FACE_SIGN_PARAMS = {
     /** Open to shut within this long. */
     snapMs: 400,
     /** The palm may drift this much (palm lengths) during the snap. */
-    drift: 0.8
+    drift: 0.8,
+    /**
+     * Shut, the index tip is still this far from the wrist (palm lengths): NO 1.1-1.7 on tracked
+     * clips, a real fist about 0.9 (0.7 synthetic). Keeps peace -> fist from reading as NO.
+     */
+    reach: 1.05,
+    /** Open, the thumb is out (NO starts like an ASL 3), not folded over ring and pinky (peace, 2). */
+    openThumb: 0.3
   }
 }
 
@@ -453,16 +467,29 @@ export const yes: StreamRule = {
   hands: 1,
   fires(history, ctx) {
     const c = P.yes
-    return liveTracks(history, ctx.aspect).some((track) => {
+    return oneHanded(history, ctx, (track) => {
       const now = track[track.length - 1]
       if (!bentFingers(now.shape)) return false
       const recent = track.filter((f) => now.t - f.t <= c.windowMs)
       if (recent.length < 4) return false
       if (recent.filter((f) => bentFingers(f.shape)).length < c.fistShare * recent.length) return false
+      // S hand: the thumb wraps the fingers. A thumb sticking up (A hand) is TOMORROW / YESTERDAY / thumbs up.
+      if (recent.filter((f) => ext(f.shape, 'thumb') > c.thumb).length > (1 - c.fistShare) * recent.length) return false
       const unit = Math.max(...recent.map((f) => f.scale))
-      return swings(recent.map((f) => f.knuckles.y / unit), c.swing) >= c.swings
+      // Knuckles relative to the wrist: the wrist nodding, not the arm raising or lowering the fist.
+      const nod = recent.map((f) => (c.relative ? f.knuckles.y - f.wrist.y : f.knuckles.y) / unit)
+      if (swings(nod, c.swing) < c.swings) return false
+      // A nod keeps the fist in place; TOMORROW, YESTERDAY or a fist being lowered travel.
+      const still = recent.filter((f) => now.t - f.t <= c.stillMs)
+      return still.every((f) => dist(f.palm, now.palm, ctx.aspect) <= c.travel * unit)
     })
   }
+}
+
+/** The live tracks, each tested alone: no other hand near it (a two-handed sign). Needs no face. */
+function oneHanded(history: readonly FrameSample[], ctx: StreamContext, test: (track: Track) => boolean): boolean {
+  const tracks = liveTracks(history, ctx.aspect)
+  return tracks.some((track) => test(track) && !otherHandNear(track, tracks, P.oneHand.ms, P.oneHand.near, ctx.aspect))
 }
 
 /** Alternating moves of at least `amount` in a signal (a zig-zag count with hysteresis). */
@@ -499,17 +526,19 @@ export const no: StreamRule = {
   fires(history, ctx) {
     const c = P.no
     const a = ctx.aspect
-    return liveTracks(history, a).some((track) => {
+    return oneHanded(history, ctx, (track) => {
       const now = track[track.length - 1]
       const s = now.shape
       if (ext(s, 'ring') > P.shape.off + 0.1 || ext(s, 'pinky') > P.shape.off + 0.1) return false
       const unit = now.scale
       if (dist(now.index, now.thumb, a) > c.shut * unit || dist(now.middle, now.thumb, a) > (c.shut + 0.1) * unit) return false
+      // The fingers stay straight and meet the thumb out in front (a beak); a fist tucks them into the palm.
+      if (dist(now.index, now.wrist, a) < c.reach * unit) return false
       for (let i = track.length - 2; i >= 0; i--) {
         const f = track[i]
         if (now.t - f.t > c.snapMs) break
         if (ext(f.shape, 'ring') > P.shape.off + 0.1 || ext(f.shape, 'pinky') > P.shape.off + 0.1) return false
-        if (twoFingers(f.shape) && dist(f.index, f.thumb, a) >= c.open * f.scale) {
+        if (twoFingers(f.shape) && ext(f.shape, 'thumb') >= c.openThumb && dist(f.index, f.thumb, a) >= c.open * f.scale) {
           return dist(f.palm, now.palm, a) <= c.drift * Math.max(f.scale, unit)
         }
       }
@@ -522,7 +551,7 @@ export const no: StreamRule = {
  * The validated face signs, most specific first (the streaming matcher takes the first rule that
  * fires). Rules are added here once they pass faceSigns.eval.test.ts.
  */
-export const FACE_RULES: StreamRule[] = [tomorrow, call, thankYou, mom, dad]
+export const FACE_RULES: StreamRule[] = [tomorrow, call, thankYou, mom, dad, no, yes]
 
 /** Every rule in this file, validated or not (for the eval and the tests). */
 export const ALL_FACE_RULES: StreamRule[] = [thankYou, tomorrow, mom, dad, call, no, yes]
