@@ -25,6 +25,11 @@ const logRenderer = process.env.FASTASL_LOG === '1'
 const mockServices = process.env.FASTASL_MOCK === '1'
 
 app.setName('fastASL')
+// The caption camera is captured by OBS while other windows cover it. Chromium otherwise treats a
+// covered window as hidden and stops drawing it (OBS then sends a black frame), and the overlay's
+// camera and recognition must not slow down behind other apps either.
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
 loadEnv()
 
 let overlay: OverlayWindow | null = null
