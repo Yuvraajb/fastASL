@@ -107,6 +107,8 @@ const COUNTDOWN_TICK_MS = 1000
 /** No verdict this long into a recording means no camera frames came (camera off or failed). */
 const CAPTURE_TIMEOUT_MS = 2500
 const SIGN_TASK_HINT = 'Sign the task for your gesture'
+/** Ready's hint while the caption camera is open. */
+const CAPTIONS_HINT = 'Captions on: what you sign goes to the call, not the agent'
 /** Gestures per page of My gestures (two-line rows). */
 export const GESTURE_PAGE = 4
 /** What Settings › Camera source accepts as a stream URL (the proxy checks the rest). */
@@ -624,7 +626,8 @@ export class Controller {
     if (getApp().mode === 'dictation') return { kind: 'dictation', text: '' }
     // A quick-menu pick keeps waiting for its details, also after a movement that was no sign.
     if (this.intentPrefix) return { kind: 'ready', hint: `${this.intentPrefix}: sign the details` }
-    return this.signingTask ? { kind: 'ready', hint: SIGN_TASK_HINT } : { kind: 'ready' }
+    if (this.signingTask) return { kind: 'ready', hint: SIGN_TASK_HINT }
+    return getApp().captioning ? { kind: 'ready', hint: CAPTIONS_HINT } : { kind: 'ready' }
   }
 
   /** The signed words go, the context they were signed for (quick-menu prefix, a gesture's task) stays. */
@@ -726,6 +729,13 @@ export class Controller {
   collapse(): void {
     this.resetPhrase()
     this.setView({ kind: 'collapsed' })
+  }
+
+  /** The caption camera window opened or closed (see endPhrase); Ready's hint follows. */
+  setCaptioning(open: boolean): void {
+    if (getApp().captioning === open) return
+    setApp({ captioning: open })
+    if (this.view.kind === 'ready' && !this.intentPrefix && !this.signingTask) this.setView(this.idleView())
   }
 
   toggleCamera(): void {
@@ -1177,11 +1187,27 @@ export class Controller {
     this.setView({ kind: 'building', tokens: [...this.tokens], current: null, sentence: assembleSentence(this.tokens) })
   }
 
-  /** Hands down (or a thumbs up, a swipe right, the > button): Spell mode lists spellings; Command mode sends the phrase. */
+  /**
+   * Hands down (or a thumbs up, a swipe right, the > button): Spell mode lists spellings; Command
+   * mode sends the phrase, or captions it while the caption camera is open (a quick-menu pick or a
+   * gesture's task still goes to the agent).
+   */
   private endPhrase(): void {
     if (!this.tokens.length) return this.cancel()
     if (getApp().mode === 'spell') return void this.spellSuggestions()
+    if (getApp().captioning && !this.intentPrefix && !this.signingTask) return this.captionPhrase()
     void this.sendPhrase()
+  }
+
+  /**
+   * The caption camera is open: the phrase is for the person on the call. It goes into the
+   * transcript as sent (the caption shows it) and nowhere else, and the card is Ready for the next
+   * phrase at once: an agent run would stop the signs, and the captions with them, until it ended.
+   */
+  private captionPhrase(): void {
+    this.postChat({ from: 'you', kind: 'text', text: assembleSentence(this.tokens) })
+    this.resetPhrase()
+    this.setView(this.idleView())
   }
 
   /**

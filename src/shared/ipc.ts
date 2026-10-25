@@ -63,7 +63,9 @@ export const IPC = {
   quit: 'app:quit',
   // caption camera (FaceTime via OBS Virtual Camera)
   captionsUpdate: 'captions:update',
-  captionsState: 'captions:state'
+  captionsState: 'captions:state',
+  captionsOpen: 'captions:open',
+  captionsOpenChanged: 'captions:open-changed'
 } as const
 
 export interface CardSize {
@@ -134,4 +136,8 @@ export interface FastAslApi {
   sendCaptions(state: CaptionState): void
   /** Caption window: the latest captions. */
   onCaptions(cb: (state: CaptionState) => void): () => void
+  /** Overlay: whether the caption camera window is open now. */
+  captionsOpen(): Promise<boolean>
+  /** Overlay: the caption camera window opened or closed. */
+  onCaptionsOpen(cb: (open: boolean) => void): () => void
 }

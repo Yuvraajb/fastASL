@@ -51,6 +51,11 @@ export interface AppState {
   chat: ChatMessage[]
   /** The message being signed, as its tokens stream in (the chat's composing bubble). */
   composing: Composing
+  /**
+   * The caption camera window is open: a signed phrase is captions for the call, not a message
+   * for the agent (the quick menu still sends one). See Controller.endPhrase.
+   */
+  captioning: boolean
 }
 
 export const useApp = create<AppState>(() => ({
@@ -78,7 +83,8 @@ export const useApp = create<AppState>(() => ({
   gestures: [],
   modelWords: [],
   chat: [],
-  composing: { tokens: [] }
+  composing: { tokens: [] },
+  captioning: false
 }))
 
 export const getApp = (): AppState => useApp.getState()

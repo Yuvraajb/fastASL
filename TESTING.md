@@ -919,3 +919,17 @@ Setup: Command mode, the chat card up, `FASTASL_LOG=1 npm run dev`. FRIEND: both
     - Tap two fists together twice: nothing.
     - A fist held still (cancel) and an open palm held still: they act as controls and add no word.
 5. **Real data (optional).** With the clip folders (DECISIONS 218), run `FASTASL_STREAM_DATA=<folders> npx vitest run friend.eval twoHandSigns.eval streamPhrase.eval`. **Expected:** it prints FRIEND's recall, false fires and fire time; "TIME on FRIEND clips" at most 10%; and each signer's CALL FRIEND and EMAIL FRIEND phrases.
+
+## Caption camera (FaceTime via OBS)
+
+Setup: Command mode, `FASTASL_CAPTIONS=1 FASTASL_LOG=1 npm run dev` (or the tray's "Caption camera (for FaceTime via OBS)"). The "fastASL Captions" window opens at 1280×720 with the camera. The laptop lid must be open: macOS turns the built-in camera off in clamshell mode, and the overlay then says "No camera found".
+
+1. **Captions on.** **Expected:** the overlay's composing bubble reads "Captions on: what you sign goes to the call, not the agent".
+2. **Live words.** Sign TOMORROW MEETING. **Expected:** the words appear in the captions box (green outline, blinking caret) as each one fires, and in the overlay's composing bubble.
+3. **Phrase end.** Lower your hands. **Expected:** the phrase is a sent bubble in the overlay, with no "Understanding" and no agent steps. The captions show it for about 8 s. The overlay is Ready again at once.
+4. **Back to back.** Sign WHAT TIME right after. **Expected:** it is captioned the same way; nothing waits on an agent. Sign the same word twice in two phrases (YES, then YES). **Expected:** the caption shows it again the second time.
+5. **A resting fist.** Hold a fist still for 2 s between signs. **Expected:** the card stays up and captions keep working.
+6. **Commands still work.** Thumbs up, pick "Send message" (2 fingers), sign the details, lower your hands. **Expected:** this one goes to the agent as usual.
+7. **Close the caption window.** **Expected:** the hint goes away; the next phrase goes to the agent again.
+8. **OBS and FaceTime.** In OBS add a Window Capture of "fastASL Captions" and Start Virtual Camera; in FaceTime pick Video › OBS Virtual Camera. **Expected:** the other side sees the camera with the captions.
+

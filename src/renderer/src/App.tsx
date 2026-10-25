@@ -9,7 +9,7 @@ import { ViewRenderer } from './views/ViewRenderer'
 import { DevPanel } from './dev/DevPanel'
 import { Stage } from './dev/Stage'
 import { useDevCommands } from './dev/useDevCommands'
-import { publishCaptions } from './captions/publish'
+import { followCaptionWindow, publishCaptions } from './captions/publish'
 
 const params = new URLSearchParams(location.search)
 const isStage = params.get('stage') === '1'
@@ -37,8 +37,17 @@ export default function App(): React.JSX.Element {
     }
   }, [])
 
-  // The caption camera window (FaceTime via OBS) shows what is being signed.
-  useEffect(() => (isStage ? undefined : publishCaptions()), [])
+  // The caption camera window (FaceTime via OBS) shows what is being signed; while it is open, a
+  // signed phrase is captions for the call, not a message for the agent.
+  useEffect(() => {
+    if (isStage) return undefined
+    const stopPublish = publishCaptions()
+    const stopFollow = followCaptionWindow((open) => controller.setCaptioning(open))
+    return () => {
+      stopPublish()
+      stopFollow()
+    }
+  }, [])
 
   // The panel takes the keyboard only for a text field. As it gives it back, Chromium focuses the
   // first button (a stray focus ring on the X), so buttons never keep focus.

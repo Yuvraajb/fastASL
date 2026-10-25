@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { captionStateOf } from './publish'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { setApp, useApp } from '../app/store'
+import { captionStateOf, publishCaptions } from './publish'
 
 describe('captionStateOf', () => {
   it('shows the words being signed live, and the last sent message', () => {
@@ -13,5 +14,29 @@ describe('captionStateOf', () => {
     }
     expect(captionStateOf(s, 42)).toEqual({ live: 'call friend', last: 'Tomorrow meeting what time', lastAt: 42 })
     expect(captionStateOf({ composing: { tokens: [] }, chat: [] }, 0)).toEqual({ live: '', last: '', lastAt: 0 })
+  })
+})
+
+describe('publishCaptions', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    useApp.setState(useApp.getInitialState(), true)
+  })
+
+  it('sends again when the same words are sent again, with a new time', () => {
+    vi.useFakeTimers()
+    const sendCaptions = vi.fn()
+    vi.stubGlobal('window', { fastasl: { sendCaptions } })
+    const stop = publishCaptions()
+    setApp({ chat: [{ id: 'm1', from: 'you', kind: 'text', text: 'Yes' }] })
+    vi.advanceTimersByTime(5000)
+    setApp({ chat: [{ id: 'm1', from: 'you', kind: 'text', text: 'Yes' }, { id: 'm2', from: 'you', kind: 'text', text: 'Yes' }] })
+    stop()
+    expect(sendCaptions).toHaveBeenCalledTimes(2)
+    const [first, second] = sendCaptions.mock.calls.map(([state]) => state)
+    expect(first.last).toBe('Yes')
+    expect(second.last).toBe('Yes')
+    expect(second.lastAt - first.lastAt).toBe(5000)
   })
 })

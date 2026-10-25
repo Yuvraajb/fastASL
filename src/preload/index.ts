@@ -67,7 +67,9 @@ const api: FastAslApi = {
   capture: (name) => ipcRenderer.invoke(IPC.capture, name),
   quit: () => ipcRenderer.send(IPC.quit),
   sendCaptions: (state) => ipcRenderer.send(IPC.captionsUpdate, state),
-  onCaptions: (cb) => subscribe<CaptionState>(IPC.captionsState, cb)
+  onCaptions: (cb) => subscribe<CaptionState>(IPC.captionsState, cb),
+  captionsOpen: () => ipcRenderer.invoke(IPC.captionsOpen),
+  onCaptionsOpen: (cb) => subscribe<boolean>(IPC.captionsOpenChanged, cb)
 }
 
 contextBridge.exposeInMainWorld('fastasl', api)

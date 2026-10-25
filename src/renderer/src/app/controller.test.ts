@@ -1965,6 +1965,49 @@ describe('the conversation with the agent', () => {
   })
 })
 
+describe('the caption camera (captioning)', () => {
+  const captionsReady = { kind: 'ready', hint: expect.stringMatching(/^Captions on/) }
+
+  it('a signed phrase is captions: sent in the transcript, no interpreter or agent, and Ready for the next at once', async () => {
+    const interpret = vi.spyOn(services, 'interpret')
+    const run = vi.spyOn(services, 'agentRun')
+    c.setCaptioning(true)
+    expect(getApp().view).toEqual(captionsReady)
+    sign(word('tomorrow'), word('meeting'))
+    g('handsDown')
+    expect(getApp().view).toEqual(captionsReady)
+    expect(getApp().chat.at(-1)).toMatchObject({ from: 'you', kind: 'text', text: 'Tomorrow meeting' })
+    expect(getApp().composing.tokens).toEqual([])
+    sign(word('what'), word('time'))
+    g('handsDown')
+    expect(getApp().chat.at(-1)).toMatchObject({ from: 'you', kind: 'text', text: 'What time' })
+    await settle(60_000)
+    expect(chatShape()).toEqual(['you:text', 'you:text'])
+    expect(interpret).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('a quick-menu pick still goes to the agent', async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    c.setCaptioning(true)
+    c.setView({ kind: 'quickMenu', options: QUICK_MENU })
+    fingers(2)
+    sendPhrase(word('hello'))
+    await settle(500)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('closing the caption window sends phrases to the agent again', async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    c.setCaptioning(true)
+    c.setCaptioning(false)
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    sendPhrase(word('hello'))
+    await settle(500)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('the chat transcript (Command mode)', () => {
   const chat = (): ChatMessage[] => getApp().chat
   const composingWords = (): string[] => getApp().composing.tokens.map((t) => t.text)

@@ -1007,3 +1007,14 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - Spell mode keeps the fist collapse. Everywhere else the card's chevron (or the tray) hides it, and an open palm held still wakes it.
     - A fist still cancels a phrase being built, as before.
     - Tests: `controller.test.ts`, `engines.test.ts` and `modelRecognition.test.ts` now expect the card to stay in Ready on a Command mode fist, with the fist still reaching the controller, and a Spell mode fist to collapse it. `npx vitest run`: 1264 passed, 9 skipped; `npm run typecheck` passes.
+
+## Caption camera: captions, not commands
+
+220. **While the caption camera window is open, a signed phrase is captions, not a message for the agent.** Live, the user signed TOMORROW, paused, and the phrase went to the agent; the card took no signs until the agent answered, so the captions stopped. On a call, what you sign is for the other person anyway.
+    - Main tells the overlay when the caption window opens or closes (`captions:open-changed`, and `captions:open` to ask at launch); the store's `captioning` follows.
+    - At phrase end, Command mode then posts the phrase to the transcript as sent (the caption shows it as the last message) and goes back to Ready at once. No interpreter, no agent.
+    - A quick-menu pick or a gesture's signed task still goes to the agent: those are explicit commands.
+    - Ready's hint says "Captions on: what you sign goes to the call, not the agent", so the mode is visible.
+    - The captions also show a phrase again when the same words are sent twice (keyed on the message, not its text).
+    - Tests: `controller.test.ts` (the caption camera block), `captions/publish.test.ts`. `npx vitest run`: 1268 passed, 9 skipped; `npm run typecheck` passes. Not verified live yet.
+

@@ -9,23 +9,49 @@ export function captionStateOf(s: Pick<AppState, 'composing' | 'chat'>, lastAt: 
   return { live, last, lastAt }
 }
 
+const lastSentId = (s: Pick<AppState, 'chat'>): string | undefined =>
+  [...s.chat].reverse().find((m) => m.from === 'you' && m.kind === 'text')?.id
+
 /**
- * Overlay: sends the captions to the caption camera window whenever the words being signed or the
- * last sent message change. Returns the unsubscribe.
+ * Overlay: sends the captions to the caption camera window whenever the words being signed change
+ * or a message is sent (the same words signed again show again). Returns the unsubscribe.
  */
 export function publishCaptions(): () => void {
   const send = window.fastasl?.sendCaptions
   if (typeof send !== 'function') return () => {}
   let prev = captionStateOf(useApp.getState(), 0)
+  let prevId = lastSentId(useApp.getState())
   let lastAt = 0
   return useApp.subscribe((s) => {
-    const next = captionStateOf(s, lastAt)
-    if (next.last !== prev.last) {
+    const id = lastSentId(s)
+    if (id !== prevId) {
+      prevId = id
       lastAt = Date.now()
-      next.lastAt = lastAt
     }
-    if (next.live === prev.live && next.last === prev.last) return
+    const next = captionStateOf(s, lastAt)
+    if (next.live === prev.live && next.last === prev.last && next.lastAt === prev.lastAt) return
     prev = next
     send(next)
   })
+}
+
+/**
+ * Overlay: calls `onChange` with whether the caption camera window is open, now and whenever it
+ * opens or closes. Returns the unsubscribe.
+ */
+export function followCaptionWindow(onChange: (open: boolean) => void): () => void {
+  const api = window.fastasl
+  if (typeof api?.onCaptionsOpen !== 'function') return () => {}
+  let stopped = false
+  const stop = api.onCaptionsOpen(onChange)
+  void api.captionsOpen().then(
+    (open) => {
+      if (!stopped) onChange(open)
+    },
+    () => {}
+  )
+  return () => {
+    stopped = true
+    stop()
+  }
 }
