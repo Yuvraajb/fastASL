@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type FastAslApi } from '@shared/ipc'
-import type { AgentEvent, DevCommand, LlmStatusEvent } from '@shared/types'
+import type { AgentEvent, CaptionState, DevCommand, LlmStatusEvent } from '@shared/types'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_e: IpcRendererEvent, payload: T): void => cb(payload)
@@ -65,7 +65,9 @@ const api: FastAslApi = {
 
   onDevCommand: (cb) => subscribe<DevCommand>(IPC.devCommand, cb),
   capture: (name) => ipcRenderer.invoke(IPC.capture, name),
-  quit: () => ipcRenderer.send(IPC.quit)
+  quit: () => ipcRenderer.send(IPC.quit),
+  sendCaptions: (state) => ipcRenderer.send(IPC.captionsUpdate, state),
+  onCaptions: (cb) => subscribe<CaptionState>(IPC.captionsState, cb)
 }
 
 contextBridge.exposeInMainWorld('fastasl', api)

@@ -79,11 +79,12 @@ function send(cmd: DevCommand): void {
 
 let tray: Tray | null = null
 
-export function setupTray(opts: { dev: boolean; onToggle: () => void }): void {
+export function setupTray(opts: { dev: boolean; onToggle: () => void; onCaptions?: () => void }): void {
   tray = new Tray(nativeImage.createEmpty())
   tray.setTitle('ASL')
   tray.setToolTip('fastASL')
   const template: MenuItemConstructorOptions[] = [{ label: 'Show / hide fastASL', click: opts.onToggle }]
+  if (opts.onCaptions) template.push({ label: 'Caption camera (for FaceTime via OBS)', click: opts.onCaptions })
   if (opts.dev) {
     template.push(
       { type: 'separator' },

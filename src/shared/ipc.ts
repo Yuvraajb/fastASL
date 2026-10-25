@@ -17,7 +17,8 @@ import type {
   SpellRequest,
   TemplatePack,
   TemplateStore,
-  ViewAction
+  ViewAction,
+  CaptionState
 } from './types'
 
 /** IPC channel names. invoke = request/response, send = fire and forget, on = main -> renderer. */
@@ -59,7 +60,10 @@ export const IPC = {
   // dev
   devCommand: 'dev:command',
   capture: 'dev:capture',
-  quit: 'app:quit'
+  quit: 'app:quit',
+  // caption camera (FaceTime via OBS Virtual Camera)
+  captionsUpdate: 'captions:update',
+  captionsState: 'captions:state'
 } as const
 
 export interface CardSize {
@@ -126,4 +130,8 @@ export interface FastAslApi {
   /** Screenshot mode only: capture the stage window to docs/screens/<name>.png. */
   capture(name: string): Promise<string>
   quit(): void
+  /** Overlay: what the caption camera should show now. */
+  sendCaptions(state: CaptionState): void
+  /** Caption window: the latest captions. */
+  onCaptions(cb: (state: CaptionState) => void): () => void
 }

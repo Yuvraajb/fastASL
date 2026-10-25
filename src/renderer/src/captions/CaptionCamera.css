@@ -1,0 +1,83 @@
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+}
+
+.capcam {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+}
+
+.capcam__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.capcam__badge {
+  position: absolute;
+  top: 3vh;
+  left: 2.5vw;
+  padding: 0.6vh 1.1vw;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 2.1vh;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.capcam__captions {
+  position: absolute;
+  left: 50%;
+  bottom: 6vh;
+  transform: translateX(-50%);
+  max-width: 86vw;
+  padding: 1.6vh 2.4vw;
+  border-radius: 2.4vh;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 6.4vh;
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: center;
+  text-shadow: 0 0.2vh 0.6vh rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  gap: 0.8vw;
+}
+
+.capcam__captions--live {
+  box-shadow: 0 0 0 0.35vh rgba(94, 194, 124, 0.85);
+}
+
+.capcam__caret {
+  width: 0.5vh;
+  height: 6vh;
+  border-radius: 0.3vh;
+  background: #5ec27c;
+  animation: capcam-blink 1s steps(2, start) infinite;
+}
+
+@keyframes capcam-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.capcam__error {
+  position: absolute;
+  top: 45%;
+  width: 100%;
+  text-align: center;
+  color: #fff;
+  font-size: 3vh;
+}

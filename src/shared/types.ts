@@ -263,3 +263,14 @@ export type DevCommand =
   | { type: 'toggleDevPanel' }
   /** signs.json changed outside the renderer (tray pack import): reload it. */
   | { type: 'templatesChanged' }
+
+/** What the caption camera shows (overlay -> main -> caption window). */
+export interface CaptionState {
+  /** The words being signed right now, as they stream in. */
+  live: string
+  /** The last message sent (shown for a while after the hands drop). */
+  last: string
+  /** When `last` was sent (Date.now()), to fade it out. */
+  lastAt: number
+}
+

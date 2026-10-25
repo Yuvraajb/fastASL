@@ -15,6 +15,7 @@ import { TOOLS } from './tools'
 import { getFrontmostApp } from './mac/frontmost'
 import { typeText } from './mac/typeText'
 import { imageThumb } from './thumbs'
+import { openCaptionWindow, registerCaptions } from './captionWindow'
 
 const screenshots = process.env.FASTASL_SCREENSHOTS === '1'
 const dev = !app.isPackaged || process.env.FASTASL_DEV === '1'
@@ -220,14 +221,19 @@ async function boot(): Promise<void> {
   if (logRenderer) forwardConsole(overlay.win)
   loadRenderer(overlay.win)
 
+  registerCaptions()
+  const openCaptions = (): void => openCaptionWindow(loadRenderer)
   setupTray({
     dev,
     onToggle: () => {
       if (!overlay) return
       if (overlay.win.isVisible()) overlay.win.hide()
       else overlay.win.showInactive()
-    }
+    },
+    onCaptions: openCaptions
   })
+  // FASTASL_CAPTIONS=1 opens the caption camera at launch (demo setup for FaceTime via OBS).
+  if (process.env.FASTASL_CAPTIONS === '1') openCaptions()
   if (dev) registerDevShortcuts()
 }
 
