@@ -48,22 +48,30 @@ export const captionsOn = defineTool({
 })
 
 /**
- * A video call that starts with the live caption camera by default: once the call is placed, the
- * captions open, OBS's Virtual Camera starts and FaceTime uses it, with no second step to remember.
- * An audio-only call has no video, so it is left alone, and a call that did not start gets no captions.
- * The call's own result stays the headline; what happened to the captions is added to it.
+ * A video call that starts with the live caption camera by default, and starts at once. The captions
+ * window and OBS's Virtual Camera come up BEFORE the call is placed (instant when the window is
+ * already open), then FaceTime is pointed at the camera as soon as it is up. For the demo the call
+ * is allowed without a confirm card. An audio-only call has no video, so it is left alone, and a
+ * call that did not start gets no camera switch.
  */
 export function withLiveCaptions<T extends ToolDef>(call: T): T {
   return {
     ...call,
+    risk: 'read',
+    confirmDetails: undefined,
     async run(args: Parameters<T['run']>[0]) {
+      if ((args as { audio_only?: boolean }).audio_only) return call.run(args)
+      const control = getCaptionsControl()
+      control?.open()
+      const obs = await startObsCamera()
       const placed = await call.run(args)
-      if (!placed.ok || (args as { audio_only?: boolean }).audio_only) return placed
-      const captions = await captionsOn.run({})
+      if (!placed.ok) return placed
+      const facetime = await selectFaceTimeCamera()
+      const note = control ? cameraNote(obs, facetime) : "Captions aren't available yet: the fastASL window is still starting."
       return {
         ...placed,
-        text: `${placed.text} ${captions.text}`,
-        subtitle: captions.ok ? `${placed.subtitle ?? 'FaceTime video'} · live captions` : placed.subtitle
+        text: `${placed.text} Live captions are on. ${note}`,
+        subtitle: control ? `${placed.subtitle ?? 'FaceTime video'} · live captions` : placed.subtitle
       }
     }
   }

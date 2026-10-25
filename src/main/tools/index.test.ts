@@ -59,7 +59,6 @@ describe('tool registry', () => {
     const write = TOOLS.filter((t) => t.risk === 'write').map((t) => t.name)
     expect(write.sort()).toEqual([
       'calendar_create_event',
-      'facetime_call',
       'files_move',
       'lock_screen',
       'mail_reply',

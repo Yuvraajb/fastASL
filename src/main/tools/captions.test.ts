@@ -59,37 +59,43 @@ describe('cameraNote', () => {
 
 describe('a video call starts with the live caption camera by default', () => {
   const placed = { ok: true, text: 'Opened FaceTime to start a call to Mom.', title: 'Calling Mom', subtitle: 'FaceTime video' }
-  const call = (ok = true): ToolDef & { calls: number } => {
-    const tool = { ...faceTimeCall, calls: 0, run: vi.fn(async () => (ok ? placed : { ok: false, text: "Couldn't call" })) } as unknown as ToolDef & { calls: number }
-    return tool
-  }
+  const call = (ok = true, order: string[] = []): ToolDef => ({
+    ...faceTimeCall,
+    run: vi.fn(async () => {
+      order.push('call')
+      return ok ? placed : { ok: false, text: "Couldn't call" }
+    })
+  }) as unknown as ToolDef
 
-  it('is how the agent places every call: the registered FaceTime tool is the wrapped one', () => {
+  it('is how the agent places every call, allowed without a confirm card', () => {
     const registered = TOOLS.find((t) => t.name === 'facetime_call')!
     expect(registered.run).not.toBe(faceTimeCall.run)
-    expect(registered.risk).toBe('write') // the confirm card is unchanged
+    expect(registered.risk).toBe('read')
+    expect(registered.confirmDetails).toBeUndefined()
   })
 
-  it('places the call, then opens the captions and switches the camera, in that order', async () => {
-    const open = vi.fn()
-    setCaptionsControl({ open, close: vi.fn() })
-    const tool = withLiveCaptions(call())
-    const out = await tool.run({ contact_name: 'Mom', audio_only: false })
+  it('brings the captions and OBS camera up first, places the call, then points FaceTime at the camera', async () => {
+    const order: string[] = []
+    setCaptionsControl({ open: () => order.push('captions'), close: vi.fn() })
+    vi.mocked(startObsCamera).mockImplementationOnce(async () => (order.push('obs'), 'started'))
+    vi.mocked(selectFaceTimeCamera).mockImplementationOnce(async () => (order.push('facetime camera'), 'selected'))
+    const out = await withLiveCaptions(call(true, order)).run({ contact_name: 'Mom', audio_only: false })
+    expect(order).toEqual(['captions', 'obs', 'call', 'facetime camera'])
     expect(out).toMatchObject({ ok: true, title: 'Calling Mom', subtitle: 'FaceTime video · live captions' })
-    expect(out.text).toContain('Opened FaceTime to start a call to Mom.')
     expect(out.text).toContain('FaceTime is using OBS Virtual Camera.')
-    expect(open).toHaveBeenCalledTimes(1)
   })
 
-  it('leaves an audio-only call and a call that did not start without captions', async () => {
+  it('leaves an audio-only call alone, and does not switch the camera for a call that did not start', async () => {
     const open = vi.fn()
     setCaptionsControl({ open, close: vi.fn() })
+    vi.mocked(selectFaceTimeCamera).mockClear()
     expect(await withLiveCaptions(call()).run({ contact_name: 'Mom', audio_only: true })).toEqual(placed)
-    expect(await withLiveCaptions(call(false)).run({ contact_name: 'Mom', audio_only: false })).toMatchObject({ ok: false })
     expect(open).not.toHaveBeenCalled()
+    expect(await withLiveCaptions(call(false)).run({ contact_name: 'Mom', audio_only: false })).toMatchObject({ ok: false })
+    expect(selectFaceTimeCamera).not.toHaveBeenCalled()
   })
 
-  it('still reports the call as placed when the captions cannot start', async () => {
+  it('still places the call when the captions window cannot open', async () => {
     setCaptionsControl(null)
     const out = await withLiveCaptions(call()).run({ contact_name: 'Mom', audio_only: false })
     expect(out).toMatchObject({ ok: true, title: 'Calling Mom', subtitle: 'FaceTime video' })
