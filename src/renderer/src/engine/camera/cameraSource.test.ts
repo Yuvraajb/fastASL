@@ -6,7 +6,9 @@ import {
   STREAM_NOT_MJPEG,
   STREAM_UNREACHABLE,
   cameraErrorMessage,
-  streamErrorMessage
+  streamErrorMessage,
+  isVirtualCamera,
+  pickBuiltinCamera
 } from './cameraSource'
 
 describe('cameraErrorMessage', () => {
@@ -50,5 +52,26 @@ describe('streamErrorMessage', () => {
     expect(streamErrorMessage(400, 'text/plain', 'Only http:// and https:// streams are supported\n')).toBe(
       'Only http:// and https:// streams are supported'
     )
+  })
+})
+
+describe('choosing the built-in camera', () => {
+  const cam = (label: string, deviceId = label): Pick<MediaDeviceInfo, 'kind' | 'label' | 'deviceId'> => ({ kind: 'videoinput', label, deviceId })
+
+  it('knows software cameras by name', () => {
+    expect(isVirtualCamera('OBS Virtual Camera')).toBe(true)
+    expect(isVirtualCamera('FaceTime HD Camera')).toBe(false)
+    expect(isVirtualCamera('')).toBe(false)
+  })
+
+  it('takes the built-in camera over OBS, even when OBS is listed first', () => {
+    expect(pickBuiltinCamera([cam('OBS Virtual Camera', 'obs'), cam('FaceTime HD Camera', 'mac')])).toBe('mac')
+    expect(pickBuiltinCamera([cam('Logitech C920'), cam('OBS Virtual Camera')])).toBe('Logitech C920')
+  })
+
+  it('has no answer with only virtual cameras, no names or no cameras', () => {
+    expect(pickBuiltinCamera([cam('OBS Virtual Camera')])).toBeUndefined()
+    expect(pickBuiltinCamera([cam('')])).toBeUndefined()
+    expect(pickBuiltinCamera([])).toBeUndefined()
   })
 })
