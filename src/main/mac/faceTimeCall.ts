@@ -6,20 +6,32 @@ import { runAppleScript } from './osascript'
  * here: the button whose accessibility description is "Call", found within about 6 s. Needs
  * Accessibility access for fastASL (System Settings › Privacy & Security › Accessibility).
  */
-export const PRESS_CALL_SCRIPT = `tell application "System Events"
+export const PRESS_CALL_SCRIPT = pressButtonScript('Call')
+
+/**
+ * Finds FaceTime's button with this accessibility description and presses it. Windows are
+ * addressed by index: "entire contents of" an item from "repeat with w in windows" fails ("Can't
+ * make item 1 of entire contents ... into type specifier"), which left Call unpressed live. A window
+ * that changes while it is read is skipped and tried again on the next pass.
+ */
+export function pressButtonScript(description: string): string {
+  return `tell application "System Events"
   repeat 20 times
     if exists process "FaceTime" then
       tell process "FaceTime"
-        repeat with w in windows
-          repeat with e in (entire contents of w)
-            set el to contents of e
-            try
-              if (role of el) is "AXButton" and (description of el) is "Call" then
-                perform action "AXPress" of el
-                return "pressed"
-              end if
-            end try
-          end repeat
+        repeat with i from 1 to (count of windows)
+          try
+            set els to entire contents of window i
+            repeat with e in els
+              set el to contents of e
+              try
+                if (role of el) is "AXButton" and (description of el) is "${description}" then
+                  perform action "AXPress" of el
+                  return "pressed"
+                end if
+              end try
+            end repeat
+          end try
         end repeat
       end tell
     end if
@@ -27,6 +39,7 @@ export const PRESS_CALL_SCRIPT = `tell application "System Events"
   end repeat
 end tell
 return "not found"`
+}
 
 /** Whether Call was pressed; an error (no Accessibility access) says why it wasn't. */
 export async function pressFaceTimeCall(): Promise<{ pressed: boolean; error?: string }> {
