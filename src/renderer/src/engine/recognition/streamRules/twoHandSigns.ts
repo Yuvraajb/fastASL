@@ -17,7 +17,8 @@ import type { StreamContext, StreamRule } from './types'
  * when the tracker gives it; palm orientation comes from the 2D knuckle width instead.
  *
  * Only the words that hold up on real signers are enabled (TWO_HAND_RULES); MUSIC and STOP are
- * kept in ALL_RULES for tuning (twoHandSigns.eval.test.ts) but off.
+ * kept in ALL_RULES for tuning (twoHandSigns.eval.test.ts) but off. FRIEND has its own file
+ * (friend.ts) and uses the hand tools here (handsOf, pairUp, indexOnly, indexGap).
  */
 
 /**
@@ -26,6 +27,13 @@ import type { StreamContext, StreamRule } from './types'
  * (twoHandSigns.eval.test.ts).
  */
 export const TUNING = {
+  /**
+   * Index only, straight or hooked (an X or a 1): index extension at least `ext` (a hook reads
+   * half bent, a fist's index near 0), the middle at most `middle` (an H or a V has it out), ring
+   * and pinky averaging at most `others`. FRIEND needs it of both hands; TIME's tap may not land
+   * on a base hand showing it.
+   */
+  indexOnly: { ext: 0.35, middle: 0.5, others: 0.5 },
   what: {
     /** History looked at. */
     ms: 1200,
@@ -56,6 +64,19 @@ export const TUNING = {
     baseUpright: -0.3,
     /** At most this share of the base hand's frames may be pointing (two pointing hands are GO, not TIME). */
     basePointing: 1,
+    /**
+     * At most this share of the base hand's frames may have the index out, straight or hooked
+     * (indexOnly): TIME's base is a fist or a flat hand; FRIEND hooks two X hands together.
+     */
+    baseIndex: 0.5,
+    /**
+     * Not FRIEND: the tap may not land on the base's index finger (within `hook` hand lengths,
+     * index to index, in any of the last `hookFrames` frames) while the base holds its index out
+     * (indexOnly in at least half its frames of the last `hookMs`).
+     */
+    hook: 0.4,
+    hookFrames: 3,
+    hookMs: 300,
     /** The fingertip ends within this distance of the base hand. */
     near: 1.2,
     /** Fingertip strokes up / down of at least `tap`: 2 = one tap (down and back up). */
@@ -365,6 +386,21 @@ const pointing = (h: Hand): boolean => h.ext[1] >= 0.5 && [2, 3, 4].filter((i) =
 /** Y: pinky out, index / middle / ring mostly bent (the thumb is unreliable in 2D, so it is not required). */
 const yShape = (h: Hand): boolean => h.ext[4] >= 0.5 && [1, 2, 3].filter((i) => h.ext[i] < 0.5).length >= 2
 
+/** Index out, straight or hooked (an X or a 1), with the middle, ring and pinky closed (TUNING.indexOnly). */
+export function indexOnly(h: Hand): boolean {
+  const P = TUNING.indexOnly
+  return h.ext[1] >= P.ext && h.ext[2] <= P.middle && (h.ext[3] + h.ext[4]) / 2 <= P.others
+}
+
+const INDEX = [6, 7, 8] as const
+
+/** Closest distance (image units) between the two hands' index fingers: PIP, DIP and tip. */
+export function indexGap(a: Hand, b: Hand): number {
+  let m = Infinity
+  for (const i of INDEX) for (const j of INDEX) m = Math.min(m, Math.hypot(a.pts[i].x - b.pts[j].x, a.pts[i].y - b.pts[j].y))
+  return m
+}
+
 /**
  * Zig-zag strokes: how many monotonic runs of at least `amp` the series makes (the run in
  * progress counts once it reaches `amp`). Side to side twice is 2.
@@ -618,7 +654,9 @@ function stopFires(history: readonly FrameSample[], { aspect }: StreamContext): 
 /**
  * TIME: the pointing index taps the back of the base wrist. Fires on a fingertip stroke of `tap`
  * hand lengths (the tap) that ends near the base hand, while the hand still moves. The base hand is
- * lower, lies across the body (not upright), holds still and is not pointing.
+ * lower, lies across the body (not upright), holds still and is not pointing. Nor is it an X with
+ * the tap landing on its index: two hooked index fingers are FRIEND (friend.ts), which a live
+ * signer's FRIEND fired as TIME before.
  */
 function timeFires(history: readonly FrameSample[], { aspect }: StreamContext): boolean {
   const P = TUNING.time
@@ -642,9 +680,18 @@ function timeFires(history: readonly FrameSample[], { aspect }: StreamContext): 
     // The base forearm lies across the body: its hand is not upright, and it is not pointing too.
     if (median(b.map((h) => h.dy)) < P.baseUpright) continue
     if (fraction(b, pointing) > P.basePointing) continue
+    // ...nor an X: two hooked index fingers meeting are FRIEND.
+    if (fraction(b, indexOnly) > P.baseIndex) continue
     const tip = now.pts[8]
     const near = Math.min(...bb.pts.map((p) => Math.hypot(p.x - tip.x, p.y - tip.y))) / L
     if (near > P.near) continue
+    // TIME taps the back of the wrist; an index hooked onto the other hand's index is FRIEND.
+    const baseX = fraction(b.filter((h) => now.t - h.t <= P.hookMs), indexOnly) >= 0.5
+    const hooked = baseX && d.slice(-P.hookFrames).some((h) => {
+      const at = nearestIn(base, h.t)
+      return at !== null && indexGap(h, at) / L <= P.hook
+    })
+    if (hooked) continue
     const ty = smooth(d.map((h) => h.pts[8].y / L))
     if (strokeCount(ty, P.tap) < P.strokes) continue
     if (!movingNow(d, L, 150, P.fresh)) continue

@@ -12,6 +12,8 @@
  *    videos (real z, the tracker's labels, the face on every other frame).
  * e.g. FASTASL_STREAM_DATA=~/data/citizen-bin/files,~/data/citizen-bin/test,~/data/tracked
  * The `files` folder is the tuning split; the others were held out (see the printed table).
+ * FRIEND clips in the folders (friend.eval.test.ts says where they come from) are checked on their
+ * own too: two X hands hooking look like TIME's tap, so TIME must stay off them.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -184,7 +186,11 @@ describe.skipIf(DIRS.length === 0)('two-hand stream rules on real signers (local
     out.push(...all.lines)
     const anyFire = results.filter((r) => !WORD_OF[r.gloss] && r.words.length).length
     out.push(`clips of other glosses where any of these words fired: ${pct(anyFire, results.filter((r) => !WORD_OF[r.gloss]).length)}`)
+    const friends = results.filter((r) => r.gloss === 'FRIEND')
+    const timeOnFriend = friends.filter((r) => r.words.some((w) => w.word === 'time')).length
+    if (friends.length) out.push(`TIME on FRIEND clips: ${timeOnFriend}/${friends.length} ${pct(timeOnFriend, friends.length)}`)
     console.log(`\n${out.join('\n')}`)
+    if (friends.length) expect(timeOnFriend / friends.length, 'TIME on FRIEND clips').toBeLessThanOrEqual(0.1)
 
     for (const [word, { recall, ff }] of all.rows) {
       // WHAT has two forms whose names differ between sources; the rule needs one of them.

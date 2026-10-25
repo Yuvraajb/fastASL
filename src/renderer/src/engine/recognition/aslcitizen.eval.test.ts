@@ -29,5 +29,5 @@ describe.skipIf(DIRS.length === 0)('ASL Citizen replay through the streaming sig
       console.log(`\n== ${dir}: ${results.length} clips\n${formatReport(streamReport(results, words))}`)
       expect(results.length).toBeGreaterThan(0)
     }
-  })
+  }, 600_000)
 })

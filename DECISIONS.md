@@ -956,3 +956,46 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - **Checks.** `npm run typecheck` passes. `npx vitest run`: all pass. New controller tests cover each token joining the composing bubble; swipe left (a letter run whole) and a fist; a Did you mean pick; a quick-menu label; hands down sending (the sent bubble, Understanding, then the interpreter's sentence and one live steps bubble); the reply and a new phrase after it; the result bubble; the inline Confirm gated by thumbs up or fist, steps held while it waits, and one left open; errors; Cancelled; Stopped and the next exchange; the screenshot bubble and its click; a gesture task; a shortcut's run leaving the chat alone; the 20-message cap across a collapse; and no idle timeout. The Stopped-toast tests for commands now expect the transcript line. `services.test.ts` expected the old provider list ("local or mock"); commit 6f69109 added droid, so its expectation was updated.
     - **Screens.** All six new scenes were rendered and checked by eye.
     - **Not verified:** the card in the running app with a real camera and real streaming words; how the window spring feels as the card grows; Preview opening a screenshot from an older bubble.
+
+## Streaming FRIEND
+
+216. **FRIEND streams, for the demo's "CALL FRIEND" and "EMAIL FRIEND"** (`streamRules/friend.ts`). The sign: both hands in X; the dominant index hooks over the other, the hands flip, and they hook again the other way round. On 29 ASL Citizen signers, the 2D landmarks show this as: the two index fingers touch, come apart while both hands move around each other (one rises as the other drops), and touch again. The flip itself is a turn in depth that the image barely shows. The rule fires the moment the second hook closes, when within 1.5 s all of these hold:
+    - **Two hooks with a release between.** The closest points of the two index fingers (PIP, DIP, tip) come within 0.3 hand lengths. Then they are at least 0.5 apart, and at least 0.4 further apart than at the first hook. Then they are within 0.3 again, at most 700 ms after the widest point. At both hooks the palms are within 3 hand lengths.
+    - **Both hands move.** After the first hook lets go, each palm moves at least 0.12 hand lengths. TIME's base hand holds still.
+    - **The fingers point at each other at the hooks.** For each hand, take the cosine between the index (knuckle to tip) and the direction of the other palm. The median of the smaller of the two must be at least 0.1. Two index fingers held up side by side and tapped together point past each other.
+    - **Both hands are index-only** (`indexOnly` in twoHandSigns.ts) in at least half the frames after the first hook lets go. That means index extension of at least 0.35 (a hook reads as half bent), the middle finger at most 0.5, and ring and pinky at most 0.5 on average. A tight hook often reads as a folded index, so the first hook's own frames aren't counted.
+    - Which hand is which comes from position, never from the handedness label, so left-handed signers work too.
+
+    So nothing static fires it, nor one hand, nor fists, flat hands, H hands (NAME) or MEETING's flat O.
+    - **Order.** `STREAM_RULES` runs the face rules, then FRIEND, then the other two-handed rules, so FRIEND comes before TIME.
+    - **Model vocabulary.** It now has `friend` (ASL Citizen gloss FRIEND), so the slower model path knows the sign too once ASL Citizen is installed.
+
+217. **TIME no longer fires on FRIEND.** The user signed FRIEND live and got "time": a hooked index meeting the other hand passes for TIME's tap. TIME fires on the first hook, before FRIEND's second, so putting FRIEND first was not enough on its own. TIME now also needs:
+    - a base hand that is index-only in at most half its frames (`baseIndex`), since TIME's base is a fist or a flat hand;
+    - a tap that does not land index to index (within 0.4 hand lengths of the base's index in the last 3 frames) while the base holds its index out over the last 300 ms (`hook`, `hookFrames`, `hookMs`).
+
+    Effect on TIME (twoHandSigns.eval.test.ts):
+    - **Recall** is unchanged on the re-tracked clips (8/12) and on citizen-bin (10/12). On the Holistic `live-bin` clips it lost 1 of 18 (now 11/18): a signer whose base reads as index-out and whose tap lands on that index.
+    - **False fires** went from 50 to 39 of 3,151 other clips.
+    - **FRIEND clips** went from 8 of 58 firing TIME to 2 of 58. In both remaining clips the base's X reads as a fist or an open hand.
+
+218. **Data and numbers.**
+    - **FRIEND clips.** ASL Citizen has 29 FRIEND clips, from 29 signers. Two copies of each were made, and neither is committed:
+      - the HF mirror's Holistic `.pose` files (SorensenAI/asl-citizen-poses), converted to an evalData folder;
+      - the same videos, fetched from the ASL Citizen zip by range requests and re-tracked with the app's hand and face landmarkers, like the 895 tracked clips.
+
+      Signers and splits come from ASL Citizen's split CSVs. The rule was tuned on the 15 signers in the train split; the other 14 (test and val) were held out. I did read miss reasons for every clip while tuning, held-out ones included, so the held-out numbers are somewhat optimistic.
+    - **Recall, FRIEND alone** (`friend.eval.test.ts`). Holistic: 27/29 (tuned 14/15, held out 13/14). Re-tracked: 25/29 (12/15, 13/14). The median fire is 633 / 625 ms after the first hand comes into view (p90 867 / 800 ms). The six misses:
+      - P31, both copies: the re-tracked copy keeps the fingers hooked through the flip (they never come apart), and in the Holistic copy one hand's middle finger reads as out;
+      - one Holistic clip whose fingers also stay hooked through the flip;
+      - two re-tracked clips that never show both hands through a full hook, release and hook;
+      - one re-tracked clip where an X reads as a folded index.
+    - **Through the whole matcher** (dictionary + `STREAM_RULES`). FRIEND fires on 26/29 Holistic and 25/29 re-tracked clips. Other words fire first on a few: MEETING on 1 + 1, TIME on 1 + 1, EMAIL on 1.
+    - **False fires.** None on citizen-bin (0/552). One on the re-tracked clips (1/895, an out-of-vocabulary sign). Three on the 2,168 Holistic clips (MORE and two out-of-vocabulary signs). That is 0.1% at most, and none on MEETING, WHAT, TIME, EMAIL, OPEN, PLAY or CALL. No other streaming word's recall changed on citizen-bin or the re-tracked clips (aslcitizen.eval, before and after).
+    - **Control gestures.** FRIEND fires on none of them (friend.test.ts, and streaming.test.ts for every rule): every control pose raised to the chest, chin and face; the swipes; held shapes with both hands; two 1s tapped together twice; the cancel fist.
+    - **Phrases through the live wiring** (`app/streamPhrase.eval.test.ts`, each signer's own clips joined):
+      - re-tracked: CALL FRIEND came out exactly for 9/11 signers, EMAIL FRIEND for 7/11;
+      - Holistic included: 25/36 and 16/32. FRIEND itself came out in 33/36 and 30/32. The other misses are CALL's and EMAIL's own recall: replayed without FRIEND, CALL and EMAIL fire exactly as often. Where those phrases used to end in TIME or MEETING, they now end in FRIEND.
+    - **The harness.** `streamPhrase.eval` now runs several phrases and finds a signer's words across folders of the same layout. With the Holistic `live-bin` folder, the TOMORROW MEETING WHAT TIME phrase fails its wiring check: for one signer the controller got TIME where the matcher streamed EMAIL. It fails the same way without these changes. `aslcitizen.eval` got a 10-minute timeout, since it timed out at 5 s on these folders.
+    - **Checks.** `npm run typecheck` passes. `npx vitest run`: 1263 passed, 9 skipped (the real-data evals skip without `FASTASL_STREAM_DATA`).
+    - **Not verified:** a live camera. How the live tracker sees an X hook is only known from the re-tracked videos.

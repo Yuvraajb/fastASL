@@ -73,6 +73,8 @@ export const SIGN_VOCABULARY: readonly SignWord[] = [
   { word: 'meeting', citizen: ['MEETING'], enabled: true },
   { word: 'stop', citizen: ['STOP'], enabled: true },
   { word: 'what', citizen: ['WHAT1', 'WHAT2'], enabled: true },
+  // The demo's "CALL FRIEND" / "EMAIL FRIEND" (also a streaming rule, streamRules/friend.ts).
+  { word: 'friend', citizen: ['FRIEND'], enabled: true },
   // Off: GOOD and THANK YOU are nearly the same sign, and the Kaggle model read all 12 GOODs as THANK YOU.
   { word: 'good', citizen: ['GOOD'], enabled: false }
 ]

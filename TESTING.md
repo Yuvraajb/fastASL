@@ -903,3 +903,19 @@ Setup: the renderer hot-reloads, so the running `npm run dev` picks this up (the
 13. **Screens and automated checks.**
     - `node scripts/screens.mjs chatEmpty`, one id per run (also `chatComposing`, `chatWorking`, `chatReply`, `chatConfirm`, `chatScreenshot`). **Expected:** they match `docs/screens/51`–`56`. The tray menu › Dev: states lists them as "Chat: …".
     - `npm run typecheck`, `npx vitest run` and `npx electron-vite build --outDir <a scratch folder>`. **Expected:** no type errors, every test passes, and the build succeeds.
+
+## Streaming FRIEND
+
+Setup: Command mode, the chat card up, `FASTASL_LOG=1 npm run dev`. FRIEND: both hands in X (index hooked, other fingers closed), hook the index fingers, let go and flip the hands over, hook again.
+
+1. **FRIEND.** Sign FRIEND at chest height. **Expected:** "friend" joins the composing bubble the moment the second hook closes (`[stream] friend`). No "time" and no "meeting" before it. Try it left-handed too (the other hand on top first).
+2. **The demo phrases.** Sign CALL (Y hand at the ear), then FRIEND, without lowering your hands. **Expected:** "call friend". Lower your hands to send. Then EMAIL (index through the other hand's C), then FRIEND. **Expected:** "email friend".
+3. **TIME still works.** Tap the back of a fist's wrist with your index. **Expected:** "time", not "friend".
+4. **Not FRIEND.**
+    - Hook the index fingers once and hold: nothing.
+    - Hook once, then pull the hands apart: nothing.
+    - Hold both index fingers up and tap them together twice: nothing.
+    - Sign MEETING: "meeting", not "friend".
+    - Tap two fists together twice: nothing.
+    - A fist held still (cancel) and an open palm held still: they act as controls and add no word.
+5. **Real data (optional).** With the clip folders (DECISIONS 218), run `FASTASL_STREAM_DATA=<folders> npx vitest run friend.eval twoHandSigns.eval streamPhrase.eval`. **Expected:** it prints FRIEND's recall, false fires and fire time; "TIME on FRIEND clips" at most 10%; and each signer's CALL FRIEND and EMAIL FRIEND phrases.
