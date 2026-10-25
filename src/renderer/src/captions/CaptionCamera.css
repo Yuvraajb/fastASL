@@ -22,10 +22,17 @@ body,
   display: block;
 }
 
+/*
+ * The call app crops the 16:9 frame to its own window (FaceTime on a Mac shows about 3:2, a phone
+ * less), and mirrors your own preview. So nothing sits near the sides: the badge is centered and
+ * the captions wrap within the middle 60%.
+ */
 .capcam__badge {
   position: absolute;
   top: 3vh;
-  left: 2.5vw;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
   padding: 0.6vh 1.1vw;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.5);
@@ -40,15 +47,17 @@ body,
   left: 50%;
   bottom: 6vh;
   transform: translateX(-50%);
-  max-width: 86vw;
+  max-width: 60vw;
+  width: max-content;
   padding: 1.6vh 2.4vw;
   border-radius: 2.4vh;
   background: rgba(0, 0, 0, 0.62);
   color: #fff;
-  font-size: 6.4vh;
+  font-size: 6vh;
   font-weight: 650;
   line-height: 1.2;
   text-align: center;
+  text-wrap: balance;
   text-shadow: 0 0.2vh 0.6vh rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
