@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { FRONT_APP_SCRIPT, FRONT_WINDOW_SCRIPT } from '../mac/frontmost'
 import { pasteScript } from '../mac/typeText'
 import { createEventScript, listEventsScript } from './calendar'
+import { OBS_CAMERA, selectFaceTimeCameraScript, START_OBS_CAMERA_SCRIPT } from '../mac/callCamera'
 import { contactSearchScript } from './contacts'
 import { darkModeScript, timerScript } from './controls'
 import { sendMailScript } from './mail'
@@ -48,6 +49,8 @@ describe.runIf(process.platform === 'darwin')('generated scripts compile against
     'calendar create (minimal)': createEventScript({ title: 'x', start, end, attendees: [], notes: '' }),
     'mail send': sendMailScript({ to: ['a@example.com', 'b@example.com'], subject: hostile, body: hostile }),
     'mail send (attachment)': sendMailScript({ to: ['a@example.com'], subject: 'x', body: 'y', attachments: ['/Users/me/Documents/My "CV".pdf'] }),
+    'obs start virtual camera': START_OBS_CAMERA_SCRIPT,
+    'facetime pick camera': selectFaceTimeCameraScript(OBS_CAMERA),
     'dark mode on': darkModeScript('on'),
     'dark mode toggle': darkModeScript('toggle'),
     'timer notification': timerScript(hostile),
