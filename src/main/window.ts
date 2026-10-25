@@ -233,8 +233,9 @@ export function createOverlayWindow(opts: {
 export function createStageWindow(): BrowserWindow {
   return new BrowserWindow({
     width: 640,
-    // Tall enough for the tallest card: Dictation with a two-line notice.
-    height: 480,
+    // Tall enough for the tallest card: Command mode's chat card at its 560 px cap (36 px down).
+    // Shorter cards are still captured 480 px tall (STAGE_CAPTURE_MIN in index.ts).
+    height: 640,
     x: 40,
     y: 60,
     show: true,

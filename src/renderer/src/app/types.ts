@@ -1,5 +1,8 @@
 import type { AgentStep, ConfirmDetails, CustomGesture, Mode, Sensitivity, ViewAction } from '@shared/types'
 
+/** The chat transcript keeps about this many messages for the session (the oldest go first). */
+export const MAX_CHAT = 20
+
 /** A token in the building strip: a fingerspelled letter or a recognized word. */
 export interface Token {
   text: string
@@ -69,6 +72,39 @@ export interface Answer {
   thumb?: string
 }
 
+/** A write the agent asked to make: waiting for a thumbs up or a fist, or answered. */
+export type ConfirmStatus = 'pending' | 'allowed' | 'cancelled'
+
+/**
+ * One bubble of Command mode's chat transcript (store.chat). The transcript keeps the session's
+ * last MAX_CHAT messages; the controller adds to it at each point of the exchange.
+ */
+export type ChatMessage =
+  /** What the user signed: the raw words, then the interpreter's sentence. `prefix`: a quick-menu pick. */
+  | { id: string; from: 'you'; kind: 'text'; text: string; prefix?: string }
+  /** The agent's words (no tool ran, or only lookups). */
+  | { id: string; from: 'agent'; kind: 'text'; text: string }
+  /**
+   * The agent at work: "Understanding", then its live steps. At most one, always the last
+   * bubble, replaced by the answer when the run ends.
+   */
+  | { id: string; from: 'agent'; kind: 'steps'; steps: AgentStep[] }
+  /** What the agent did (an `Answer` with a title): badge or screenshot, title, subtitle, its own line. */
+  | { id: string; from: 'agent'; kind: 'result'; answer: Answer }
+  /** A write that waits for a thumbs up (allow) or a fist (cancel), shown inline. */
+  | { id: string; from: 'agent'; kind: 'confirm'; requestId: string; details: ConfirmDetails; status: ConfirmStatus }
+  /** The agent couldn't start or finish. */
+  | { id: string; from: 'agent'; kind: 'error'; title: string; subtitle?: string }
+  /** A quiet centered line: "Stopped", "Cancelled". */
+  | { id: string; from: 'agent'; kind: 'note'; text: string }
+
+/** The message being signed (store.composing): its tokens as they stream in, and what it is for. */
+export interface Composing {
+  tokens: Token[]
+  /** A quick-menu pick ("Create event") or "Gesture task" (New gesture › Sign a new task). */
+  label?: string
+}
+
 /** Every card state. Exactly one is shown at a time. */
 export type View =
   | { kind: 'collapsed' }
@@ -94,7 +130,11 @@ export type View =
     }
   /** Agent runs that are not a conversation (a gesture shortcut's agent fallback). */
   | { kind: 'working'; intent: string; steps: AgentStep[] }
-  | { kind: 'confirm'; requestId: string; details: ConfirmDetails }
+  /**
+   * `inChat`: a command's write, asked inline on the chat card (Command mode). Without it, a
+   * gesture shortcut's write on the plain Confirm card. The gestures are the same either way.
+   */
+  | { kind: 'confirm'; requestId: string; details: ConfirmDetails; inChat?: boolean }
   | {
       /** Numbered alternatives, picked by fingers. */
       kind: 'didYouMean'
@@ -140,8 +180,32 @@ export interface StatusInfo {
   tone: StatusTone
 }
 
+/** The views Command mode shows as one chat card (camera, transcript, footer). */
+export type ChatCardView = Extract<View, { kind: 'ready' | 'recognizing' | 'building' | 'conversation' | 'confirm' }>
+
+/**
+ * Command mode's one card: Ready, the message being signed (Recognizing, Building), the exchange
+ * with the agent (conversation) and its inline Confirm are phases of the same chat card. Spell
+ * mode keeps its own Ready, Recognizing and Building cards; a shortcut's Confirm stays a card.
+ */
+export function isChatCard(view: View, mode: Mode): boolean {
+  switch (view.kind) {
+    case 'conversation':
+      return true
+    case 'confirm':
+      return view.inChat === true
+    case 'ready':
+    case 'recognizing':
+    case 'building':
+      return mode === 'command'
+    default:
+      return false
+  }
+}
+
 /** Default card width per state (px). Collapsed / toast size to content. */
-export function cardWidth(view: View): number {
+export function cardWidth(view: View, mode: Mode = 'command'): number {
+  if (isChatCard(view, mode)) return 340
   switch (view.kind) {
     case 'conversation':
     case 'confirm':

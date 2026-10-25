@@ -20,10 +20,34 @@ import { dominantSlot, keepActiveHand } from '../engine/recognition/features'
 import { wordTemplate } from '../engine/recognition/teach'
 import { getApp, setApp } from './store'
 import type { Services } from './services'
-import { isReply, type Answer, type SettingsPage, type Token, type View } from './types'
+import {
+  isChatCard,
+  isReply,
+  MAX_CHAT,
+  type Answer,
+  type ChatMessage,
+  type ConfirmStatus,
+  type SettingsPage,
+  type Token,
+  type View
+} from './types'
 import { live } from './live'
 
 type HoldPage = Extract<SettingsPage, { page: 'newGestureHold' }>
+
+/** A chat message before the controller gives it an id. */
+type WithoutId<M> = M extends unknown ? Omit<M, 'id'> : never
+export type NewChatMessage = WithoutId<ChatMessage>
+
+/** The chat's live bubble while the interpreter reads the phrase, before the agent's own steps. */
+export const UNDERSTANDING_STEP: AgentStep = { id: 'understanding', label: 'Understanding', status: 'current' }
+/** The label on a message signed as a new gesture's task (New gesture › Sign a new task). */
+export const GESTURE_TASK_LABEL = 'Gesture task'
+/** The transcript's line when the agent was stopped, or a sent phrase was dropped before it reached the agent. */
+export const STOPPED_NOTE = 'Stopped'
+export const CANCELLED_NOTE = 'Cancelled'
+/** Chat message ids, unique for the session (the transcript outlives a controller swapped in tests). */
+let chatSeq = 0
 
 /** Hands-only control gestures produced by the gesture engine (Phase 3) or dev hotkeys. */
 export type GestureName =
@@ -65,11 +89,6 @@ const MODES: Mode[] = ['command', 'dictation', 'spell']
 export const TOAST_MS = 2600
 export const TOAST_THUMB_MS = 6000
 export const toastDuration = (view: { thumb?: string }): number => (view.thumb ? TOAST_THUMB_MS : TOAST_MS)
-/**
- * The reply card stays this long with no movement in front of the camera, then gives way to
- * Ready. Long enough to read a two-sentence reply and start signing the next message.
- */
-export const REPLY_IDLE_MS = 20_000
 /** A screenshot thumbnail that takes longer than this is left out rather than holding up the card. */
 const THUMB_WAIT_MS = 1500
 /** Why typing failed (often a permission to grant in System Settings) needs time to read. */
@@ -454,8 +473,17 @@ export class Controller {
   private agentRun: AgentRunState | null = null
   /** The shortcut waiting on the main process; a newer run or a stop abandons it (no toast). */
   private shortcut: Promise<ShortcutRunResult> | null = null
-  /** The run behind the Stopped toast: main still reports a write it had already made. */
-  private stopped: { runId: string; toast: View } | null = null
+  /**
+   * The stopped run: main still reports a write it had already made. `toast`: the Stopped toast
+   * (a shortcut's run), or null for a command's run, which the chat transcript reports.
+   */
+  private stopped: { runId: string; toast: View | null } | null = null
+  /** The chat's live bubble: "Understanding", then the agent's steps, until the run ends. */
+  private liveId: string | null = null
+  /** A phrase sent at phrase end and still with the interpreter: its bubble, which the agent's sentence updates. */
+  private sent: { youId: string } | null = null
+  /** The inline Confirm bubble waiting for a thumbs up or a fist. */
+  private confirmId: string | null = null
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private lastCompleted: { intent: string; title: string } | null = null
   /**
@@ -526,19 +554,6 @@ export class Controller {
     this.clearTimers()
     setApp({ view, pick: null, signing: false })
     this.dropStaleLlmCalls()
-    if (isReply(view)) this.idleAfterReply(view)
-  }
-
-  /**
-   * The reply card gives way to Ready after REPLY_IDLE_MS with no movement. A movement still being
-   * judged then (Listening) holds it, since a sign from it starts the next message.
-   */
-  private idleAfterReply(view: View, ms = REPLY_IDLE_MS): void {
-    this.later(ms, () => {
-      if (this.view !== view) return
-      if (getApp().signing) return this.idleAfterReply(view, 2000)
-      this.setView(this.idleView())
-    })
   }
 
   private later(ms: number, fn: () => void): void {
@@ -617,6 +632,7 @@ export class Controller {
     this.phraseVersion++
     this.tokens = []
     this.forgetInterpretation()
+    this.syncComposing()
   }
 
   private resetPhrase(): void {
@@ -625,6 +641,79 @@ export class Controller {
     this.forgetInterpretation()
     this.intentPrefix = undefined
     this.signingTask = false
+    this.abandonSent()
+    this.syncComposing()
+  }
+
+  // ---------------------------------------------------------------- chat transcript
+
+  /** Adds messages at the end of the transcript, which keeps the last MAX_CHAT. Returns their ids. */
+  private postChat(...messages: NewChatMessage[]): string[] {
+    const posted = messages.map((m) => ({ ...m, id: `m${++chatSeq}` }) as ChatMessage)
+    setApp({ chat: [...getApp().chat, ...posted].slice(-MAX_CHAT) })
+    return posted.map((m) => m.id)
+  }
+
+  /** Changes one message in place (one that is gone already is left alone). */
+  private patchChat(id: string, patch: (m: ChatMessage) => ChatMessage): void {
+    const chat = getApp().chat
+    if (!chat.some((m) => m.id === id)) return
+    setApp({ chat: chat.map((m) => (m.id === id ? patch(m) : m)) })
+  }
+
+  /** Shows `steps` in the live bubble, which stays the last one: anything added since puts it back at the end. */
+  private showLive(steps: AgentStep[]): void {
+    const chat = getApp().chat
+    const i = this.liveId === null ? -1 : chat.findIndex((m) => m.id === this.liveId)
+    if (i >= 0 && i === chat.length - 1) {
+      setApp({ chat: chat.map((m, j) => (j === i && m.kind === 'steps' ? { ...m, steps } : m)) })
+      return
+    }
+    if (i >= 0) setApp({ chat: chat.filter((_, j) => j !== i) })
+    this.liveId = this.postChat({ from: 'agent', kind: 'steps', steps })[0]
+  }
+
+  /** The live bubble goes, and `replacement` (the answer, a note) takes its place at the end. */
+  private endLive(...replacement: NewChatMessage[]): void {
+    const id = this.liveId
+    this.liveId = null
+    if (id !== null) setApp({ chat: getApp().chat.filter((m) => m.id !== id) })
+    if (replacement.length) this.postChat(...replacement)
+  }
+
+  /** The inline Confirm is answered, or its run ended without an answer (nothing ran: cancelled). */
+  private settleConfirm(status: Exclude<ConfirmStatus, 'pending'>): void {
+    const id = this.confirmId
+    this.confirmId = null
+    if (id !== null) this.patchChat(id, (m) => (m.kind === 'confirm' ? { ...m, status } : m))
+  }
+
+  /** A phrase sent but not yet with the agent was dropped (a fist, the X, a collapse): the transcript says so. */
+  private abandonSent(): void {
+    if (!this.sent) return
+    this.sent = null
+    this.endLive({ from: 'agent', kind: 'note', text: CANCELLED_NOTE })
+  }
+
+  /** The composing bubble follows the phrase: its tokens, and what it is signed for. */
+  private syncComposing(): void {
+    const label = this.intentPrefix ?? (this.signingTask ? GESTURE_TASK_LABEL : undefined)
+    setApp({ composing: { tokens: [...this.tokens], ...(label ? { label } : {}) } })
+  }
+
+  /** The agent's answer as a bubble: its words, what it did, or (`failed`) why it couldn't start or finish. */
+  private answerMessage(answer: Answer, failed: boolean): NewChatMessage {
+    if (failed) {
+      return { from: 'agent', kind: 'error', title: answer.title ?? "Couldn't finish", ...(answer.subtitle ? { subtitle: answer.subtitle } : {}) }
+    }
+    if (answer.title === undefined) return { from: 'agent', kind: 'text', text: answer.text ?? '' }
+    return { from: 'agent', kind: 'result', answer }
+  }
+
+  /** A click on a result in the transcript (its screenshot): opens what it made, as a thumbs up on the reply does. */
+  openChatResult(id: string): void {
+    const m = getApp().chat.find((x) => x.id === id)
+    if (m?.kind === 'result' && m.answer.view) this.openResult(m.answer.view)
   }
 
   // ---------------------------------------------------------------- entry points
@@ -884,6 +973,8 @@ export class Controller {
     this.phraseVersion++
     this.tokens.push(token)
     this.forgetInterpretation()
+    // The chat's composing bubble shows it at once, as the forming sentence.
+    this.syncComposing()
     if (this.tokens.length === 1) {
       this.setView({ kind: 'recognizing', token: token.text, isWord: token.kind === 'word' })
       return
@@ -1072,6 +1163,7 @@ export class Controller {
     }
     this.phraseVersion++
     this.forgetInterpretation()
+    this.syncComposing()
     if (!this.tokens.length) return this.cancel()
     this.resumeBuilding()
   }
@@ -1101,6 +1193,13 @@ export class Controller {
     const pending = this.interpretPhrase()
     const understanding: View = { kind: 'conversation', phase: 'understanding', said: raw, ...(prefix ? { prefix } : {}), steps: [] }
     this.setView(understanding)
+    // The chat: the composing bubble becomes a sent one (the signed words until the interpreter
+    // answers), and "Understanding" comes up under it.
+    const label = prefix ?? (this.signingTask ? GESTURE_TASK_LABEL : undefined)
+    const [youId] = this.postChat({ from: 'you', kind: 'text', text: raw, ...(label ? { prefix: label } : {}) })
+    this.sent = { youId }
+    this.showLive([UNDERSTANDING_STEP])
+    setApp({ composing: { tokens: [] } })
     const { result, error } = await pending
     if (this.view !== understanding) return // cancelled, collapsed or moved on meanwhile
     if (this.signingTask) return this.taskSigned(result, error, raw)
@@ -1151,6 +1250,11 @@ export class Controller {
     if (error) this.notifyLlmError(error)
     const sentence = result?.sentence || rawSentence
     const task = result?.intent || (this.intentPrefix ? `${this.intentPrefix}: ${sentence}` : sentence)
+    // A task, not a message: the bubble shows it, and no agent bubble follows.
+    const sent = this.sent
+    this.sent = null
+    if (sent) this.patchChat(sent.youId, (m) => (m.from === 'you' ? { ...m, text: task } : m))
+    this.endLive()
     this.resetPhrase()
     this.startShapeCapture(task)
   }
@@ -1175,6 +1279,7 @@ export class Controller {
           this.phraseVersion++
           this.tokens.push({ text: choice, kind: 'word' })
           this.forgetInterpretation()
+          this.syncComposing()
           this.setView({
             kind: 'building',
             tokens: [...this.tokens],
@@ -1190,6 +1295,7 @@ export class Controller {
       case 'quickMenu':
         // The details are signed next, and the pick prefixes them.
         this.intentPrefix = choice
+        this.syncComposing()
         this.setView(this.idleView())
         return
       case 'settings':
@@ -1245,6 +1351,10 @@ export class Controller {
    */
   async runAgent(intent: string, sentence: string, prefix?: string): Promise<void> {
     this.subscribe() // dispose() may have run (React StrictMode re-mounts App)
+    // The bubble sent at phrase end, which now gets the interpreter's sentence (taken before the
+    // reset below, which would call it dropped).
+    const sent = this.sent
+    this.sent = null
     // The run uses up the phrase, however it ends: the next sign, Settings and Ready start a new one.
     this.resetPhrase()
     // The agent may switch apps or type itself: what fastASL types next starts a new run.
@@ -1254,6 +1364,9 @@ export class Controller {
     this.shortcut = null
     const run: AgentRunState = { runId: null, intent, shortcut: false, said: sentence, ...(prefix ? { prefix } : {}), held: [] }
     this.agentRun = run
+    if (sent) this.patchChat(sent.youId, (m) => (m.from === 'you' ? { ...m, text: sentence } : m))
+    else this.postChat({ from: 'you', kind: 'text', text: sentence, ...(prefix ? { prefix } : {}) })
+    this.showLive([])
     this.setView(this.runningView(run))
     const frontmost = await this.services.frontmostApp().catch(() => null)
     if (this.agentRun !== run) return // stopped before the agent started
@@ -1261,7 +1374,7 @@ export class Controller {
     if (this.agentRun !== run) return // stopped meanwhile (clearRun released what it held)
     if (!res.ok) {
       this.clearRun()
-      this.showAnswer(run, { ok: false, title: "Couldn't start the agent", subtitle: failureText(res) })
+      this.showAnswer(run, { ok: false, title: "Couldn't start the agent", subtitle: failureText(res) }, true)
       return
     }
     run.runId = res.value.runId
@@ -1276,9 +1389,13 @@ export class Controller {
     return { kind: 'conversation', phase: 'working', said: run.said, ...(run.prefix ? { prefix: run.prefix } : {}), steps }
   }
 
-  /** The agent's answer under what the user signed. The card stays ready for the next message. */
-  private showAnswer(run: AgentRunState, answer: Answer): void {
+  /**
+   * The agent's answer under what the user signed: the transcript's live bubble gives way to it.
+   * `failed`: it couldn't start or finish (the error bubble). The card stays ready for the next message.
+   */
+  private showAnswer(run: AgentRunState, answer: Answer, failed = false): void {
     const prefix = run.prefix ? { prefix: run.prefix } : {}
+    this.endLive(this.answerMessage(answer, failed))
     this.setView({ kind: 'conversation', phase: 'reply', said: run.said, ...prefix, steps: [...this.steps], answer })
   }
 
@@ -1286,8 +1403,14 @@ export class Controller {
   private async answerWithThumb(run: AgentRunState, answer: Answer, path: string): Promise<void> {
     const from = this.view
     const thumb = await this.loadThumb(path)
-    if (this.view !== from) return // stopped, collapsed or moved on while it loaded
-    this.showAnswer(run, thumb ? { ...answer, thumb } : answer)
+    const shown = thumb ? { ...answer, thumb } : answer
+    if (this.view !== from) {
+      // Stopped while it loaded (the transcript says so), or the card moved on (collapsed): then
+      // the answer still replaces the live bubble, so no spinner is left behind.
+      if (this.liveId !== null && !this.agentRun) this.endLive(this.answerMessage(shown, false))
+      return
+    }
+    this.showAnswer(run, shown)
   }
 
   /** A screenshot's thumbnail from main (which serves only screenshots fastASL took), or nothing within THUMB_WAIT_MS. */
@@ -1319,36 +1442,60 @@ export class Controller {
     for (const e of held) this.onAgentEvent(e)
   }
 
-  /** Fist or X while working: the card leaves at once; the main process interrupts the run. */
+  /**
+   * Fist or X while working: the main process interrupts the run. A command's chat says "Stopped"
+   * and is ready for the next message at once; a shortcut's run toasts.
+   */
   private stopAgent(): void {
-    const runId = this.agentRun?.runId ?? null
+    const run = this.agentRun
+    const chat = run ? !run.shortcut : this.view.kind === 'conversation'
     this.shortcut = null
     this.clearRun()
-    this.agentStopped(runId)
+    this.agentStopped(run?.runId ?? null, chat)
     void this.services.agentStop().catch(() => undefined)
   }
 
-  private agentStopped(runId: string | null): void {
+  private agentStopped(runId: string | null, chat: boolean): void {
+    if (chat) {
+      this.settleConfirm('cancelled')
+      this.endLive({ from: 'agent', kind: 'note', text: STOPPED_NOTE })
+      this.setView(this.idleView())
+      this.stopped = runId ? { runId, toast: null } : null
+      return
+    }
     this.toast('Stopped', 'The agent was interrupted', false)
     this.stopped = runId ? { runId, toast: this.view } : null
   }
 
   /**
    * Main reports a stopped run only when a write had already gone through (a sent message, say,
-   * possibly finishing after the stop). The card says so, or the user might send it again.
+   * possibly finishing after the stop). The card says so, or the user might send it again: the
+   * transcript under "Stopped" (and a notice when the chat isn't showing), or the toast.
    */
   private reportStopped(result: AgentResult): void {
-    const toast = this.stopped?.toast
+    const stopped = this.stopped
     this.stopped = null
-    if (this.view === toast) this.toast(result.title, result.subtitle, false)
+    if (stopped && stopped.toast === null) {
+      this.postChat({ from: 'agent', kind: 'result', answer: { ok: false, title: result.title, subtitle: result.subtitle } })
+      if (!isChatCard(this.view, getApp().mode)) this.notify(`${result.title} before you stopped`)
+      return
+    }
+    if (this.view === stopped?.toast) this.toast(result.title, result.subtitle, false)
     else this.notify(`${result.title} before you stopped`)
   }
 
+  /** Thumbs up / fist (or the buttons) on a Confirm: the agent carries on with the answer. */
   private async respondConfirm(approved: boolean): Promise<void> {
     const view = this.view
     if (view.kind !== 'confirm') return
     const run = this.agentRun
-    this.setView(run ? this.runningView(run) : { kind: 'working', intent: '', steps: [...this.steps] })
+    if (view.inChat) {
+      // The bubble keeps the answer, and the live steps come back under it.
+      this.settleConfirm(approved ? 'allowed' : 'cancelled')
+      if (run) this.showLive([...this.steps])
+    }
+    const stale: View = view.inChat ? this.idleView() : { kind: 'working', intent: '', steps: [...this.steps] }
+    this.setView(run ? this.runningView(run) : stale)
     await this.services.agentRespond(view.requestId, approved)
   }
 
@@ -1383,25 +1530,36 @@ export class Controller {
         const i = this.steps.findIndex((s) => s.id === e.step.id)
         if (i >= 0) this.steps[i] = e.step
         else this.steps.push(e.step)
+        // The chat's live bubble (held back while an inline Confirm waits: it returns under it).
+        if (!run.shortcut && this.confirmId === null) this.showLive([...this.steps])
         const view = this.view
         if (view.kind === 'working' || (view.kind === 'conversation' && view.phase === 'working')) {
           this.setView({ ...view, steps: [...this.steps] })
         }
         return
       }
-      case 'confirm':
-        this.setView({ kind: 'confirm', requestId: e.requestId, details: e.details })
+      case 'confirm': {
+        if (run.shortcut) return this.setView({ kind: 'confirm', requestId: e.requestId, details: e.details })
+        // A command's write is asked inline: the Confirm bubble takes the live bubble's place.
+        this.settleConfirm('cancelled')
+        this.endLive()
+        const confirm: NewChatMessage = { from: 'agent', kind: 'confirm', requestId: e.requestId, details: e.details, status: 'pending' }
+        this.confirmId = this.postChat(confirm)[0]
+        this.setView({ kind: 'confirm', requestId: e.requestId, details: e.details, inChat: true })
         return
+      }
       case 'done':
       case 'error':
       case 'stopped': {
         this.agentRun = null
         // A shortcut's result is its toast (runShortcut), which says the same thing.
         if (run.shortcut) return
-        if (e.type === 'stopped') return this.agentStopped(run.runId) // stopped by the main process, not the user
+        // A Confirm still open as the run ended (main stopped waiting) ran nothing.
+        this.settleConfirm('cancelled')
+        if (e.type === 'stopped') return this.agentStopped(run.runId, true) // stopped by the main process, not the user
         if (e.type === 'error') {
           const subtitle = failureText({ error: e.message, missingKey: e.missingKey })
-          return this.showAnswer(run, { ok: false, title: "Couldn't finish", subtitle })
+          return this.showAnswer(run, { ok: false, title: "Couldn't finish", subtitle }, true)
         }
         // Title and subtitle come from tool results; an unfinished task says why in the subtitle.
         if (e.complete) this.lastCompleted = { intent: run.intent, title: e.result.title }
@@ -1731,6 +1889,7 @@ export class Controller {
     if (getApp().mode !== 'command') this.switchMode('command')
     this.resetPhrase()
     this.signingTask = true
+    this.syncComposing()
     this.setView(this.idleView())
   }
 

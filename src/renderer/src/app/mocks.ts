@@ -1,7 +1,7 @@
-import type { Mode } from '@shared/types'
+import type { AgentStep, Mode } from '@shared/types'
 import type { PickProgress } from './store'
-import type { View } from './types'
-import { cameraFallbackNotice, IDENTIFYING, NOT_A_SIGN, QUICK_MENU } from './controller'
+import type { ChatMessage, Composing, Token, View } from './types'
+import { cameraFallbackNotice, IDENTIFYING, NOT_A_SIGN, QUICK_MENU, UNDERSTANDING_STEP } from './controller'
 import { MOCK_SCREENSHOT_PATH, MOCK_SCREENSHOT_SUBTITLE, MOCK_SCREENSHOT_THUMB } from './mockThumb'
 import type { MockPose } from './live'
 import { STREAM_LOST, STREAM_NOT_MJPEG } from '../engine/camera/cameraSource'
@@ -15,6 +15,59 @@ export interface MockScene {
   pose?: MockPose
   /** Camera error shown in the feed (live.error); screenshots only, where the camera never runs. */
   error?: string
+  /** Command mode's chat transcript and composing bubble; without them, what the view stands for (sceneChat). */
+  chat?: ChatMessage[]
+  composing?: Composing
+  /** A movement is being judged: "Listening..." in the header, the composing bubble pulses. */
+  signing?: boolean
+}
+
+const words = (...texts: string[]): Token[] => texts.map((text) => ({ text, kind: 'word' }))
+
+/**
+ * The chat a scene without its own transcript stands for: the phrase being signed in the composing
+ * bubble, or one exchange (what was signed, then "Understanding", the agent's steps or its answer).
+ */
+export function sceneChat(view: View): { chat: ChatMessage[]; composing: Composing } {
+  const none: Composing = { tokens: [] }
+  switch (view.kind) {
+    case 'recognizing':
+      return { chat: [], composing: { tokens: view.token ? [{ text: view.token, kind: view.isWord ? 'word' : 'letter' }] : [] } }
+    case 'building':
+      return { chat: [], composing: { tokens: view.tokens } }
+    case 'conversation': {
+      const you: ChatMessage = { id: 'scene-you', from: 'you', kind: 'text', text: view.said, ...(view.prefix ? { prefix: view.prefix } : {}) }
+      const steps = (list: AgentStep[]): ChatMessage => ({ id: 'scene-steps', from: 'agent', kind: 'steps', steps: list })
+      if (view.phase === 'understanding') return { chat: [you, steps([UNDERSTANDING_STEP])], composing: none }
+      if (view.phase === 'working' || !view.answer) return { chat: [you, steps(view.steps)], composing: none }
+      const a = view.answer
+      const id = 'scene-answer'
+      const answer: ChatMessage =
+        a.title === undefined
+          ? { id, from: 'agent', kind: 'text', text: a.text ?? '' }
+          : !a.ok && a.title.startsWith("Couldn't")
+            ? { id, from: 'agent', kind: 'error', title: a.title, ...(a.subtitle ? { subtitle: a.subtitle } : {}) }
+            : { id, from: 'agent', kind: 'result', answer: a }
+      return { chat: [you, answer], composing: none }
+    }
+    default:
+      return { chat: [], composing: none }
+  }
+}
+
+/** An earlier exchange, so the chat scenes read as a conversation. */
+const HELLO_EXCHANGE: ChatMessage[] = [
+  { id: 'c1', from: 'you', kind: 'text', text: 'Hello.' },
+  { id: 'c2', from: 'agent', kind: 'text', text: 'Hi! What can I do for you?' }
+]
+const MEETING_QUESTION = 'What time is my meeting tomorrow?'
+const TEAM_SYNC = {
+  kind: 'event' as const,
+  title: 'Team Sync',
+  dateLabel: 'Tomorrow, Oct 25',
+  timeLabel: '10:00 – 11:00 AM',
+  guestsLabel: '4 guests',
+  videoLabel: 'Google Meet'
 }
 
 /**
@@ -390,6 +443,118 @@ export const MOCK_SCENES: Record<string, MockScene> = {
   settingsTeachShowRetry: {
     view: { kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', reason: NOT_A_SIGN } },
     pose: 'palm'
+  },
+  // Command mode's chat card: camera, transcript, footer.
+  chatEmpty: { view: { kind: 'ready' }, chat: [], pose: 'palm' },
+  // Mid-phrase: each word joins the composing bubble as it streams in; Listening pulses it.
+  chatComposing: {
+    view: {
+      kind: 'building',
+      tokens: words('tomorrow', 'meeting', 'what', 'time'),
+      current: 'time',
+      sentence: 'Tomorrow meeting what time'
+    },
+    chat: HELLO_EXCHANGE,
+    composing: { tokens: words('tomorrow', 'meeting', 'what', 'time') },
+    signing: true,
+    pose: 'twoHands'
+  },
+  // Hands down: the sent bubble (the interpreter's sentence), then the agent's live steps.
+  chatWorking: {
+    view: {
+      kind: 'conversation',
+      phase: 'working',
+      said: MEETING_QUESTION,
+      steps: [
+        { id: 'plan', label: 'Thinking', status: 'done' },
+        { id: 's0', label: 'Checking your calendar', status: 'current' }
+      ]
+    },
+    chat: [
+      ...HELLO_EXCHANGE,
+      { id: 'c3', from: 'you', kind: 'text', text: MEETING_QUESTION },
+      {
+        id: 'c4',
+        from: 'agent',
+        kind: 'steps',
+        steps: [
+          { id: 'plan', label: 'Thinking', status: 'done' },
+          { id: 's0', label: 'Checking your calendar', status: 'current' }
+        ]
+      }
+    ],
+    pose: 'point'
+  },
+  chatReply: {
+    view: {
+      kind: 'conversation',
+      phase: 'reply',
+      said: MEETING_QUESTION,
+      steps: [],
+      answer: { ok: true, text: 'Team Sync is tomorrow at 10:00 AM, with 4 guests on Google Meet.' }
+    },
+    chat: [
+      ...HELLO_EXCHANGE,
+      { id: 'c3', from: 'you', kind: 'text', text: MEETING_QUESTION },
+      { id: 'c4', from: 'agent', kind: 'text', text: 'Team Sync is tomorrow at 10:00 AM, with 4 guests on Google Meet.' }
+    ],
+    pose: 'palm'
+  },
+  // A write is asked inline: nothing runs until a thumbs up.
+  chatConfirm: {
+    view: { kind: 'confirm', requestId: 'mock', details: TEAM_SYNC, inChat: true },
+    chat: [
+      { id: 'c1', from: 'you', kind: 'text', text: 'Meeting with the team tomorrow at 10.', prefix: 'Create event' },
+      { id: 'c2', from: 'agent', kind: 'confirm', requestId: 'mock', details: TEAM_SYNC, status: 'pending' }
+    ],
+    pose: 'thumbsUp'
+  },
+  // A longer session: the allowed event, then the agent's screenshot (the transcript scrolls, older messages fade).
+  chatScreenshot: {
+    view: {
+      kind: 'conversation',
+      phase: 'reply',
+      said: 'Take a screenshot.',
+      steps: [],
+      answer: {
+        ok: true,
+        title: 'Screenshot taken',
+        subtitle: MOCK_SCREENSHOT_SUBTITLE,
+        text: 'Saved a screenshot to your Desktop.',
+        view: { kind: 'openFile', path: MOCK_SCREENSHOT_PATH },
+        thumb: MOCK_SCREENSHOT_THUMB
+      }
+    },
+    chat: [
+      { id: 'c1', from: 'you', kind: 'text', text: 'Meeting with the team tomorrow at 10.', prefix: 'Create event' },
+      { id: 'c2', from: 'agent', kind: 'confirm', requestId: 'mock', details: TEAM_SYNC, status: 'allowed' },
+      {
+        id: 'c3',
+        from: 'agent',
+        kind: 'result',
+        answer: {
+          ok: true,
+          title: 'Meeting created',
+          subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
+          view: { kind: 'openApp', app: 'Calendar' }
+        }
+      },
+      { id: 'c4', from: 'you', kind: 'text', text: 'Take a screenshot.' },
+      {
+        id: 'c5',
+        from: 'agent',
+        kind: 'result',
+        answer: {
+          ok: true,
+          title: 'Screenshot taken',
+          subtitle: MOCK_SCREENSHOT_SUBTITLE,
+          text: 'Saved a screenshot to your Desktop.',
+          view: { kind: 'openFile', path: MOCK_SCREENSHOT_PATH },
+          thumb: MOCK_SCREENSHOT_THUMB
+        }
+      }
+    ],
+    pose: 'ok'
   }
 }
 
@@ -444,5 +609,11 @@ export const SCREENSHOT_ORDER: string[] = [
   'settingsTeachShow',
   'settingsTeachShowIdentifying',
   'settingsTeachShowGuess',
-  'settingsTeachShowRetry'
+  'settingsTeachShowRetry',
+  'chatEmpty',
+  'chatComposing',
+  'chatWorking',
+  'chatReply',
+  'chatConfirm',
+  'chatScreenshot'
 ]

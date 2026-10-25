@@ -1,0 +1,629 @@
+/* Command mode's chat card: the camera on top, the transcript under it, a slim footer.
+   The card grows with the transcript up to --chat-max (the whole card, border included),
+   then the transcript scrolls. The other rows never shrink. */
+.chatcard {
+  --chat-max: 560px;
+  max-height: calc(var(--chat-max) - 2 * var(--card-pad) - 2px);
+}
+
+.chatcard > * {
+  flex-shrink: 0;
+}
+
+.chatcard__feed {
+  position: relative;
+  flex: none;
+}
+
+/* Dev only: the LLM provider, over the feed's bottom-left corner (the footer holds the hints). */
+.chatcard__llm {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  max-width: 96px;
+  overflow: hidden;
+  padding: 1px 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: var(--fs-badge);
+  line-height: 1.3;
+  color: var(--text-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- transcript */
+
+/* The scroll box. Its side padding leaves room for the listening glow. */
+.chatcard > .chat {
+  flex: 0 1 auto;
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 92px;
+  margin: 0 -6px;
+  padding: 2px 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.chat::-webkit-scrollbar {
+  display: none;
+}
+
+/* Scrolled past older messages: they fade out under the camera. */
+.chat--clipped {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+}
+
+/* A short conversation sits at the bottom, next to the footer, as in any chat. */
+.chat__list {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.chat__list--empty {
+  flex: 1 0 auto;
+  justify-content: center;
+  margin-top: 0;
+}
+
+.chat__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+}
+
+.chat__empty svg {
+  margin-bottom: 5px;
+  color: var(--text-3);
+}
+
+.chat__empty-title {
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--text-1);
+}
+
+.chat__empty-sub {
+  margin: 0;
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  line-height: 14px;
+  color: var(--text-3);
+}
+
+.chat__row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  animation: chat-in 260ms var(--ease-spring) both;
+}
+
+.chat__row--you {
+  align-items: flex-end;
+}
+
+.chat__row--agent {
+  align-items: flex-start;
+}
+
+/* A new speaker: a little more room above. */
+.chat__row--first:not(:first-child) {
+  margin-top: 6px;
+}
+
+.chat__who {
+  margin: 0 6px 3px;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--text-3);
+}
+
+.chat__row--you .chat__who {
+  color: var(--text-2);
+}
+
+/* "Stopped", "Cancelled": a quiet line across. */
+.chat__note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 2px 2px;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--text-3);
+  animation: chat-in 260ms var(--ease-spring) both;
+}
+
+.chat__note::before,
+.chat__note::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+@keyframes chat-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------- bubbles */
+
+.bubble {
+  max-width: 86%;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 16px;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+/* Yours: a light translucent fill on the right. */
+.bubble--you {
+  border-bottom-right-radius: 6px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* The agent's: darker than the card, on the left. */
+.bubble--agent {
+  border-bottom-left-radius: 6px;
+  background: rgba(0, 0, 0, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+
+/* The message being signed: yours, dimmed, with a caret. */
+.bubble--composing {
+  border-bottom-right-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.13);
+  color: var(--text-1);
+}
+
+/* Nothing signed yet: a quiet dashed placeholder. */
+.bubble--idle {
+  background: transparent;
+  box-shadow: none;
+  outline: 1px dashed rgba(255, 255, 255, 0.16);
+  outline-offset: -1px;
+}
+
+.bubble--listening {
+  animation: compose-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes compose-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+      0 0 0 0 rgba(94, 194, 124, 0);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px rgba(94, 194, 124, 0.55),
+      0 0 0 3px rgba(94, 194, 124, 0.12);
+  }
+}
+
+.compose__placeholder {
+  color: var(--text-3);
+}
+
+.compose__new {
+  display: inline-block;
+  color: var(--text);
+  animation: compose-word 280ms var(--ease-spring) both;
+}
+
+@keyframes compose-word {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.compose__caret {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--green);
+  vertical-align: -2px;
+  /* Solid while words arrive, blinking once idle (remounted per word). */
+  animation: compose-blink 1.06s steps(1, end) 1s infinite;
+}
+
+@keyframes compose-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Listening with nothing signed yet. Top-aligned in the 18px line, so the bubble keeps the
+   placeholder's height as Listening comes and goes. */
+.compose__dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 2px;
+  vertical-align: top;
+}
+
+.compose__dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-1);
+  animation: compose-dot 1.2s ease-in-out infinite;
+}
+
+.compose__dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.compose__dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes compose-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: none;
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* The agent at work: the latest steps, the running one with a spinner. */
+.bubble--steps {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 12px;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-2);
+  white-space: nowrap;
+  animation: chat-in 220ms var(--ease-spring) both;
+}
+
+.step--current {
+  color: var(--text);
+}
+
+.step__mark {
+  flex: none;
+}
+
+.step__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What the agent did. */
+.bubble--result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 92%;
+  padding: 10px 12px;
+}
+
+.res {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.res .check-badge {
+  margin-top: -1px;
+}
+
+.res__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.res__title {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.res__sub {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.res__sub--file {
+  -webkit-line-clamp: 3;
+}
+
+.res__note {
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--text-1);
+}
+
+/* Under the title, past the badge (22 + gap 10). */
+.res__note--indent {
+  padding-left: 32px;
+}
+
+/* The screenshot, 16:10 like a Mac screen; a click (or a thumbs up) opens it in Preview. */
+.res__thumb {
+  display: block;
+  flex: none;
+  width: 92px;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.res__thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The agent couldn't start or finish. */
+.bubble--error {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  background: rgba(255, 69, 58, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 69, 58, 0.3);
+}
+
+.err__icon {
+  flex: none;
+  margin-top: 1px;
+  color: #ff6f66;
+}
+
+.err__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.err__title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.err__sub {
+  margin: 0;
+  font-size: var(--fs-small);
+  line-height: 16px;
+  color: var(--text-1);
+}
+
+/* A write waiting for a thumbs up: what it would do, Allow / Cancel. */
+.bubble--confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 86%;
+  padding: 10px 12px;
+}
+
+.bubble--confirm-pending {
+  box-shadow: inset 0 0 0 1px rgba(94, 194, 124, 0.5);
+}
+
+.cf__ask {
+  margin: 0;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+.bubble--confirm-pending .cf__ask {
+  color: var(--green);
+}
+
+.cf__details {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cf__icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text);
+}
+
+.cf__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.cf__title {
+  display: -webkit-box;
+  margin: 0 0 1px;
+  overflow: hidden;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Recipients: one line, never broken mid-address. */
+.cf__title--addr {
+  display: block;
+  font-size: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cf__line {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-1);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cf__line--dim {
+  color: var(--text-2);
+}
+
+.cf__line--clamp {
+  display: -webkit-box;
+  white-space: normal;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.cf__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.cf__btn {
+  display: inline-flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--btn-secondary-bg);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--btn-secondary-fg);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.cf__btn:hover {
+  background: var(--btn-secondary-hover);
+}
+
+.cf__btn--allow {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+}
+
+.cf__btn--allow:hover {
+  background: var(--btn-primary-hover);
+}
+
+.cf__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+.cf__status--allowed {
+  color: var(--green);
+}
+
+/* ---------------------------------------------------------------- footer */
+
+/* Slim: camera | the gestures that act now | minimize. */
+.chatcard__footer {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+}
+
+.hint.chatcard__hint {
+  min-width: 0;
+}

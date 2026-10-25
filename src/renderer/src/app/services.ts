@@ -152,7 +152,11 @@ export function mockServices(): Services {
   const listeners = new Set<(e: AgentEvent) => void>()
   const emit = (e: AgentEvent): void => listeners.forEach((l) => l(e))
   let pendingConfirm: ((approved: boolean) => void) | null = null
-  let stopped = false
+  /**
+   * The run that may still emit: a stop or a newer run ends the one before, so a stopped run
+   * never carries on (and reports) once the next message starts one.
+   */
+  let active = 0
 
   return {
     async interpret(req) {
@@ -206,14 +210,15 @@ export function mockServices(): Services {
     sendsFrames: () => false,
     async agentRun(req) {
       const runId = `mock-${Date.now()}`
-      stopped = false
+      const run = ++active
+      const stopped = (): boolean => active !== run
       const task = req.intent.toLowerCase()
       void (async () => {
         emit({ type: 'started', runId, intent: req.intent })
         if (task.includes('screenshot')) {
           emit({ type: 'step', runId, step: { id: 's0', label: 'Taking screenshot', status: 'current' } })
           await wait(600)
-          if (stopped) return
+          if (stopped()) return
           emit({ type: 'step', runId, step: { id: 's0', label: 'Taking screenshot', status: 'done' } })
           emit({
             type: 'done',
@@ -233,7 +238,7 @@ export function mockServices(): Services {
           // A message the agent answers in words: no tool runs.
           emit({ type: 'step', runId, step: { id: 'plan', label: 'Thinking', status: 'current' } })
           await wait(700)
-          if (stopped) return
+          if (stopped()) return
           emit({
             type: 'done',
             runId,
@@ -244,10 +249,10 @@ export function mockServices(): Services {
         }
         const steps = ['Opening Calendar', 'Creating event', 'Adding attendees', 'Adding meeting link']
         for (let i = 0; i < steps.length; i++) {
-          if (stopped) return
+          if (stopped()) return
           emit({ type: 'step', runId, step: { id: `s${i}`, label: steps[i], status: 'current' } })
           await wait(700)
-          if (stopped) return
+          if (stopped()) return
           if (i === 1) {
             const approved = await new Promise<boolean>((resolve) => {
               pendingConfirm = resolve
@@ -266,7 +271,7 @@ export function mockServices(): Services {
                 }
               })
             })
-            if (stopped) return // agentStop() also rejects the pending confirmation
+            if (stopped()) return // agentStop() also rejects the pending confirmation
             if (!approved) {
               emit({ type: 'step', runId, step: { id: `s${i}`, label: steps[i], status: 'error' } })
               emit({
@@ -296,7 +301,7 @@ export function mockServices(): Services {
       return { ok: true, value: { runId } }
     },
     async agentStop() {
-      stopped = true
+      active++
       pendingConfirm?.(false)
       pendingConfirm = null
       emit({ type: 'stopped', runId: 'mock' })

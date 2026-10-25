@@ -1,10 +1,11 @@
-import type { View } from '../app/types'
+import { useApp } from '../app/store'
+import { isChatCard, type ChatCardView, type View } from '../app/types'
 import { CollapsedView } from './CollapsedView'
 import { ReadyView } from './ReadyView'
 import { RecognizingView } from './RecognizingView'
 import { BuildingView } from './BuildingView'
 import { DictationView } from './DictationView'
-import { ConversationView } from './ConversationView'
+import { ChatView } from './ChatView'
 import { WorkingView } from './WorkingView'
 import { ConfirmView } from './ConfirmView'
 import { ToastView } from './ToastView'
@@ -12,8 +13,13 @@ import { DidYouMeanView } from './DidYouMeanView'
 import { QuickMenuView } from './QuickMenuView'
 import { SettingsView } from './SettingsView'
 
-/** Renders the body of the card for the current view. */
+/**
+ * Renders the body of the card for the current view. In Command mode, Ready, the phrase being
+ * signed, the exchange with the agent and its inline Confirm are one chat card (ChatView).
+ */
 export function ViewRenderer({ view }: { view: View }): React.JSX.Element {
+  const mode = useApp((s) => s.mode)
+  if (isChatCard(view, mode)) return <ChatView view={view as ChatCardView} />
   switch (view.kind) {
     case 'collapsed':
       return <CollapsedView view={view} />
@@ -26,7 +32,7 @@ export function ViewRenderer({ view }: { view: View }): React.JSX.Element {
     case 'dictation':
       return <DictationView view={view} />
     case 'conversation':
-      return <ConversationView view={view} />
+      return <ChatView view={view} />
     case 'working':
       return <WorkingView view={view} />
     case 'confirm':

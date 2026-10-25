@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { CameraSource, CustomGesture, KeyStatus, Mode, Sensitivity, SignTemplate } from '@shared/types'
-import type { View } from './types'
+import type { ChatMessage, Composing, View } from './types'
 
 export interface PickProgress {
   /** 1-based option number currently being held. */
@@ -44,6 +44,13 @@ export interface AppState {
    * guess tells the LLM about them, so it names them the way the model does.
    */
   modelWords: string[]
+  /**
+   * Command mode's chat transcript: the session's recent messages (MAX_CHAT), kept across
+   * collapses and Settings. The controller adds to it as the exchange goes.
+   */
+  chat: ChatMessage[]
+  /** The message being signed, as its tokens stream in (the chat's composing bubble). */
+  composing: Composing
 }
 
 export const useApp = create<AppState>(() => ({
@@ -69,7 +76,9 @@ export const useApp = create<AppState>(() => ({
   signing: false,
   templates: [],
   gestures: [],
-  modelWords: []
+  modelWords: [],
+  chat: [],
+  composing: { tokens: [] }
 }))
 
 export const getApp = (): AppState => useApp.getState()

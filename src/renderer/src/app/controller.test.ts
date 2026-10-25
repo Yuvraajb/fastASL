@@ -18,13 +18,16 @@ import {
   NONE_OF_THESE,
   NOT_A_SIGN,
   QUICK_MENU,
-  REPLY_IDLE_MS,
   SETTINGS_ROOT,
   SHOW_ME,
   SIGN_GUESS_COOLDOWN_MS,
   SIGN_GUESS_ERROR_EVERY_MS,
   TOAST_MS,
   TOAST_THUMB_MS,
+  CANCELLED_NOTE,
+  GESTURE_TASK_LABEL,
+  STOPPED_NOTE,
+  UNDERSTANDING_STEP,
   type UnknownMovement,
   answerFor,
   activeGestures,
@@ -43,7 +46,17 @@ import { live } from './live'
 import { MOCK_SCREENSHOT_PATH, MOCK_SCREENSHOT_THUMB } from './mockThumb'
 import { mockServices, type Services } from './services'
 import { getApp, setApp, useApp } from './store'
-import { statusFor, type Answer, type SettingsPage, type Token, type View } from './types'
+import {
+  cardWidth,
+  isChatCard,
+  MAX_CHAT,
+  statusFor,
+  type Answer,
+  type ChatMessage,
+  type SettingsPage,
+  type Token,
+  type View
+} from './types'
 
 // Mirrors the controller's private timings.
 const TYPED_RUN_MS = 2 * 60_000
@@ -130,6 +143,9 @@ const fingers = (count: number): void => c.gesture({ gesture: 'fingers', count }
 const sign = (...tokens: Token[]): void => tokens.forEach((t) => c.token(t))
 
 type Conversation = Extract<View, { kind: 'conversation' }>
+
+/** The transcript at a glance: "you:text", "agent:steps", "note:Stopped"... */
+const chatShape = (): string[] => getApp().chat.map((m) => (m.kind === 'note' ? `note:${m.text}` : `${m.from}:${m.kind}`))
 
 /** The conversation card in `phase`. */
 function conversation(phase: Conversation['phase']): Conversation {
@@ -600,13 +616,14 @@ describe('settings by hand', () => {
     expect(getApp().view).toEqual(idle)
   })
 
-  it("the agent's reply: swipe up opens Settings, which stops its idle timer; a fist goes to Ready", async () => {
+  it("the agent's reply: swipe up opens Settings; a fist goes to Ready, with the conversation kept", async () => {
     sendPhrase(word('hello'))
     await settle(1300)
     conversation('reply')
     g('swipeUp')
-    await settle(REPLY_IDLE_MS)
+    await settle(60_000)
     expect(page()).toEqual({ page: 'root' })
+    expect(chatShape()).toEqual(['you:text', 'agent:text'])
     g('fist')
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
@@ -1525,23 +1542,16 @@ describe('the conversation with the agent', () => {
     expect(conversation('working').steps).toEqual([{ id: 'a', label: 'Look', status: 'done' }])
   })
 
-  it('a fist while the agent works stops it, toasts, then returns to a fresh ready', async () => {
+  it('a fist while the agent works stops it: the transcript says Stopped, and the card is a fresh Ready at once', async () => {
     const stop = vi.spyOn(services, 'agentStop')
     await toWorking()
     await settle(700)
     g('fist')
     await settle()
     expect(stop).toHaveBeenCalled()
-    expect(getApp().view).toEqual({
-      kind: 'toast',
-      title: 'Stopped',
-      subtitle: 'The agent was interrupted',
-      ok: false,
-      meta: undefined,
-      returnTo: 'ready'
-    })
-    await settle(TOAST_MS)
+    // No toast: the chat card stays, with "Stopped" in place of the steps.
     expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(chatShape()).toEqual(['you:text', `note:${STOPPED_NOTE}`])
     await settle(10_000)
     expect(getApp().view).toEqual({ kind: 'ready' })
     // The stopped phrase is gone: a new sign starts a new phrase.
@@ -1556,7 +1566,8 @@ describe('the conversation with the agent', () => {
     c.tap('close')
     await settle()
     expect(stop).toHaveBeenCalled()
-    expect(viewAs('toast').title).toBe('Stopped')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(getApp().chat.at(-1)).toMatchObject({ kind: 'note', text: STOPPED_NOTE })
   })
 
   it('stopping after a quick-menu command forgets its prefix', async () => {
@@ -1585,37 +1596,37 @@ describe('the conversation with the agent', () => {
     emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Opening Spotify', status: 'done' } })
     emit({ type: 'error', runId: 'r1', message: 'Interrupted' })
     emit({ type: 'confirm', runId: 'r1', requestId: 'late', tool: 'x', details: { kind: 'generic', title: 't', lines: [] } })
-    expect(viewAs('toast').title).toBe('Stopped')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(chatShape()).toEqual(['you:text', `note:${STOPPED_NOTE}`])
     // A late confirmation request is denied so the agent never waits forever.
     expect(manual.agentRespond).toHaveBeenCalledWith('late', false)
-    await settle(TOAST_MS)
-    expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
-  it('a stopped run that had already sent something says so instead of "Stopped"', async () => {
+  it('a stopped run that had already sent something says so under "Stopped"', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
     void c.runAgent('Text Mom on my way', 'Text Mom on my way.')
     await settle()
     emit({ type: 'step', runId: 'r1', step: { id: 'm', label: 'Messaging Mom', status: 'current' } })
     g('fist')
-    expect(viewAs('toast')).toMatchObject({ title: 'Stopped', subtitle: 'The agent was interrupted' })
+    expect(getApp().view).toEqual({ kind: 'ready' })
     // The send was already running: main reports it once it lands.
     const sent = [{ tool: 'message_send', args: {}, ok: true }]
     emit({ type: 'done', runId: 'r1', result: { title: 'Message sent', subtitle: 'You stopped the rest', evidence: sent }, complete: false })
-    expect(viewAs('toast')).toMatchObject({ ok: false, title: 'Message sent', subtitle: 'You stopped the rest', returnTo: 'ready' })
-    await settle(TOAST_MS)
+    expect(chatShape()).toEqual(['you:text', `note:${STOPPED_NOTE}`, 'agent:result'])
+    expect(getApp().chat.at(-1)).toMatchObject({ answer: { ok: false, title: 'Message sent', subtitle: 'You stopped the rest' } })
+    expect(getApp().notice).toBeNull()
     expect(getApp().view).toEqual({ kind: 'ready' })
 
-    // Once the card has moved on, the report is a notice.
+    // With the chat out of sight (collapsed), a notice says so too.
     void c.runAgent('Email Sam hi', 'Email Sam hi.')
     await settle()
     g('fist')
-    await settle(TOAST_MS)
-    sign(word('hi'))
+    c.collapse()
     emit({ type: 'done', runId: 'r1', result: { title: 'Email sent', subtitle: 'You stopped the rest', evidence: sent }, complete: false })
     expect(getApp().notice).toBe('Email sent before you stopped')
-    expect(getApp().view.kind).not.toBe('toast')
+    expect(getApp().chat.at(-1)).toMatchObject({ kind: 'result', answer: { title: 'Email sent' } })
+    expect(getApp().view).toEqual({ kind: 'collapsed' })
   })
 
   it('a stop before the agent starts never launches it', async () => {
@@ -1624,16 +1635,18 @@ describe('the conversation with the agent', () => {
     g('fist') // same frame, before frontmostApp() resolved
     await settle()
     expect(run).not.toHaveBeenCalled()
-    expect(viewAs('toast').title).toBe('Stopped')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(chatShape()).toEqual(['you:text', `note:${STOPPED_NOTE}`])
   })
 
-  it('an agent that stops on its own shows the stopped toast', async () => {
+  it('an agent that stops on its own says so in the transcript', async () => {
     const { services: manual, emit } = manualAgent(services)
     useServices(manual)
     void c.runAgent('x', 'x')
     await settle()
     emit({ type: 'stopped', runId: 'r1' })
-    expect(viewAs('toast')).toMatchObject({ title: 'Stopped', returnTo: 'ready' })
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(chatShape()).toEqual(['you:text', `note:${STOPPED_NOTE}`])
   })
 
   it('an agent that cannot start says why on the card, which stays ready for the next message', async () => {
@@ -1645,8 +1658,9 @@ describe('the conversation with the agent', () => {
       answer: { ok: false, title: "Couldn't start the agent", subtitle: 'Add FACTORY_API_KEY to .env' }
     })
     expect(statusFor(getApp().view, 'command')).toEqual({ label: 'Done', tone: 'idle' })
-    await settle(REPLY_IDLE_MS)
-    expect(getApp().view).toEqual({ kind: 'ready' })
+    // It takes the next message from there: a sign starts it.
+    c.token(word('hello'))
+    expect(viewAs('recognizing').token).toBe('hello')
   })
 
   it('a rejected start does not leave the card stuck on working', async () => {
@@ -1740,26 +1754,24 @@ describe('the conversation with the agent', () => {
   describe('the reply card', () => {
     const reply = (answer: Answer): View => ({ kind: 'conversation', phase: 'reply', said: 'Hi.', steps: [], answer })
 
-    it(`stays ready for ${REPLY_IDLE_MS / 1000} s with no movement, then gives way to Ready; a movement being judged holds it`, async () => {
+    it('stays for as long as nothing happens: no idle timeout, and the conversation is never cleared', async () => {
       // The mock agent answers 1.2 s after hands down (interpret 0.5 s, then the agent 0.7 s).
       sendPhrase(word('hello'))
       await settle(1200)
       const shown = conversation('reply')
-      await settle(REPLY_IDLE_MS - 1)
+      await settle(5 * 60_000)
       expect(getApp().view).toBe(shown)
-      await settle(1)
-      expect(getApp().view).toEqual({ kind: 'ready' })
-
+      // A movement that was no sign leaves it as it is.
+      c.signStart()
+      c.signRejected()
+      expect(getApp().view).toBe(shown)
+      expect(chatShape()).toEqual(['you:text', 'agent:text'])
+      // The next message is appended under the exchange.
       sendPhrase(word('hello'))
       await settle(1200)
-      const again = conversation('reply')
-      await settle(REPLY_IDLE_MS - 100)
-      c.signStart()
-      await settle(5000)
-      expect(getApp().view).toBe(again)
-      c.signRejected()
-      await settle(2000)
-      expect(getApp().view).toEqual({ kind: 'ready' })
+      expect(chatShape()).toEqual(['you:text', 'agent:text', 'you:text', 'agent:text'])
+      await settle(5 * 60_000)
+      expect(chatShape()).toEqual(['you:text', 'agent:text', 'you:text', 'agent:text'])
     })
 
     it("has Ready's gestures: a thumbs up opens the quick menu, a fist hides the card, swipes switch modes, swipe up opens Settings", () => {
@@ -1862,7 +1874,8 @@ describe('the conversation with the agent', () => {
       await screenshotRun(() => new Promise((resolve) => setTimeout(() => resolve({ ok: true, value: 'data:x' }), 300)))
       g('fist')
       await settle(300)
-      expect(viewAs('toast').title).toBe('Stopped')
+      expect(getApp().view).toEqual({ kind: 'ready' })
+      expect(chatShape()).toEqual(['you:text', `note:${STOPPED_NOTE}`])
     })
 
     it('files that are not images get no thumbnail call', async () => {
@@ -1947,6 +1960,311 @@ describe('the conversation with the agent', () => {
       expect(getApp().view).toEqual({ kind: 'ready', hint: 'Create event: sign the details' })
       expect(interpret).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('the chat transcript (Command mode)', () => {
+  const chat = (): ChatMessage[] => getApp().chat
+  const composingWords = (): string[] => getApp().composing.tokens.map((t) => t.text)
+  /** Message texts and kinds, without ids. */
+  const lines = (): string[] =>
+    chat().map((m) => (m.kind === 'text' ? m.text : m.kind === 'note' ? `— ${m.text} —` : m.kind === 'result' ? `[${m.answer.title}]` : `<${m.kind}>`))
+  /** The live steps bubble, which is always the last one. */
+  function live(): Extract<ChatMessage, { kind: 'steps' }> {
+    const m = chat().at(-1)
+    expect(m?.kind).toBe('steps')
+    return m as Extract<ChatMessage, { kind: 'steps' }>
+  }
+
+  it('is one card in Command mode: Ready, signing, the exchange and its inline Confirm; Spell keeps its cards; a shortcut\'s Confirm stays a card', () => {
+    const details = { kind: 'generic' as const, title: 't', lines: [] }
+    const building: View = { kind: 'building', tokens: [word('hi')], current: 'hi', sentence: 'Hi' }
+    expect(isChatCard({ kind: 'ready' }, 'command')).toBe(true)
+    expect(isChatCard(building, 'command')).toBe(true)
+    expect(isChatCard({ kind: 'conversation', phase: 'working', said: 'x', steps: [] }, 'command')).toBe(true)
+    expect(isChatCard({ kind: 'confirm', requestId: 'q', details, inChat: true }, 'command')).toBe(true)
+    expect(isChatCard({ kind: 'confirm', requestId: 'q', details }, 'command')).toBe(false)
+    expect(isChatCard({ kind: 'ready' }, 'spell')).toBe(false)
+    expect(isChatCard(building, 'spell')).toBe(false)
+    expect(isChatCard({ kind: 'dictation', text: '' }, 'dictation')).toBe(false)
+    expect(isChatCard({ kind: 'didYouMean', options: ['a'], purpose: 'sign' }, 'command')).toBe(false)
+    // One width through every phase, so the window never jumps sideways.
+    expect(cardWidth({ kind: 'ready' }, 'command')).toBe(340)
+    expect(cardWidth(building, 'command')).toBe(340)
+    expect(cardWidth({ kind: 'ready' }, 'spell')).toBe(300)
+  })
+
+  it('each recognized sign joins the composing bubble at once; swipe left takes back the last word (a letter run whole)', () => {
+    c.token(word('tomorrow'))
+    expect(composingWords()).toEqual(['tomorrow'])
+    sign(word('meeting'), word('what'), word('time'))
+    expect(composingWords()).toEqual(['tomorrow', 'meeting', 'what', 'time'])
+    expect(chat()).toEqual([]) // nothing is sent while signing
+    g('swipeLeft')
+    expect(composingWords()).toEqual(['tomorrow', 'meeting', 'what'])
+    sign(letter('K'), letter('R'))
+    expect(composingWords()).toEqual(['tomorrow', 'meeting', 'what', 'K', 'R'])
+    g('swipeLeft')
+    expect(composingWords()).toEqual(['tomorrow', 'meeting', 'what'])
+    g('swipeLeft')
+    g('swipeLeft')
+    g('swipeLeft')
+    expect(composingWords()).toEqual([])
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    expect(chat()).toEqual([])
+  })
+
+  it('a fist drops the words being signed: nothing is sent', () => {
+    sign(word('hello'), word('there'))
+    g('fist')
+    expect(getApp().composing).toEqual({ tokens: [] })
+    expect(chat()).toEqual([])
+  })
+
+  it('a pick in Did you mean joins the composing bubble too', () => {
+    c.token(word('meeting'))
+    c.ambiguousSign(['tomorrow', 'today'])
+    expect(composingWords()).toEqual(['meeting'])
+    fingers(1)
+    expect(composingWords()).toEqual(['meeting', 'tomorrow'])
+  })
+
+  it('hands down sends: the composing bubble becomes a sent one and "Understanding" comes up; then the interpreter\'s sentence and the live steps', async () => {
+    sign(...MEETING)
+    g('handsDown')
+    expect(getApp().composing).toEqual({ tokens: [] })
+    expect(chat()).toEqual([
+      { id: expect.any(String), from: 'you', kind: 'text', text: assembleSentence(MEETING) },
+      { id: expect.any(String), from: 'agent', kind: 'steps', steps: [UNDERSTANDING_STEP] }
+    ])
+    const sentId = chat()[0].id
+    await settle(500)
+    // The interpreter's sentence replaces the signed words, in the same bubble.
+    expect(chat()[0]).toMatchObject({ id: sentId, text: 'Meeting tomorrow at 3pm.' })
+    expect(live().steps).toEqual([{ id: 's0', label: 'Opening Calendar', status: 'current' }])
+    await settle(700)
+    expect(live().steps.map((s) => `${s.label}:${s.status}`)).toEqual(['Opening Calendar:done', 'Creating event:current'])
+    // One live bubble, updated in place.
+    expect(chatShape()).toEqual(['you:text', 'agent:steps'])
+  })
+
+  it('a quick-menu pick labels the composing bubble and the sent one', async () => {
+    g('thumbsUp')
+    fingers(1)
+    expect(getApp().composing).toEqual({ tokens: [], label: 'Create event' })
+    c.token(word('meeting'))
+    expect(getApp().composing).toEqual({ tokens: [word('meeting')], label: 'Create event' })
+    g('handsDown')
+    expect(chat()[0]).toMatchObject({ from: 'you', kind: 'text', text: 'Meeting', prefix: 'Create event' })
+    expect(getApp().composing).toEqual({ tokens: [] })
+  })
+
+  it("the agent's words replace the live bubble; the reply card's next sign composes under them", async () => {
+    await toReply(word('hello'))
+    expect(lines()).toEqual(['Hello.', 'Hello! What can I do for you?'])
+    expect(chatShape()).toEqual(['you:text', 'agent:text'])
+
+    // A new phrase after the reply: the exchange stays, the words compose, and send as the next one.
+    c.token(word('what'))
+    expect(composingWords()).toEqual(['what'])
+    expect(lines()).toEqual(['Hello.', 'Hello! What can I do for you?'])
+    c.token(word('time'))
+    expect(composingWords()).toEqual(['what', 'time'])
+    g('handsDown')
+    expect(chatShape()).toEqual(['you:text', 'agent:text', 'you:text', 'agent:steps'])
+    await settle(1200)
+    expect(lines()).toEqual(['Hello.', 'Hello! What can I do for you?', 'What time', "It's 10:00 AM on Friday, October 25."])
+  })
+
+  it('a task ends in the result bubble: the badge, the title and subtitle from the tools, the agent\'s line', async () => {
+    await toWorking()
+    await settle(1400)
+    g('thumbsUp')
+    await settle(1400)
+    conversation('reply')
+    expect(chat().at(-1)).toMatchObject({
+      from: 'agent',
+      kind: 'result',
+      answer: {
+        ok: true,
+        title: 'Meeting created',
+        subtitle: 'Tomorrow at 10:00 AM with 4 guests.',
+        text: 'Team Sync is on your calendar for tomorrow at 10.',
+        view: { kind: 'openApp', app: 'Calendar' }
+      }
+    })
+    expect(chatShape()).toEqual(['you:text', 'agent:confirm', 'agent:result'])
+  })
+
+  it('a write is asked inline and nothing runs without a thumbs up; allowed, the steps come back under it', async () => {
+    const respond = vi.spyOn(services, 'agentRespond')
+    await toWorking()
+    await settle(1400)
+    const confirm = viewAs('confirm')
+    expect(confirm.inChat).toBe(true)
+    // The Confirm bubble takes the live bubble's place.
+    expect(chatShape()).toEqual(['you:text', 'agent:confirm'])
+    expect(chat().at(-1)).toMatchObject({
+      kind: 'confirm',
+      requestId: confirm.requestId,
+      status: 'pending',
+      details: { kind: 'event', title: 'Team Sync', timeLabel: '10:00 – 11:00 AM' }
+    })
+    // Nothing is written while it waits, whatever else the hands do.
+    await settle(30_000)
+    g('swipeLeft')
+    g('handsDown')
+    fingers(1)
+    c.token(word('yes'))
+    expect(respond).not.toHaveBeenCalled()
+    expect(getApp().view).toBe(confirm)
+    expect(chat().at(-1)).toMatchObject({ kind: 'confirm', status: 'pending' })
+
+    g('thumbsUp')
+    expect(respond).toHaveBeenCalledWith(confirm.requestId, true)
+    expect(chat()[1]).toMatchObject({ kind: 'confirm', status: 'allowed' })
+    expect(chatShape()).toEqual(['you:text', 'agent:confirm', 'agent:steps'])
+    await settle()
+    expect(live().steps.map((s) => s.status)).toEqual(['done', 'done', 'current'])
+  })
+
+  it('a fist cancels the inline Confirm: nothing is written, and the result says so', async () => {
+    const respond = vi.spyOn(services, 'agentRespond')
+    await toWorking()
+    await settle(1400)
+    const confirm = viewAs('confirm')
+    g('fist')
+    expect(respond).toHaveBeenCalledWith(confirm.requestId, false)
+    expect(chat()[1]).toMatchObject({ kind: 'confirm', status: 'cancelled' })
+    await settle()
+    expect(chat().at(-1)).toMatchObject({ kind: 'result', answer: { ok: false, title: 'Nothing was done', subtitle: 'You cancelled it' } })
+    expect(chatShape()).toEqual(['you:text', 'agent:confirm', 'agent:result'])
+  })
+
+  it('steps that arrive while the Confirm waits come back under it once answered; a Confirm left open when the run ends reads Cancelled', async () => {
+    const { services: manual, emit } = manualAgent(services)
+    useServices(manual)
+    const details = { kind: 'mail' as const, to: 'sam@example.com', subject: 'Hi', body: 'On my way' }
+    void c.runAgent('Email Sam', 'Email Sam.')
+    await settle()
+    emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Searching Contacts', status: 'current' } })
+    emit({ type: 'confirm', runId: 'r1', requestId: 'q1', tool: 'mail_send', details })
+    emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Searching Contacts', status: 'done' } })
+    expect(chatShape()).toEqual(['you:text', 'agent:confirm'])
+    c.tap('primary')
+    expect(manual.agentRespond).toHaveBeenLastCalledWith('q1', true)
+    expect(live().steps).toEqual([{ id: 'a', label: 'Searching Contacts', status: 'done' }])
+
+    emit({ type: 'confirm', runId: 'r1', requestId: 'q2', tool: 'mail_send', details })
+    // Main stopped waiting: the run ends with the Confirm unanswered.
+    emit({ type: 'error', runId: 'r1', message: 'Timed out waiting for confirmation' })
+    expect(chat()[2]).toMatchObject({ kind: 'confirm', requestId: 'q2', status: 'cancelled' })
+    expect(chat().at(-1)).toMatchObject({ kind: 'error', title: "Couldn't finish", subtitle: 'Timed out waiting for confirmation' })
+  })
+
+  it('errors end the run in the error style: an agent that cannot start, or cannot finish', async () => {
+    vi.spyOn(services, 'agentRun').mockResolvedValueOnce({ ok: false, error: 'nope', missingKey: 'FACTORY_API_KEY' })
+    sendPhrase(word('hello'))
+    await settle(500)
+    expect(chat().at(-1)).toEqual({
+      id: expect.any(String),
+      from: 'agent',
+      kind: 'error',
+      title: "Couldn't start the agent",
+      subtitle: 'Add FACTORY_API_KEY to .env'
+    })
+
+    const { services: manual, emit } = manualAgent(services)
+    useServices(manual)
+    void c.runAgent('Play music', 'Play music.')
+    await settle()
+    emit({ type: 'step', runId: 'r1', step: { id: 'a', label: 'Opening Spotify', status: 'current' } })
+    emit({ type: 'error', runId: 'r1', message: 'Spotify is not installed' })
+    expect(chat().at(-1)).toMatchObject({ kind: 'error', title: "Couldn't finish", subtitle: 'Spotify is not installed' })
+    expect(chatShape()).toEqual(['you:text', 'agent:error', 'you:text', 'agent:error'])
+  })
+
+  it('a fist while the interpreter reads drops the phrase: "Cancelled" under it, and the agent never starts', async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    sendPhrase(word('hello'))
+    g('fist')
+    expect(chatShape()).toEqual(['you:text', `note:${CANCELLED_NOTE}`])
+    await settle(2000)
+    expect(run).not.toHaveBeenCalled()
+    expect(chatShape()).toEqual(['you:text', `note:${CANCELLED_NOTE}`])
+
+    // A collapse (the chevron) drops it the same way.
+    sendPhrase(word('hello'))
+    c.tap('collapse')
+    expect(chatShape().slice(-2)).toEqual(['you:text', `note:${CANCELLED_NOTE}`])
+  })
+
+  it('a stop: "Stopped" replaces the steps, and the next phrase starts a new exchange under it', async () => {
+    await toWorking()
+    await settle(700)
+    g('fist')
+    expect(chatShape()).toEqual(['you:text', `note:${STOPPED_NOTE}`])
+    sendPhrase(word('hello'))
+    await settle(1200)
+    expect(lines()).toEqual(['Meeting tomorrow at 3pm.', `— ${STOPPED_NOTE} —`, 'Hello.', 'Hello! What can I do for you?'])
+  })
+
+  it('the screenshot joins its result bubble, and a click on it opens the file', async () => {
+    const { services: manual, emit } = manualAgent(services)
+    const openTarget = vi.fn(async () => {})
+    useServices({ ...manual, openTarget, imageThumb: async () => ({ ok: true, value: MOCK_SCREENSHOT_THUMB }) })
+    void c.runAgent('Take a screenshot', 'Take a screenshot.')
+    await settle()
+    const view = { kind: 'openFile' as const, path: MOCK_SCREENSHOT_PATH }
+    const evidence = [{ tool: 'take_screenshot', args: {}, ok: true }]
+    emit({ type: 'done', runId: 'r1', result: { title: 'Screenshot taken', subtitle: 'Desktop', evidence, view }, complete: true })
+    // The live bubble stays while the thumbnail loads.
+    expect(chatShape()).toEqual(['you:text', 'agent:steps'])
+    await settle()
+    const result = chat().at(-1)
+    expect(result).toMatchObject({ kind: 'result', answer: { title: 'Screenshot taken', view, thumb: MOCK_SCREENSHOT_THUMB } })
+    c.openChatResult(result!.id)
+    expect(openTarget).toHaveBeenCalledWith(view)
+  })
+
+  it('a phrase signed as a gesture task shows with its label, and no agent bubble follows', async () => {
+    c.openSettings()
+    fingers(2)
+    await settle()
+    fingers(2) // Sign a new task
+    expect(getApp().composing).toEqual({ tokens: [], label: GESTURE_TASK_LABEL })
+    sendPhrase(...MEETING)
+    await settle(500)
+    expect(chat().map(({ id: _id, ...m }) => m)).toEqual([
+      { from: 'you', kind: 'text', text: 'Schedule a meeting tomorrow at 3pm with the team', prefix: GESTURE_TASK_LABEL }
+    ])
+  })
+
+  it("a gesture shortcut's agent run keeps the Working card, the Confirm card and the Stopped toast, and leaves the chat alone", async () => {
+    const { services: manual, emit } = manualAgent(services)
+    useServices({ ...manual, runShortcut: () => new Promise<ShortcutRunResult>(() => {}) })
+    void c.runShortcut('g2', 'ready')
+    emit({ type: 'started', runId: 's1', intent: 'Play Motion Sickness' })
+    expect(viewAs('working').intent).toBe('Play Motion Sickness')
+    emit({ type: 'step', runId: 's1', step: { id: 'a', label: 'Opening Spotify', status: 'current' } })
+    emit({ type: 'confirm', runId: 's1', requestId: 'q', tool: 'x', details: { kind: 'generic', title: 't', lines: [] } })
+    expect(viewAs('confirm').inChat).toBeUndefined()
+    g('thumbsUp')
+    expect(manual.agentRespond).toHaveBeenCalledWith('q', true)
+    viewAs('working')
+    g('fist')
+    expect(viewAs('toast').title).toBe('Stopped')
+    expect(chat()).toEqual([])
+  })
+
+  it(`keeps the session's last ${MAX_CHAT} messages, across a collapse`, async () => {
+    for (let i = 0; i < 12; i++) await toReply(word('hello'))
+    expect(chat()).toHaveLength(MAX_CHAT)
+    expect(new Set(chat().map((m) => m.id)).size).toBe(MAX_CHAT)
+    c.collapse()
+    c.expand()
+    expect(chat()).toHaveLength(MAX_CHAT)
+    expect(chatShape().slice(-2)).toEqual(['you:text', 'agent:text'])
   })
 })
 

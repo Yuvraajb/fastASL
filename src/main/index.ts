@@ -112,6 +112,9 @@ const llm = createLlmService({
   provider: llmProvider
 })
 
+/** Screenshots are this tall (DIP) unless the card reaches further down. */
+const STAGE_CAPTURE_MIN = 480
+
 const services: MainServices = {
   interpret: devLogged(llmLabel, 'interpret', llm.interpret),
   spellSuggest: devLogged(llmLabel, 'spellSuggest', llm.spellSuggest),
@@ -123,7 +126,15 @@ const services: MainServices = {
     if (!stage) return ''
     const dir = join(process.cwd(), 'docs', 'screens')
     mkdirSync(dir, { recursive: true })
-    const image = await stage.webContents.capturePage()
+    // The usual 640×480 shot; a taller card (the chat card) gets a taller one, down to its bottom edge.
+    const bottom = Number(
+      await stage.webContents
+        .executeJavaScript(`document.querySelector('.card')?.getBoundingClientRect().bottom ?? 0`)
+        .catch(() => 0)
+    )
+    const [width, height] = stage.getContentSize()
+    const shot = Math.min(height, Math.max(STAGE_CAPTURE_MIN, Math.ceil(bottom) + 36))
+    const image = await stage.webContents.capturePage({ x: 0, y: 0, width, height: shot })
     const file = join(dir, `${name}.png`)
     writeFileSync(file, image.toPNG())
     return file

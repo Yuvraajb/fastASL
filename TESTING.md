@@ -872,3 +872,34 @@ Setup: `.env` with `LLM_PROVIDER=gemini`, your `GEMINI_API_KEY` and your `FACTOR
 5. **Spell mode.** Swipe to Spell. **Expected:** letters only; no streamed words. `[hello-dbg]` says streaming is off.
 6. **Real data (optional).** `FASTASL_STREAM_DATA=<clip folders> npx vitest run streamPhrase.eval`. **Expected:** it prints each signer's phrase. The line "live" equals "matcher" unless a gesture acted.
 
+
+## Chat transcript (Command mode)
+
+Setup: the renderer hot-reloads, so the running `npm run dev` picks this up (the screenshot stage changes need no restart for this). Work in Command mode (no mode label in the header). With `LLM_PROVIDER=droid` the sent bubble keeps the signed words ("Tomorrow meeting what time"); with Gemini it turns into Gemini's sentence. This replaces the conversation card in "Conversational command mode" above: those steps now happen on the chat card.
+
+1. **The card.** Expand the card. **Expected:** one 340 px card: the camera, then "Sign to start / hands down to send" under it, then a slim footer (camera · "sign to talk · menu · hide" · minimize).
+2. **Words stream in.** Sign TOMORROW MEETING WHAT TIME without lowering your hands (or Control+Option+S four times). **Expected:**
+    - Each word appears in a dimmed right-hand bubble the moment it is recognized, the newest brightest, with a green caret: "tomorrow meeting what time".
+    - While "Listening..." is in the header the bubble pulses green.
+    - The card doesn't change height as words arrive, or as Listening comes and goes.
+3. **Delete.** Swipe left. **Expected:** "time" leaves the bubble. Swipe left until it is empty: the card goes back to "Sign to start".
+4. **Send.** Sign the phrase again and lower both hands. **Expected:**
+    - The bubble becomes a solid right-hand bubble with the sentence, and "Agent" with a spinning "Understanding…" appears under it. Then "Starting agent…" and the agent's steps ("✓ Thinking", "Checking your calendar…"), in one bubble that updates in place.
+    - The footer reads "fist to stop", and the header shows "Working..." with an X.
+    - Then the steps bubble gives way to the agent's reply.
+5. **Back and forth.** After a reply, sign THANK YOU and lower your hands. **Expected:** the first exchange stays; the new words compose under it and send as the next message. Wait a few minutes on a reply: **Expected:** nothing is cleared, and the card stays on the reply.
+6. **A task with a write.** Thumbs up, 1 finger (Create event), then sign MEETING TOMORROW and lower your hands (or with mock services: Control+Option+S five times, then Control+Option+H). **Expected:**
+    - The sent bubble is labelled "Create event".
+    - Instead of the steps, an "Agent" bubble with a green outline: "Create this event?", the event's title, date and time, guests, and Allow / Cancel buttons. The footer reads "allow · cancel".
+    - Nothing happens until a thumbs up, however long you wait. Signs, swipes and hands down do nothing.
+    - Thumbs up: the bubble reads "✓ Allowed" (green), the steps come back under it, then a result bubble with a green check, "Meeting created" and the time.
+    - Run it again and make a fist on the Confirm: it reads "Cancelled", then a result "Nothing was done / You cancelled it".
+7. **Stop.** Start a task and make a fist while the steps run. **Expected:** "Stopped" as a quiet line in place of the steps, and the card is Ready at once (no toast). The next phrase starts under it.
+8. **Cancel early.** Lower your hands and make a fist at once, while "Understanding…" spins. **Expected:** "Cancelled" under the sent bubble, and no agent run in the log.
+9. **Errors.** Empty `FACTORY_API_KEY` and restart, then send a phrase. **Expected:** a red-tinted bubble "Couldn't start the agent / Add FACTORY_API_KEY to .env".
+10. **Screenshot.** Send a phrase asking for a screenshot. **Expected:** a result bubble with the screenshot's thumbnail beside "Screenshot taken" and the file name. A click on the thumbnail (or a thumbs up while it is the latest reply) opens it in Preview.
+11. **Long sessions.** Keep talking until the card stops growing. **Expected:** it stops at about 560 px; the transcript scrolls, older bubbles fade out under the camera, and the newest stays in view. Scroll up with the trackpad to read: new words don't yank it back until you send. Collapse and expand: the conversation is still there (the last 20 messages).
+12. **Unchanged.** Swipe to Dictation and Spell: their own cards. Did you mean, "Is this X?", the quick menu, Settings, the collapsed pill and the peace-sign toast look as before. A gesture shortcut that falls back to the agent still shows the Working card, the Confirm card and the Stopped toast.
+13. **Screens and automated checks.**
+    - `node scripts/screens.mjs chatEmpty`, one id per run (also `chatComposing`, `chatWorking`, `chatReply`, `chatConfirm`, `chatScreenshot`). **Expected:** they match `docs/screens/51`–`56`. The tray menu › Dev: states lists them as "Chat: …".
+    - `npm run typecheck`, `npx vitest run` and `npx electron-vite build --outDir <a scratch folder>`. **Expected:** no type errors, every test passes, and the build succeeds.

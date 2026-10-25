@@ -130,7 +130,7 @@ describe('ipcServices identifySign', () => {
     expect(llmUnavailable('gemini', none)).toBe('Add GEMINI_API_KEY to .env')
     expect(llmUnavailable('local', none)).toBeNull()
     expect(llmUnavailable('mock', none)).toBeNull()
-    expect(llmUnavailable('gpt?', none)).toBe('Set LLM_PROVIDER in .env to claude, gemini, local or mock')
+    expect(llmUnavailable('gpt?', none)).toBe('Set LLM_PROVIDER in .env to claude, gemini, local, mock or droid')
   })
 
   it('mockServices guess HELLO and never want frames', async () => {

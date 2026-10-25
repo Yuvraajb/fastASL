@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react'
-import { cardWidth, type View } from '../app/types'
+import { useApp } from '../app/store'
+import { cardWidth, isChatCard, type View } from '../app/types'
 import './card.css'
 
 interface Props {
@@ -27,14 +28,18 @@ export function CardShell({ view, stage, children }: Props): React.JSX.Element {
     return () => ro.disconnect()
   }, [stage])
 
-  const fixedWidth = view.kind === 'collapsed' ? undefined : cardWidth(view)
+  const mode = useApp((s) => s.mode)
+  const fixedWidth = view.kind === 'collapsed' ? undefined : cardWidth(view, mode)
+  // Command mode's chat card stays mounted through its phases (Ready, signing, working, Confirm,
+  // reply): no fade-in, feed restart or scroll reset as each word or step arrives.
+  const layout = isChatCard(view, mode) ? 'chat' : view.kind
   return (
     <div
       ref={ref}
-      className={`card card--${view.kind}${stage ? ' card--stage' : ''}`}
+      className={`card card--${layout}${stage ? ' card--stage' : ''}`}
       style={fixedWidth ? { width: fixedWidth } : undefined}
     >
-      <div className="card__content" key={view.kind}>
+      <div className="card__content" key={layout}>
         {children}
       </div>
     </div>
