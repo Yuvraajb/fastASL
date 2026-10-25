@@ -1,3 +1,4 @@
+import { DEFAULT_DICTIONARY } from '@shared/dictionary'
 import type { Mode, SignTemplate } from '@shared/types'
 import { HOLD_MS } from '../engine/gestures/engine'
 import { slotPresent } from '../engine/recognition/features'
@@ -59,7 +60,8 @@ interface Teaching {
 export function connectRecognition(controller: Target): RecognitionConnection {
   const initial = getApp()
   // Outside Spell mode a letter waits out the longest control hold, so suspend() can drop it.
-  const rec = new RecognitionSession({ controlHoldMs: Math.max(...Object.values(HOLD_MS)) })
+  const rec = new RecognitionSession({ controlHoldMs: Math.max(...Object.values(HOLD_MS)), dictionary: DEFAULT_DICTIONARY })
+  if (window.fastasl?.isDev) console.log(`[lexicon] ${rec.lexiconSize} standard sign(s) loaded, numbers ${getApp().pushToListen ? 'on' : 'off'}`)
   let hasWords = false
   const setTemplates = (templates: SignTemplate[]): void => {
     rec.setTemplates(templates)
@@ -70,6 +72,7 @@ export function connectRecognition(controller: Target): RecognitionConnection {
   }
   setTemplates(initial.templates)
   rec.setSensitivity(SENSITIVITY[initial.sensitivity])
+  rec.setNumbers(getApp().pushToListen)
   /** Spell mode or Spell a new word: letters only, each as soon as it is held. */
   let lettersOnly = recognitionMode(initial) === 'spell'
   rec.setMode(recognitionMode(initial))
@@ -78,6 +81,7 @@ export function connectRecognition(controller: Target): RecognitionConnection {
   let fed = false
   let cameraSession: CanvasImageSource | null = null
   let lastT = 0
+  let lastDbg = 0
   /** A movement got signStart and no outcome yet. */
   let moving = false
   /** A swipe made by that movement, waiting for its verdict. */
@@ -201,6 +205,11 @@ export function connectRecognition(controller: Target): RecognitionConnection {
         if (teaching) teach(teaching, frame, aspect, newCamera)
         return false
       }
+      if (getApp().pushToListen && !getApp().listening) {
+        fed = false
+        forgetMovement()
+        return false
+      }
       rec.setAspect(aspect)
       // Back from a view without signs, or a new camera session: no stale motion or holds.
       if (!fed || newCamera) {
@@ -209,6 +218,10 @@ export function connectRecognition(controller: Target): RecognitionConnection {
       }
       fed = true
       const events = rec.update(frame)
+      if (window.fastasl?.isDev && frame.hands.length > 0 && frame.t - lastDbg > 200) {
+        lastDbg = frame.t
+        log(`[hello-dbg] ${rec.lexiconDebug}`)
+      }
       if (rec.lastWord && window.fastasl?.isDev) {
         const { status, distance, alternatives } = rec.lastWord
         const best = alternatives[0]
@@ -222,7 +235,7 @@ export function connectRecognition(controller: Target): RecognitionConnection {
       // A swipe made while recognition judges a movement waits for the verdict: a recognized
       // word wins (MUSIC sweeps a flat hand sideways); otherwise the swipe acts once the
       // movement ends. Without word templates there is nothing to wait for.
-      if (moving && hasWords && SWIPES.has(input.gesture)) {
+      if (moving && (hasWords || rec.signPending) && SWIPES.has(input.gesture)) {
         log(`[gesture] ${input.gesture} waits for the sign`)
         heldSwipe = { input, t: lastT }
         return

@@ -1,5 +1,5 @@
-import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision'
-import type { FrameSample } from '../types'
+import { FaceDetector, FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision'
+import type { FaceBox, FrameSample } from '../types'
 
 export type Delegate = 'GPU' | 'CPU'
 
@@ -30,6 +30,39 @@ export function toFrameSample(result: HandLandmarkerResult, t: number): FrameSam
       }
     })
   }
+}
+
+/** The face moves slowly, so it is looked for on every Nth camera frame and the last box is reused. */
+const FACE_EVERY_N_FRAMES = 3
+/** A face not seen for this long is forgotten (the person left, or turned away). */
+const FACE_FORGET_MS = 1500
+
+/** Loads the optional face detector; without its model or on any failure, signs just use frame regions. */
+async function createFaceDetector(fileset: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>): Promise<FaceDetector | null> {
+  const modelAssetPath = new URL('./mediapipe/face_detector.tflite', location.href).href
+  if (!(await assetExists(modelAssetPath))) return null
+  try {
+    return await FaceDetector.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath, delegate: 'CPU' },
+      runningMode: 'VIDEO',
+      minDetectionConfidence: 0.5
+    })
+  } catch (err) {
+    console.warn('[handTracker] face detector unavailable, using frame regions', err)
+    return null
+  }
+}
+
+/** The biggest face in the result as a fraction of the image, or null. */
+export function faceBoxOf(result: { detections: { boundingBox?: { originX: number; originY: number; width: number; height: number } }[] }, width: number, height: number): FaceBox | null {
+  let best: FaceBox | null = null
+  for (const d of result.detections) {
+    const b = d.boundingBox
+    if (!b || !(width > 0) || !(height > 0)) continue
+    const box = { cx: (b.originX + b.width / 2) / width, cy: (b.originY + b.height / 2) / height, w: b.width / width, h: b.height / height }
+    if (!best || box.w * box.h > best.w * best.h) best = box
+  }
+  return best
 }
 
 /** scripts/fetch-assets.mjs didn't run or failed (offline install, `--ignore-scripts`), so retrying won't help. */
@@ -91,14 +124,36 @@ export async function createHandTracker(): Promise<HandTracker> {
     landmarker = await load('CPU')
   }
 
+  const faces = await createFaceDetector(fileset)
   let lastT = 0
+  let frames = 0
+  let face: FaceBox | undefined
+  let faceSeenAt = -Infinity
   return {
     delegate,
     detect(element, tMs) {
       const t = tMs > lastT ? tMs : lastT + 1
       lastT = t
-      return toFrameSample(landmarker.detectForVideo(element, t), t)
+      const sample = toFrameSample(landmarker.detectForVideo(element, t), t)
+      if (faces && frames++ % FACE_EVERY_N_FRAMES === 0) {
+        try {
+          const width = element instanceof HTMLVideoElement ? element.videoWidth : element.width
+          const height = element instanceof HTMLVideoElement ? element.videoHeight : element.height
+          const found = faceBoxOf(faces.detectForVideo(element, t), width, height)
+          if (found) {
+            face = found
+            faceSeenAt = t
+          }
+        } catch {
+          // A failed face frame keeps the last box; hands are what matter.
+        }
+      }
+      if (face && t - faceSeenAt <= FACE_FORGET_MS) sample.face = face
+      return sample
     },
-    close: () => landmarker.close()
+    close: () => {
+      landmarker.close()
+      faces?.close()
+    }
   }
 }

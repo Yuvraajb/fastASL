@@ -4,6 +4,7 @@ import type {
   AgentResult,
   AgentStep,
   CameraSource,
+  ChatEvent,
   CustomGesture,
   EnvKey,
   IntentResult,
@@ -13,7 +14,7 @@ import type {
   SignTemplate
 } from '@shared/types'
 import { CAPTURE_REASONS, type ShapeCapture } from '../engine/gestures/customShapes'
-import { getApp, setApp } from './store'
+import { getApp, setApp, type ChatState } from './store'
 import type { Services } from './services'
 import type { SettingsPage, Token, View } from './types'
 import { live } from './live'
@@ -51,6 +52,7 @@ export type TapTarget =
   | 'proceed'
   | 'option'
   | 'settings'
+  | 'chat'
 
 export const QUICK_MENU = ['Create event', 'Send message', 'Search web', 'Take notes', 'Open app']
 export const SETTINGS_ROOT = ['Teach a sign', 'New gesture', 'My gestures', 'Camera source', 'Sensitivity']
@@ -198,6 +200,9 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
       return new Set(['fingers', 'fist'])
     case 'dictation':
       return new Set(['fist', 'swipeLeft', 'swipeRight', 'swipeUp'])
+    case 'chat':
+      // Thumbs up sends, a swipe left deletes the last word, a fist stops a reply or leaves.
+      return new Set(['thumbsUp', 'fist', 'swipeLeft'])
     case 'toast':
       return new Set(['fist'])
     case 'settings':
@@ -248,6 +253,7 @@ export function takesSigns(view: View): boolean {
     case 'building':
     case 'sentence':
     case 'dictation':
+    case 'chat':
       return true
     case 'settings':
       return view.settings.page === 'teachSpell'
@@ -360,6 +366,7 @@ export class Controller {
   /** A stream picked in Settings that hasn't shown a frame yet (cameraStatus). */
   private untestedStream = false
   private unsubscribe: (() => void) | null = null
+  private unsubscribeChat: (() => void) | null = null
   /**
    * The notice a running LLM call put up ("Rate limited, retrying..."), and whether that call is
    * still the card's. It goes when the call settles or is superseded or cancelled.
@@ -380,6 +387,8 @@ export class Controller {
   dispose(): void {
     this.unsubscribe?.()
     this.unsubscribe = null
+    this.unsubscribeChat?.()
+    this.unsubscribeChat = null
     this.clearTimers()
   }
 
@@ -387,12 +396,15 @@ export class Controller {
   setServices(services: Services): void {
     this.unsubscribe?.()
     this.unsubscribe = null
+    this.unsubscribeChat?.()
+    this.unsubscribeChat = null
     this.services = services
     this.subscribe()
   }
 
   private subscribe(): void {
     if (!this.unsubscribe) this.unsubscribe = this.services.onAgentEvent((e) => this.onAgentEvent(e))
+    if (!this.unsubscribeChat) this.unsubscribeChat = this.services.onChatEvent((e) => this.onChatEvent(e))
   }
 
   get view(): View {
@@ -575,10 +587,109 @@ export class Controller {
     this.setView({ kind: 'settings', settings: { page: 'root' } })
   }
 
+  // ---------------------------------------------------------------- chat
+
+  openChat(): void {
+    this.subscribe() // dispose() may have run (React StrictMode re-mounts App)
+    this.resetPhrase()
+    this.setView({ kind: 'chat' })
+  }
+
+  /** The signed sentence (after any edit) goes to the chat as the next message. */
+  sendSentenceToChat(): void {
+    const view = this.view
+    if (view.kind !== 'sentence') return
+    const text = view.sentence.trim()
+    if (!text) return
+    this.openChat()
+    // A reply still being written keeps the draft instead of dropping the sentence.
+    const draft = getApp().chat.draft
+    this.setChat({ draft: draft ? `${draft} ${text}` : text })
+    this.chatSend()
+  }
+
+  /** Back to the idle view. The conversation is kept for the next time chat opens. */
+  chatLeave(): void {
+    this.setView(this.idleView())
+  }
+
+  /** A recognized word or number joins the draft. Letters are ignored here: they come from Spell mode. */
+  private chatToken(token: Token): void {
+    if (token.kind !== 'word') return
+    const { draft } = getApp().chat
+    this.setChat({ draft: draft ? `${draft} ${token.text}` : token.text })
+  }
+
+  /** The keyboard edited the draft. */
+  chatEdit(text: string): void {
+    this.setChat({ draft: text })
+  }
+
+  chatDeleteLastWord(): void {
+    const words = getApp().chat.draft.trim().split(/\s+/).filter(Boolean)
+    words.pop()
+    this.setChat({ draft: words.join(' ') })
+  }
+
+  chatSend(): void {
+    const chat = getApp().chat
+    const text = chat.draft.replace(/\s+/g, ' ').trim()
+    if (!text || chat.busy) return
+    this.subscribe()
+    const id = crypto.randomUUID()
+    this.setChat({
+      draft: '',
+      busy: true,
+      messages: [
+        ...chat.messages,
+        { id: `${id}:you`, role: 'user', text },
+        { id, role: 'assistant', text: '', status: 'streaming' }
+      ]
+    })
+    void this.services.chatSend(id, text).then((res) => {
+      if (!res.ok) this.finishChat(id, 'error', res.error)
+    })
+  }
+
+  chatStop(): void {
+    void this.services.chatStop()
+  }
+
+  /** A new conversation: the model forgets, the list empties. */
+  chatClear(): void {
+    void this.services.chatReset()
+    this.setChat({ messages: [], draft: '', busy: false })
+  }
+
+  private setChat(patch: Partial<ChatState>): void {
+    setApp({ chat: { ...getApp().chat, ...patch } })
+  }
+
+  private onChatEvent(e: ChatEvent): void {
+    const messages = getApp().chat.messages
+    if (!messages.some((m) => m.id === e.id)) return
+    if (e.type === 'delta') {
+      this.setChat({ messages: messages.map((m) => (m.id === e.id ? { ...m, text: m.text + e.text } : m)) })
+    } else if (e.type === 'done') this.finishChat(e.id, 'done')
+    else this.finishChat(e.id, 'error', e.message)
+  }
+
+  private finishChat(id: string, status: 'done' | 'error', error?: string): void {
+    const chat = getApp().chat
+    this.setChat({
+      busy: false,
+      messages: chat.messages.map((m) =>
+        m.id === id ? { ...m, status, text: status === 'error' ? error ?? 'Something went wrong' : m.text } : m
+      )
+    })
+  }
+
   /** Gesture from the engine or a dev hotkey. Gated by the current view. */
   gesture(input: GestureInput): void {
     const view = this.view
     if (!activeGestures(view, getApp().mode).has(input.gesture)) return
+    // While the mic is held the hands are signing: a 2 looks like the peace-sign shortcut, so shapes don't fire.
+    if (input.gesture === 'shape' && getApp().pushToListen && getApp().listening) return
     const g = input.gesture
     switch (view.kind) {
       case 'collapsed':
@@ -637,6 +748,14 @@ export class Controller {
       case 'toast':
         if (g === 'fist') this.leaveToast(view.returnTo)
         return
+      case 'chat':
+        if (g === 'thumbsUp') this.chatSend()
+        else if (g === 'swipeLeft') this.chatDeleteLastWord()
+        else if (g === 'fist') {
+          if (getApp().chat.busy) this.chatStop()
+          else this.chatLeave()
+        }
+        return
       case 'settings': {
         const page = view.settings
         if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
@@ -671,12 +790,14 @@ export class Controller {
     if (target === 'expand') return this.expand()
     if (target === 'camera') return this.toggleCamera()
     if (target === 'settings') return this.openSettings()
+    if (target === 'chat') return view.kind === 'sentence' ? this.sendSentenceToChat() : this.openChat()
     if (target === 'option' && index !== undefined) return this.pickOption(index)
     if (target === 'close') {
       if (view.kind === 'working') this.stopAgent()
       else if (view.kind === 'confirm') void this.respondConfirm(false)
       else if (view.kind === 'settings') this.settingsBack()
       else if (view.kind === 'toast') this.leaveToast(view.returnTo)
+      else if (view.kind === 'chat') this.chatLeave()
       else {
         // The X on the dictation card starts a new run of text: no space before the next sign.
         if (view.kind === 'dictation') this.lastTyped = null
@@ -740,6 +861,7 @@ export class Controller {
       if (view.settings.page === 'teachSpell' && token.kind === 'letter') this.setTeachWord(view.settings.letters + token.text)
       return
     }
+    if (view.kind === 'chat') return this.chatToken(token)
     if (mode === 'dictation' && (view.kind === 'dictation' || view.kind === 'ready')) {
       return this.dictate(token, view.kind === 'dictation' ? view.text : '')
     }

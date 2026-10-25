@@ -9,3 +9,6 @@ out-screens/
 *.tsbuildinfo
 .claude/
 src/renderer/public/mediapipe/
+
+# ASL Citizen clips and anything derived from them (non-commercial research license: never commit or redistribute)
+data/

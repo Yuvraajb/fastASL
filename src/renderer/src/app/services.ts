@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  ChatEvent,
   AgentRunRequest,
   FrontmostApp,
   InterpretRequest,
@@ -26,6 +27,11 @@ export interface Services {
   agentRespond(requestId: string, approved: boolean): Promise<void>
   onAgentEvent(cb: (event: AgentEvent) => void): () => void
   runShortcut(gestureId: string): Promise<ShortcutRunResult>
+  /** Starts a chat reply; its text arrives through onChatEvent, tagged with `id`. */
+  chatSend(id: string, text: string): Promise<Result<void>>
+  chatStop(): Promise<void>
+  chatReset(): Promise<void>
+  onChatEvent(cb: (event: ChatEvent) => void): () => void
   frontmostApp(): Promise<FrontmostApp | null>
   typeText(text: string): Promise<Result<void>>
   openTarget(action: ViewAction): Promise<void>
@@ -69,6 +75,10 @@ export function ipcServices(): Services {
     agentRespond: (id, approved) => api.agentRespond(id, approved),
     onAgentEvent: (cb) => api.onAgentEvent(cb),
     runShortcut: (id) => api.runShortcut(id),
+    chatSend: (id, text) => api.chatSend(id, text),
+    chatStop: () => api.chatStop(),
+    chatReset: () => api.chatReset(),
+    onChatEvent: (cb) => api.onChatEvent(cb),
     frontmostApp: () => api.getFrontmostApp(),
     typeText: (text) => api.typeText(text),
     openTarget: (action) => api.openTarget(action)
@@ -84,6 +94,10 @@ const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)
 export function mockServices(): Services {
   const listeners = new Set<(e: AgentEvent) => void>()
   const emit = (e: AgentEvent): void => listeners.forEach((l) => l(e))
+  const chatListeners = new Set<(e: ChatEvent) => void>()
+  const chatEmit = (e: ChatEvent): void => chatListeners.forEach((l) => l(e))
+  let chatRun = 0
+  let chatId = ''
   let pendingConfirm: ((approved: boolean) => void) | null = null
   let stopped = false
 
@@ -211,6 +225,31 @@ export function mockServices(): Services {
         return { ok: true, title: 'Screenshot taken', subtitle: 'Saved to Desktop', compiled: true, durationMs: 400 }
       }
       return { ok: true, title: 'Playing Motion Sickness', subtitle: 'Phoebe Bridgers', compiled: true, durationMs: 420 }
+    },
+    async chatSend(id, text) {
+      const run = ++chatRun
+      chatId = id
+      const reply = `You said: ${text}. (This is a demo reply: add FACTORY_API_KEY to .env for a real answer.)`
+      void (async () => {
+        for (const word of reply.split(/(?<= )/)) {
+          await wait(35)
+          if (run !== chatRun) return
+          chatEmit({ type: 'delta', id, text: word })
+        }
+        chatEmit({ type: 'done', id })
+      })()
+      return { ok: true, value: undefined }
+    },
+    async chatStop() {
+      chatRun++
+      chatEmit({ type: 'done', id: chatId })
+    },
+    async chatReset() {
+      chatRun++
+    },
+    onChatEvent(cb) {
+      chatListeners.add(cb)
+      return () => chatListeners.delete(cb)
     },
     async frontmostApp() {
       return { name: 'Mail', windowTitle: 'New Message' }

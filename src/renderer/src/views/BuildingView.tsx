@@ -28,7 +28,7 @@ function LettersBuilding({ view }: Props): React.JSX.Element {
       </Stack>
       <TokenStrip variant="letters" items={letters} current={current} className="building__letters" />
       <Notice />
-      <Footer micOff />
+      <Footer listen />
     </Stack>
   )
 }

@@ -3,6 +3,7 @@ import { IPC, type CardSize } from '@shared/ipc'
 import { createTemplatePack } from '@shared/templatePack'
 import type {
   AgentEvent,
+  ChatEvent,
   AgentRunRequest,
   CustomGesture,
   InterpretRequest,
@@ -16,6 +17,7 @@ import type {
   ViewAction
 } from '@shared/types'
 import { keyStatus } from './env'
+import * as cloud from './cloud'
 import * as store from './store'
 import type { OverlayWindow } from './window'
 
@@ -42,6 +44,9 @@ export interface MainServices {
   agentStop?: () => Promise<void>
   agentRespond?: (requestId: string, approved: boolean) => Promise<void>
   runShortcut?: (gestureId: string, emit: (e: AgentEvent) => void) => Promise<ShortcutRunResult>
+  chatSend?: (id: string, text: string, emit: (e: ChatEvent) => void) => Result<void>
+  chatStop?: () => void
+  chatReset?: () => Promise<void>
   frontmostApp?: () => Promise<import('@shared/types').FrontmostApp | null>
   typeText?: (text: string) => Promise<Result<void>>
   mjpegProxyUrl?: (url: string) => Promise<string>
@@ -52,12 +57,13 @@ export interface MainServices {
 const notReady = <T>(what: string): Result<T> => ({ ok: false, error: `${what} is not available yet` })
 
 export function registerIpc(getOverlay: () => OverlayWindow | null, services: MainServices): void {
-  const broadcast = (channel: string, event: AgentEvent | LlmStatusEvent): void => {
+  const broadcast = (channel: string, event: AgentEvent | LlmStatusEvent | ChatEvent): void => {
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send(channel, event)
     }
   }
   const emitAgent = (event: AgentEvent): void => broadcast(IPC.agentEvent, event)
+  const emitChat = (event: ChatEvent): void => broadcast(IPC.chatEvent, event)
   /** LLM calls still running, by the id their renderer picked, so the card can cancel them. */
   const llmCalls = new Map<string, AbortController>()
   /**
@@ -85,16 +91,28 @@ export function registerIpc(getOverlay: () => OverlayWindow | null, services: Ma
   ipcMain.handle(IPC.envStatus, () => keyStatus())
   ipcMain.handle(IPC.getSettings, () => store.getSettings())
   ipcMain.handle(IPC.saveSettings, (_e, patch: Partial<Settings>) => store.saveSettings(patch))
-  ipcMain.handle(IPC.getTemplates, () => store.getTemplates())
-  ipcMain.handle(IPC.saveTemplates, (_e, value: TemplateStore) => store.saveTemplates(value))
+  ipcMain.handle(IPC.getTemplates, async () => {
+    await cloud.syncOnce()
+    return store.getTemplates()
+  })
+  ipcMain.handle(IPC.saveTemplates, (_e, value: TemplateStore) => {
+    store.saveTemplates(value)
+    cloud.pushLater(() => cloud.pushTemplates(value.templates))
+  })
   ipcMain.handle(IPC.importPack, (_e, pack: unknown) => {
     const result = store.importTemplatePack(pack)
     if (result instanceof Error) throw result
     return result.added
   })
   ipcMain.handle(IPC.exportPack, (): TemplatePack => createTemplatePack(store.getTemplates().templates))
-  ipcMain.handle(IPC.getGestures, () => store.getGestures())
-  ipcMain.handle(IPC.saveGestures, (_e, list: CustomGesture[]) => store.saveGestures(list))
+  ipcMain.handle(IPC.getGestures, async () => {
+    await cloud.syncOnce()
+    return store.getGestures()
+  })
+  ipcMain.handle(IPC.saveGestures, (_e, list: CustomGesture[]) => {
+    store.saveGestures(list)
+    cloud.pushLater(() => cloud.pushGestures(list))
+  })
   ipcMain.handle(IPC.getRecentTasks, () => store.getRecentTasks())
 
   ipcMain.handle(IPC.mjpegProxyUrl, (_e, url: string) => services.mjpegProxyUrl?.(url) ?? url)
@@ -119,6 +137,11 @@ export function registerIpc(getOverlay: () => OverlayWindow | null, services: Ma
   ipcMain.handle(IPC.agentRespond, (_e, requestId: string, approved: boolean) =>
     services.agentRespond?.(requestId, approved)
   )
+  ipcMain.handle(IPC.chatSend, (_e, id: string, text: string): Result<void> =>
+    services.chatSend ? services.chatSend(id, text, emitChat) : notReady('Chat')
+  )
+  ipcMain.handle(IPC.chatStop, () => services.chatStop?.())
+  ipcMain.handle(IPC.chatReset, () => services.chatReset?.())
   ipcMain.handle(IPC.runShortcut, async (_e, gestureId: string): Promise<ShortcutRunResult> =>
     services.runShortcut
       ? services.runShortcut(gestureId, emitAgent)

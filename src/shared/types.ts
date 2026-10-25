@@ -155,6 +155,12 @@ export interface AgentResult {
   view?: ViewAction
 }
 
+/** Events of a chat reply, tagged with the id of the message it answers. */
+export type ChatEvent =
+  | { type: 'delta'; id: string; text: string }
+  | { type: 'done'; id: string }
+  | { type: 'error'; id: string; message: string }
+
 export type AgentEvent =
   | { type: 'started'; runId: string; intent: string }
   | { type: 'step'; runId: string; step: AgentStep }
@@ -224,5 +230,7 @@ export type DevCommand =
   | { type: 'setView'; id: string }
   | { type: 'gesture'; gesture: SimGesture }
   | { type: 'toggleDevPanel' }
+  /** Option+Space: start or stop listening for signs (push to listen). */
+  | { type: 'toggleListen' }
   /** signs.json changed outside the renderer (tray pack import): reload it. */
   | { type: 'templatesChanged' }

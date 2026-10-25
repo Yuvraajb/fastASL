@@ -143,6 +143,12 @@ async function exportPack(): Promise<void> {
   await dialog.showMessageBox({ message: `Exported ${pack.templates.length} template(s)`, detail: filePath })
 }
 
+/** Option+Space starts and stops listening for signs (a global hotkey cannot see key release, so it toggles). */
+export function registerListenShortcut(): void {
+  globalShortcut.register('Alt+Space', () => send({ type: 'toggleListen' }))
+  app.on('will-quit', () => globalShortcut.unregisterAll())
+}
+
 /** Dev-only global hotkeys: Option+1..9 jump to states, Control+Option+<key> simulates gestures. */
 export function registerDevShortcuts(): void {
   const first9 = DEV_VIEWS.slice(0, 9)

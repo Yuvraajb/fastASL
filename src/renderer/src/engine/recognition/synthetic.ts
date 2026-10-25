@@ -210,6 +210,8 @@ export interface PerformOptions {
   dropout?: number
   /** Start timestamp. */
   t0?: number
+  /** Signing position (wrist, normalized image coordinates) instead of the default near the middle. */
+  center?: [number, number]
   /** Wrist -> middle-MCP length as a fraction of the image height, before variation. */
   handSize?: number
   /** The hands first rise into view from below the frame over this long (0 = already up). */
@@ -246,7 +248,7 @@ export function performSign(spec: SignSpec, opts: PerformOptions): FrameSample[]
   const amplitude = 1 + 0.15 * v * jitter(r)
   const warp = 0.12 * v * jitter(r)
   const size = (opts.handSize ?? DEFAULT_HAND_SIZE) * (1 + 0.2 * v * jitter(r))
-  const center: [number, number] = [0.5 + 0.08 * v * jitter(r), 0.55 + 0.06 * v * jitter(r)]
+  const center: [number, number] = opts.center ?? [0.5 + 0.08 * v * jitter(r), 0.55 + 0.06 * v * jitter(r)]
   const tilt = { roll: 8 * v * jitter(r), pitch: 8 * v * jitter(r), yaw: 8 * v * jitter(r) }
   const curlJitter = spec.hands.map(() => [0, 1, 2, 3].map(() => 0.06 * v * jitter(r)))
 

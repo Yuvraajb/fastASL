@@ -13,9 +13,13 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'src/renderer/public/mediapipe')
 const WASM_FILES = ['vision_wasm_internal.js', 'vision_wasm_internal.wasm']
-const MODEL_URL =
+const HAND_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
-const MODEL_PATH = join(OUT, 'hand_landmarker.task')
+const HAND_PATH = join(OUT, 'hand_landmarker.task')
+// Face box for face-relative sign locations (forehead, chin). Optional: signs fall back to frame regions without it.
+const FACE_URL =
+  'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite'
+const FACE_PATH = join(OUT, 'face_detector.tflite')
 const DOWNLOAD_TIMEOUT_MS = 120_000
 
 const require = createRequire(import.meta.url)
@@ -52,7 +56,7 @@ async function copyWasm() {
   }
 }
 
-async function downloadModel() {
+async function downloadModel(MODEL_URL = HAND_URL, MODEL_PATH = HAND_PATH) {
   if ((await sizeOf(MODEL_PATH)) > 0) {
     log(`present     ${rel(MODEL_PATH)}`)
     return
@@ -80,10 +84,12 @@ async function downloadModel() {
 try {
   await mkdir(OUT, { recursive: true })
   await copyWasm()
-  await downloadModel()
+  await downloadModel(HAND_URL, HAND_PATH)
+  await downloadModel(FACE_URL, FACE_PATH)
   log('MediaPipe assets ready')
 } catch (err) {
-  await rm(`${MODEL_PATH}.part`, { force: true })
+  await rm(`${HAND_PATH}.part`, { force: true })
+  await rm(`${FACE_PATH}.part`, { force: true })
   console.error(`[fetch-assets] FAILED: ${err instanceof Error ? err.message : err}`)
   console.error('[fetch-assets] Hand tracking needs these files. Check your network and run `npm run setup` again.')
   process.exit(1)

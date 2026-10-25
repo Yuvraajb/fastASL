@@ -43,7 +43,7 @@ export function DictationView({ view }: Props): React.JSX.Element {
         </div>
       </Panel>
       <Notice />
-      <Footer micOff />
+      <Footer listen settings chat />
     </Stack>
   )
 }

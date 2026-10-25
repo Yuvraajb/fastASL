@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type FastAslApi } from '@shared/ipc'
-import type { AgentEvent, DevCommand, LlmStatusEvent } from '@shared/types'
+import type { AgentEvent, ChatEvent, DevCommand, LlmStatusEvent } from '@shared/types'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_e: IpcRendererEvent, payload: T): void => cb(payload)
@@ -56,6 +56,11 @@ const api: FastAslApi = {
   agentRespond: (requestId, approved) => ipcRenderer.invoke(IPC.agentRespond, requestId, approved),
   onAgentEvent: (cb) => subscribe<AgentEvent>(IPC.agentEvent, cb),
   runShortcut: (gestureId) => ipcRenderer.invoke(IPC.runShortcut, gestureId),
+
+  chatSend: (id, text) => ipcRenderer.invoke(IPC.chatSend, id, text),
+  chatStop: () => ipcRenderer.invoke(IPC.chatStop),
+  chatReset: () => ipcRenderer.invoke(IPC.chatReset),
+  onChatEvent: (cb) => subscribe<ChatEvent>(IPC.chatEvent, cb),
 
   getFrontmostApp: () => ipcRenderer.invoke(IPC.frontmostApp),
   typeText: (text) => ipcRenderer.invoke(IPC.typeText, text),

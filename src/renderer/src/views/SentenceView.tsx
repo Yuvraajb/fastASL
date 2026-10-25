@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Pencil } from 'lucide-react'
+import { Check, MessageSquare, Pencil } from 'lucide-react'
 import type { View } from '../app/types'
 import { controller } from '../app/context'
 import { Feed, Header, Hint, IconButton, Notice, Spinner, Stack } from '../ui'
@@ -29,19 +29,29 @@ export function SentenceView({ view }: Props): React.JSX.Element {
         ) : (
           <div className="sentence__row">
             <p className="sentence__text">{view.sentence}</p>
-            <IconButton
-              icon={Pencil}
-              label="Edit sentence"
-              variant="filled"
-              size={30}
-              iconSize={15}
-              onClick={() => setEditing(true)}
-            />
+            <div className="sentence__actions">
+              <IconButton
+                icon={Pencil}
+                label="Edit sentence"
+                variant="filled"
+                size={30}
+                iconSize={15}
+                onClick={() => setEditing(true)}
+              />
+              <IconButton
+                icon={MessageSquare}
+                label="Send to chat"
+                variant="filled"
+                size={30}
+                iconSize={15}
+                onClick={() => controller.tap('chat')}
+              />
+            </div>
           </div>
         )}
       </div>
       <Notice />
-      <Hint items={['swipe ← delete', 'swipe → continue']} />
+      <Hint items={['swipe ← delete', 'swipe → continue', 'edit, then send to chat']} />
     </Stack>
   )
 }

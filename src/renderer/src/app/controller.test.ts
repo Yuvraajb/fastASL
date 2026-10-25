@@ -2984,3 +2984,136 @@ describe('LLM status notice (rate limits)', () => {
     expect(llm.interprets[0].signal?.aborted).toBe(false)
   })
 })
+
+describe('chat', () => {
+  const chat = () => getApp().chat
+
+  it('opens from the tap, and signed words build an editable draft', () => {
+    c.tap('chat')
+    viewAs('chat')
+    sign(word('hello'), word('how'), word('2'))
+    expect(chat().draft).toBe('hello how 2')
+    c.chatEdit('hello how are you')
+    expect(chat().draft).toBe('hello how are you')
+    c.token(letter('A'))
+    expect(chat().draft).toBe('hello how are you')
+  })
+
+  it('swipe left deletes the last word of the draft', () => {
+    c.openChat()
+    sign(word('hello'), word('there'))
+    g('swipeLeft')
+    expect(chat().draft).toBe('hello')
+    g('swipeLeft')
+    g('swipeLeft')
+    expect(chat().draft).toBe('')
+  })
+
+  it('thumbs up sends the draft and the reply streams in', async () => {
+    c.openChat()
+    sign(word('hello'), word('there'))
+    g('thumbsUp')
+    expect(chat().draft).toBe('')
+    expect(chat().busy).toBe(true)
+    expect(chat().messages.map((m) => [m.role, m.text])).toEqual([
+      ['user', 'hello there'],
+      ['assistant', '']
+    ])
+    await settle(3000)
+    expect(chat().busy).toBe(false)
+    const reply = chat().messages[1]
+    expect(reply.status).toBe('done')
+    expect(reply.text).toContain('You said: hello there')
+  })
+
+  it('does not send an empty draft or a second message while one is being answered', async () => {
+    const send = vi.spyOn(services, 'chatSend')
+    c.openChat()
+    g('thumbsUp')
+    expect(send).not.toHaveBeenCalled()
+    sign(word('one'))
+    g('thumbsUp')
+    sign(word('two'))
+    g('thumbsUp')
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(chat().draft).toBe('two')
+    await settle(3000)
+  })
+
+  it('shows why a message failed', async () => {
+    useServices({ ...services, chatSend: vi.fn(async () => ({ ok: false as const, error: 'Add FACTORY_API_KEY to .env' })) })
+    c.openChat()
+    sign(word('hi'))
+    g('thumbsUp')
+    await settle(0)
+    const reply = chat().messages[1]
+    expect(reply).toMatchObject({ status: 'error', text: 'Add FACTORY_API_KEY to .env' })
+    expect(chat().busy).toBe(false)
+  })
+
+  it('fist stops a reply being written, then leaves; new chat clears everything', async () => {
+    c.openChat()
+    sign(word('hi'))
+    g('thumbsUp')
+    const stop = vi.spyOn(services, 'chatStop')
+    g('fist')
+    expect(stop).toHaveBeenCalled()
+    viewAs('chat')
+    await settle(3000)
+    c.chatClear()
+    expect(chat()).toEqual({ messages: [], draft: '', busy: false })
+    g('fist')
+    viewAs('ready')
+  })
+
+  it('takes signs and its own gestures only', () => {
+    expect(takesSigns({ kind: 'chat' })).toBe(true)
+    expect([...activeGestures({ kind: 'chat' })].sort()).toEqual(['fist', 'swipeLeft', 'thumbsUp'])
+  })
+})
+
+describe('hand-shape shortcuts while signing', () => {
+  it('does not fire the peace-sign shortcut while the mic is held, and does otherwise', () => {
+    const run = vi.spyOn(services, 'runShortcut')
+    setApp({ pushToListen: true, listening: true })
+    c.gesture({ gesture: 'shape', shapeId: 'builtin-peace' })
+    expect(run).not.toHaveBeenCalled()
+    setApp({ listening: false })
+    c.gesture({ gesture: 'shape', shapeId: 'builtin-peace' })
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('sending the signed sentence to chat', () => {
+  it('sends the sentence as the next chat message', async () => {
+    signSentence(word('1'), word('2'), word('3'))
+    const send = vi.spyOn(services, 'chatSend')
+    c.tap('chat')
+    viewAs('chat')
+    expect(send).toHaveBeenCalledWith(expect.any(String), '1 2 3')
+    expect(getApp().chat.messages[0]).toMatchObject({ role: 'user', text: '1 2 3' })
+    expect(getApp().chat.draft).toBe('')
+    await settle(3000)
+  })
+
+  it('sends the edited sentence', async () => {
+    signSentence(word('1'), word('2'))
+    c.editSentence('hello there')
+    const send = vi.spyOn(services, 'chatSend')
+    c.tap('chat')
+    expect(send).toHaveBeenCalledWith(expect.any(String), 'hello there')
+    await settle(3000)
+  })
+})
+
+describe('chat replies after the controller was disposed and re-mounted', () => {
+  it('still receive the reply (React StrictMode runs dispose() on start-up)', async () => {
+    c.dispose()
+    c.openChat()
+    sign(word('hi'))
+    g('thumbsUp')
+    await settle(3000)
+    expect(getApp().chat.messages[1]).toMatchObject({ role: 'assistant', status: 'done' })
+    expect(getApp().chat.messages[1].text).toContain('You said: hi')
+  })
+})

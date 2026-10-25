@@ -1,6 +1,6 @@
 .footer {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
   align-items: center;
   height: var(--icon-btn);
 }
@@ -46,4 +46,10 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   pointer-events: none;
+}
+
+.footer__listen--on {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.16);
+  border-radius: 16px;
 }

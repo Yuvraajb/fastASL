@@ -51,6 +51,7 @@ export function useDevCommands(): void {
     return window.fastasl.onDevCommand((cmd) => {
       if (cmd.type === 'setView') applyScene(cmd.id)
       else if (cmd.type === 'gesture') simulateGesture(cmd.gesture)
+      else if (cmd.type === 'toggleListen') setApp({ listening: !getApp().listening })
       else if (cmd.type === 'toggleDevPanel') setApp({ devPanel: !getApp().devPanel })
       else if (cmd.type === 'templatesChanged') void controller.loadTemplates()
     })

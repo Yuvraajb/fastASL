@@ -14,6 +14,7 @@ import { DidYouMeanView } from './DidYouMeanView'
 import { ContextActionsView } from './ContextActionsView'
 import { QuickMenuView } from './QuickMenuView'
 import { SettingsView } from './SettingsView'
+import { ChatView } from './ChatView'
 
 /** Renders the body of the card for the current view. */
 export function ViewRenderer({ view }: { view: View }): React.JSX.Element {
@@ -48,5 +49,7 @@ export function ViewRenderer({ view }: { view: View }): React.JSX.Element {
       return <QuickMenuView view={view} />
     case 'settings':
       return <SettingsView view={view} />
+    case 'chat':
+      return <ChatView />
   }
 }

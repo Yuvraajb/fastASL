@@ -12,7 +12,7 @@ export function ReadyView({ view }: Props): React.JSX.Element {
       <Feed aspect={6 / 5} brackets />
       {view.hint ? <p className="ready__hint">{view.hint}</p> : null}
       <Notice />
-      <Footer />
+      <Footer settings chat listen />
     </Stack>
   )
 }

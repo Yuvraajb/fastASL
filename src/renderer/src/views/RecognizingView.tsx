@@ -28,7 +28,7 @@ export function RecognizingView({ view }: Props): React.JSX.Element {
         <TokenPill text={token} />
       )}
       <Notice />
-      <Footer micOff />
+      <Footer listen />
     </Stack>
   )
 }

@@ -79,3 +79,10 @@
 .sentence__input::selection {
   background: rgba(255, 255, 255, 0.28);
 }
+
+.sentence__actions {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+}

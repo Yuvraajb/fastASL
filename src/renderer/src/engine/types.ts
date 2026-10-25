@@ -9,11 +9,21 @@ export interface HandSample {
   score: number
 }
 
+/** A detected face: center and size as fractions of the image width / height. */
+export interface FaceBox {
+  cx: number
+  cy: number
+  w: number
+  h: number
+}
+
 /** All hands seen in one frame. */
 export interface FrameSample {
   /** Monotonic timestamp in milliseconds (performance.now()). */
   t: number
   hands: HandSample[]
+  /** The viewer's face, when a face was found (normalized image coordinates, center and size). */
+  face?: FaceBox
 }
 
 /** Thresholds that the Settings > Sensitivity page scales. */

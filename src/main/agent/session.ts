@@ -8,7 +8,7 @@ import type { SessionFactory } from './types'
  * (Read, Execute, Edit, other MCP servers...) is disabled for the session.
  * The format of MCP tool ids is not documented, so what happens is logged.
  */
-async function disableForeignTools(session: DroidSession, ours: readonly DroidTool[]): Promise<void> {
+export async function disableForeignTools(session: DroidSession, ours: readonly DroidTool[]): Promise<void> {
   const listed = await session.listTools()
   const { ids, sure } = foreignToolIds(listed, ours)
   if (!sure) {

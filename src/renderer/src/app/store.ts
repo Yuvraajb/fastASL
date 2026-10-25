@@ -9,6 +9,21 @@ export interface PickProgress {
   progress: number
 }
 
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  /** Assistant only: still being written, finished, or failed (then `text` is the reason). */
+  status?: 'streaming' | 'done' | 'error'
+}
+
+export interface ChatState {
+  messages: ChatMessage[]
+  /** The message being composed: signed words land here, and it can be edited before sending. */
+  draft: string
+  busy: boolean
+}
+
 export interface AppState {
   view: View
   mode: Mode
@@ -28,10 +43,18 @@ export interface AppState {
   devPanel: boolean
   /** Shown briefly in the header after a mode switch. */
   modeFlashAt: number
+  /**
+   * Push to listen: when true, signs are recognized only while `listening` (the mic button held,
+   * or Option+Space toggled). The app turns this on at startup; tests leave it off.
+   */
+  pushToListen: boolean
+  listening: boolean
   /** Number of hands currently visible (0-2). */
   handsVisible: number
   /** Recorded signs (signs.json), loaded by the controller; recognition follows this list. */
   templates: SignTemplate[]
+  /** The chat with the AI (signed words become a draft you can edit, then send). */
+  chat: ChatState
   /** Gesture shortcuts (gestures.json), loaded by the controller; the shape matcher follows this list. */
   gestures: CustomGesture[]
 }
@@ -56,7 +79,10 @@ export const useApp = create<AppState>(() => ({
   devPanel: false,
   modeFlashAt: 0,
   handsVisible: 0,
+  pushToListen: false,
+  listening: false,
   templates: [],
+  chat: { messages: [], draft: '', busy: false },
   gestures: []
 }))
 

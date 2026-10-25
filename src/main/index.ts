@@ -7,10 +7,11 @@ import { loadEnv } from './env'
 import { registerIpc, type MainServices } from './ipc'
 import { getSettings } from './store'
 import { createOverlayWindow, createStageWindow, type OverlayWindow } from './window'
-import { registerDevShortcuts, setupTray } from './devtools'
+import { registerDevShortcuts, registerListenShortcut, setupTray } from './devtools'
 import { startMjpegProxy, type MjpegProxy } from './camera/mjpegProxy'
 import { createLlmService, parseLlmProvider } from './llm'
 import { createAgentServices } from './agent'
+import { createChatServices } from './chat'
 import { TOOLS } from './tools'
 import { getFrontmostApp } from './mac/frontmost'
 import { typeText } from './mac/typeText'
@@ -136,6 +137,11 @@ function startAgent(): void {
   services.agentStop = agent.agentStop
   services.agentRespond = agent.agentRespond
   services.runShortcut = (gestureId, emit) => agent.runShortcut(gestureId, devLoggedEmit(emit))
+  // Chat is its own tool-less droid session.
+  const chat = createChatServices()
+  services.chatSend = chat.chatSend
+  services.chatStop = chat.chatStop
+  services.chatReset = chat.chatReset
 
   // Hold the quit until the droid process is closed (bounded), so it never outlives the app.
   let disposed = false
@@ -144,7 +150,7 @@ function startAgent(): void {
     disposed = true
     e.preventDefault()
     const timeout = new Promise<void>((resolve) => setTimeout(resolve, AGENT_DISPOSE_MS))
-    void Promise.race([agent.dispose().catch(() => undefined), timeout]).then(() => app.quit())
+    void Promise.race([Promise.all([agent.dispose(), chat.dispose()]).catch(() => undefined), timeout]).then(() => app.quit())
   })
 }
 
@@ -206,6 +212,7 @@ async function boot(): Promise<void> {
       else overlay.win.showInactive()
     }
   })
+  registerListenShortcut()
   if (dev) registerDevShortcuts()
 }
 

@@ -71,6 +71,8 @@ export type View =
   /** `fromSentence`: opened by Context actions › More options, so a pick applies to the signed sentence. */
   | { kind: 'quickMenu'; options: string[]; fromSentence?: boolean }
   | { kind: 'dictation'; text: string }
+  /** Chat with the AI; the messages and the draft live in the store (`chat`). */
+  | { kind: 'chat' }
   | {
       kind: 'toast'
       title: string
@@ -97,6 +99,7 @@ export function cardWidth(view: View): number {
     case 'agentReady':
     case 'confirm':
     case 'done':
+    case 'chat':
       return 340
     case 'toast':
       return 320
@@ -136,6 +139,8 @@ export function statusFor(view: View, mode: Mode): StatusInfo | null {
       return { label: 'Ready', tone: 'active' }
     case 'dictation':
       return { label: 'Dictating...', tone: 'active' }
+    case 'chat':
+      return { label: 'Chat', tone: 'active' }
     case 'settings':
       return { label: 'Settings', tone: 'idle' }
   }

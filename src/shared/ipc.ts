@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  ChatEvent,
   AgentRunRequest,
   CompletedTask,
   CustomGesture,
@@ -48,6 +49,11 @@ export const IPC = {
   agentRespond: 'agent:respond',
   agentEvent: 'agent:event',
   runShortcut: 'shortcut:run',
+  // chat (Factory Droid, no tools)
+  chatSend: 'chat:send',
+  chatStop: 'chat:stop',
+  chatReset: 'chat:reset',
+  chatEvent: 'chat:event',
   // mac
   frontmostApp: 'mac:frontmostApp',
   typeText: 'mac:typeText',
@@ -106,6 +112,13 @@ export interface FastAslApi {
   agentRespond(requestId: string, approved: boolean): Promise<void>
   onAgentEvent(cb: (event: AgentEvent) => void): () => void
   runShortcut(gestureId: string): Promise<ShortcutRunResult>
+
+  /** Starts a chat reply; its text arrives as onChatEvent events tagged with `id`. */
+  chatSend(id: string, text: string): Promise<Result<void>>
+  chatStop(): Promise<void>
+  /** Starts a new conversation. */
+  chatReset(): Promise<void>
+  onChatEvent(cb: (event: ChatEvent) => void): () => void
 
   getFrontmostApp(): Promise<FrontmostApp | null>
   typeText(text: string): Promise<Result<void>>

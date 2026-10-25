@@ -81,7 +81,9 @@ describe('createHandTracker', () => {
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       'http://localhost:5173/mediapipe/wasm/vision_wasm_internal.js',
       'http://localhost:5173/mediapipe/wasm/vision_wasm_internal.wasm',
-      'http://localhost:5173/mediapipe/hand_landmarker.task'
+      'http://localhost:5173/mediapipe/hand_landmarker.task',
+      // The optional face model is looked for after the hand model loads; hands work without it.
+      'http://localhost:5173/mediapipe/face_detector.tflite'
     ])
   })
 
@@ -153,5 +155,28 @@ describe('toFrameSample', () => {
 
   it('returns no hands for an empty result', () => {
     expect(toFrameSample(EMPTY, 5)).toEqual({ t: 5, hands: [] })
+  })
+})
+
+describe('faceBoxOf', () => {
+  it('normalizes the biggest face to the image', async () => {
+    const { faceBoxOf } = await import('./handTracker')
+    const box = faceBoxOf(
+      {
+        detections: [
+          { boundingBox: { originX: 0, originY: 0, width: 50, height: 50 } },
+          { boundingBox: { originX: 400, originY: 100, width: 200, height: 240 } }
+        ]
+      },
+      1000,
+      500
+    )
+    expect(box).toEqual({ cx: 0.5, cy: 0.44, w: 0.2, h: 0.48 })
+  })
+
+  it('returns null with no face or an unsized image', async () => {
+    const { faceBoxOf } = await import('./handTracker')
+    expect(faceBoxOf({ detections: [] }, 1000, 500)).toBeNull()
+    expect(faceBoxOf({ detections: [{ boundingBox: { originX: 1, originY: 1, width: 1, height: 1 } }] }, 0, 0)).toBeNull()
   })
 })
