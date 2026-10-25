@@ -880,7 +880,10 @@ export class Controller {
   private readyGesture(input: GestureInput): void {
     const g = input.gesture
     if (g === 'thumbsUp') this.setView({ kind: 'quickMenu', options: QUICK_MENU })
-    else if (g === 'fist') this.collapse()
+    // Outside Spell mode a held fist is still taken (so it is not read as an S or a YES) but does
+    // nothing: a hand resting in a fist between signs hid the card, which stopped recognition and
+    // the caption camera with it. The card's chevron hides it.
+    else if (g === 'fist' && getApp().mode === 'spell') this.collapse()
     else if (g === 'swipeLeft') this.cycleMode(-1)
     else if (g === 'swipeRight') this.cycleMode(1)
     else if (g === 'swipeUp') this.openSettings()

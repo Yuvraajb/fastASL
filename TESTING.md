@@ -155,11 +155,11 @@ Step-by-step checks to run by hand on a Mac, one section per phase. Each step li
 
 ### Wake, holds and picks
 
-1. **Collapse and wake.** In Ready, hold a fist still for about 1 s. **Expected:** the card collapses to the pill. Lower your hand, then hold an open palm up, facing the camera, and keep it still. **Expected:** a ring around the round thumbnail fills over about 1 s and the card expands to Ready. Keep holding for 3 s. **Expected:** nothing else happens.
-2. **Stillness.** Collapse again (fist), then slowly wave the open palm. **Expected:** the ring stays empty or keeps restarting. Stop waving. **Expected:** the card expands about 1 s later.
+1. **Collapse and wake.** In Command mode, in Ready, hold a fist still for about 2 s. **Expected:** nothing happens; the card stays up (signs like YES and TIME start with a fist). Swipe to Spell mode, then hold a fist still for about 1 s. **Expected:** the card collapses to the pill. Lower your hand, then hold an open palm up, facing the camera, and keep it still. **Expected:** a ring around the round thumbnail fills over about 1 s and the card expands to Ready. Keep holding for 3 s. **Expected:** nothing else happens.
+2. **Stillness.** Collapse again (fist in Spell mode, or the card's chevron), then slowly wave the open palm. **Expected:** the ring stays empty or keeps restarting. Stop waving. **Expected:** the card expands about 1 s later.
 3. **Thumbs up.** In Ready, hold a thumbs-up for about 0.5 s. **Expected:** the quick menu opens. It also works with the palm facing sideways. Fist back to Ready, then hold an ASL "A" (thumb alongside the fist) for 2 s. **Expected:** nothing happens.
 4. **Finger pick.** Open the quick menu (thumbs up) and hold up 2 fingers. **Expected:** row 2 highlights and the ring on its "2" badge fills; after about 0.8 s "Send message" is picked and Ready shows "Send message: sign the details". Repeat with 1 finger (Create event) and 3 fingers, both the index-middle-ring 3 and ASL 3 (thumb, index, middle). **Expected:** each picks its row. An open hand with a half-tucked thumb picks nothing.
-5. **Fist across a view change.** In the quick menu, hold a fist for about 0.9 s. **Expected:** it cancels to Ready. Keep the fist up for 2 s more. **Expected:** the card stays in Ready (it does not collapse). Open or lower your hand for a moment, then make a fist again at least 1.5 s after the first. **Expected:** the card collapses.
+5. **Fist across a view change.** In the quick menu, hold a fist for about 0.9 s. **Expected:** it cancels to Ready. Keep the fist up for 2 s more. **Expected:** the card stays in Ready (it does not collapse). Open or lower your hand for a moment, then make a fist again at least 1.5 s after the first. **Expected:** in Spell mode the card collapses; in Command mode it stays in Ready.
 
 ### Swipes
 

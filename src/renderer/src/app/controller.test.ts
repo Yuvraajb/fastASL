@@ -303,7 +303,10 @@ describe('collapse and expand', () => {
     expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
   })
 
-  it('ready --fist--> collapsed', () => {
+  it('a fist hides the card only in Spell mode: elsewhere words start with one (YES, TIME)', () => {
+    g('fist')
+    expect(getApp().view).toEqual({ kind: 'ready' })
+    setApp({ mode: 'spell' })
     g('fist')
     expect(getApp().view).toEqual({ kind: 'collapsed' })
   })
@@ -1127,13 +1130,12 @@ describe('listening', () => {
     expect(getApp().view).toEqual({ kind: 'ready', hint: `${QUICK_MENU[1]}: sign the details` })
   })
 
-  it("keeps Ready's gestures: a fist raised into view collapses, a thumbs-up opens the quick menu", () => {
+  it("keeps Ready's gestures: a fist raised into view does nothing, a thumbs-up opens the quick menu", () => {
     c.signStart()
     expect(activeGestures(getApp().view)).toEqual(activeGestures({ kind: 'ready' }))
+    const listening = getApp().view
     g('fist')
-    expect(getApp().view).toEqual({ kind: 'collapsed' })
-    c.expand()
-    c.signStart()
+    expect(getApp().view).toEqual(listening)
     g('thumbsUp')
     expect(viewAs('quickMenu').options).toEqual(QUICK_MENU)
   })
@@ -1774,14 +1776,14 @@ describe('the conversation with the agent', () => {
       expect(chatShape()).toEqual(['you:text', 'agent:text', 'you:text', 'agent:text'])
     })
 
-    it("has Ready's gestures: a thumbs up opens the quick menu, a fist hides the card, swipes switch modes, swipe up opens Settings", () => {
+    it("has Ready's gestures: a thumbs up opens the quick menu, a fist does nothing, swipes switch modes, swipe up opens Settings", () => {
       const shown = reply({ ok: true, text: 'Hello!' })
       c.setView(shown)
       g('thumbsUp')
       expect(viewAs('quickMenu').options).toEqual(QUICK_MENU)
       c.setView(shown)
       g('fist')
-      expect(getApp().view).toEqual({ kind: 'collapsed' })
+      expect(getApp().view).toBe(shown)
       c.setView(shown)
       g('swipeRight')
       expect(getApp().mode).toBe('dictation')

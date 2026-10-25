@@ -236,10 +236,12 @@ describe('control gestures are not swallowed by model words', () => {
     expect(getApp().view).toEqual({ kind: 'recognizing', token: 'hello', isWord: true })
   })
 
-  it('a fist raised into view collapses the card though the model reads the raise as YES at 0.85', async () => {
+  it('a fist raised into view is the fist (no word, the card stays up) though the model reads the raise as YES at 0.85', async () => {
+    const gesture = vi.spyOn(controller, 'gesture')
     await start(fakeModel({ status: 'accepted', word: 'yes', p: 0.85 }))
     await play([hold('S', 2500, 2009, { raiseMs: 400 })])
-    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    expect(gesture).toHaveBeenCalledWith(expect.objectContaining({ gesture: 'fist' }))
+    expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
   it('a word that ends in a thumbs-up the model is sure of (TOMORROW, 0.95) does not also end the phrase', async () => {
@@ -310,7 +312,7 @@ describe.skipIf(!existsSync(ISLR))('the real Kaggle model on synthetic control g
     clock = frames[frames.length - 1].t + 33
   }
 
-  it('a swipe still switches the mode, and a raised fist still collapses the card', async () => {
+  it('a swipe still switches the mode, and a raised fist is still the fist (no word, the card stays up)', async () => {
     const model = await realModel()
     const classify = vi.spyOn(model, 'classify')
     await start(model)
@@ -320,8 +322,10 @@ describe.skipIf(!existsSync(ISLR))('the real Kaggle model on synthetic control g
     // Back to Command, then a fist raised into view and held.
     setApp({ mode: 'command' })
     controller.setView({ kind: 'ready' })
+    const gesture = vi.spyOn(controller, 'gesture')
     await playSlowly([rest, hold('S', 2500, 2011, { raiseMs: 400 })])
-    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    expect(gesture).toHaveBeenCalledWith(expect.objectContaining({ gesture: 'fist' }))
+    expect(getApp().view).toEqual({ kind: 'ready' })
     expect(classify).toHaveBeenCalled()
     for (const result of classify.mock.results) {
       const v = await (result.value as Promise<ModelVerdict>)

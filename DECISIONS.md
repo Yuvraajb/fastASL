@@ -999,3 +999,11 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - **The harness.** `streamPhrase.eval` now runs several phrases and finds a signer's words across folders of the same layout. With the Holistic `live-bin` folder, the TOMORROW MEETING WHAT TIME phrase fails its wiring check: for one signer the controller got TIME where the matcher streamed EMAIL. It fails the same way without these changes. `aslcitizen.eval` got a 10-minute timeout, since it timed out at 5 s on these folders.
     - **Checks.** `npm run typecheck` passes. `npx vitest run`: 1263 passed, 9 skipped (the real-data evals skip without `FASTASL_STREAM_DATA`).
     - **Not verified:** a live camera. How the live tracker sees an X hook is only known from the re-tracked videos.
+
+## A fist no longer hides the card while signing
+
+219. **Outside Spell mode, a fist in Ready does nothing.** With the caption camera running, the captions went blank: the log showed `[gesture] fist in ready`, the card had collapsed, and a collapsed card takes no signs and stops face tracking, so nothing reached the captions. The fist fires after a 0.9 s still hold, which a hand resting in a fist between signs (or a slow YES or TIME) easily makes.
+    - The fist stays an active gesture in Ready (and in Listening and the agent's reply, which share Ready's gestures), so a held fist is still taken as the fist and not read as an S or a model YES. It just does nothing.
+    - Spell mode keeps the fist collapse. Everywhere else the card's chevron (or the tray) hides it, and an open palm held still wakes it.
+    - A fist still cancels a phrase being built, as before.
+    - Tests: `controller.test.ts`, `engines.test.ts` and `modelRecognition.test.ts` now expect the card to stay in Ready on a Command mode fist, with the fist still reaching the controller, and a Spell mode fist to collapse it. `npx vitest run`: 1264 passed, 9 skipped; `npm run typecheck` passes.

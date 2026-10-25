@@ -218,7 +218,17 @@ describe('gesture control', () => {
     expect(getApp().holdProgress).toBe(0)
   })
 
-  it('ready: a held fist collapses the card', () => {
+  it('ready: a held fist is taken but keeps the card up; in Spell mode it hides the card', () => {
+    const gesture = vi.spyOn(controller, 'gesture')
+    stop = startEngines(controller)
+    tl.hold(1100, FIST)
+    play()
+    expect(gesture).toHaveBeenCalledWith(expect.objectContaining({ gesture: 'fist' }))
+    expect(getApp().view).toEqual({ kind: 'ready' })
+  })
+
+  it('ready, Spell mode: a held fist collapses the card', () => {
+    setApp({ mode: 'spell' })
     stop = startEngines(controller)
     tl.hold(700, FIST)
     play()
@@ -545,11 +555,13 @@ describe('sign recognition', () => {
     expect(getApp().view).toEqual({ kind: 'ready' })
   })
 
-  it('a fist raised into view collapses the card: Listening neither swallows it nor reads an S', () => {
+  it('a fist raised into view is the fist, and keeps the card up: Listening neither swallows it nor reads an S', () => {
+    const gesture = vi.spyOn(controller, 'gesture')
     stop = startEngines(controller)
     play([hold('S', 2500, 904, { raiseMs: 400 })])
     expect(listens[0]).toBe(true)
-    expect(getApp().view).toEqual({ kind: 'collapsed' })
+    expect(gesture).toHaveBeenCalledWith(expect.objectContaining({ gesture: 'fist' }))
+    expect(getApp().view).toEqual({ kind: 'ready' })
     expect(views.some((v) => v.kind === 'recognizing' && v.token !== null)).toBe(false)
   })
 
