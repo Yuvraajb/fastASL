@@ -2010,6 +2010,46 @@ describe('the conversation with the agent', () => {
 
 describe('the caption camera (captioning)', () => {
   const captionsReady = { kind: 'ready', hint: expect.stringMatching(/^Captions on/) }
+  /** The app in front: the captions are for FaceTime, so this is what the tests below are signing in front of. */
+  let front: { name: string; bundleId?: string }
+
+  beforeEach(() => {
+    front = { name: 'FaceTime', bundleId: 'com.apple.FaceTime' }
+    vi.spyOn(services, 'frontmostApp').mockImplementation(async () => front)
+  })
+
+  it('captions only while FaceTime is the app in front: anywhere else the agent hears the signs, and the hint says so', async () => {
+    const run = vi.spyOn(services, 'agentRun')
+    c.setCaptioning(true)
+    await settle(1100)
+    expect(getApp().view).toEqual(captionsReady)
+    front = { name: 'Code' }
+    await settle(1100)
+    expect(getApp().view).toEqual({ kind: 'ready' }) // no hint: this is not captioning
+    sendPhrase(word('hello'))
+    await settle(500)
+    expect(run).toHaveBeenCalledTimes(1)
+    front = { name: 'FaceTime' }
+    await settle(1100)
+    const before = getApp().chat.length
+    sign(word('hello'))
+    g('handsDown')
+    expect(getApp().chat.length).toBe(before + 1) // captioned at once, not sent to the agent
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('an app it cannot read keeps the last answer, and closing the window stops the checking', async () => {
+    const check = vi.spyOn(services, 'frontmostApp')
+    c.setCaptioning(true)
+    await settle(1100)
+    check.mockResolvedValue(null)
+    await settle(2200)
+    expect(getApp().view).toEqual(captionsReady)
+    c.setCaptioning(false)
+    const calls = check.mock.calls.length
+    await settle(5000)
+    expect(check.mock.calls.length).toBe(calls)
+  })
 
   it('a signed phrase is captions: sent in the transcript, no interpreter or agent, and Ready for the next at once', async () => {
     const interpret = vi.spyOn(services, 'interpret')

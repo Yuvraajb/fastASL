@@ -106,6 +106,11 @@ const CAPTURE_TIMEOUT_MS = 2500
 const SIGN_TASK_HINT = 'Sign the task for your gesture'
 /** Ready's hint while the caption camera is open. */
 const CAPTIONS_HINT = 'Captions on: what you sign goes to the call, not the agent'
+/** While the caption window is open, how often the front app is checked: captions are for FaceTime only. */
+const FRONT_APP_CHECK_MS = 1000
+
+/** The FaceTime app (its name, or its bundle id). */
+const isFaceTime = (app: { name: string; bundleId?: string }): boolean => /^facetime$/i.test(app.name) || app.bundleId === 'com.apple.FaceTime'
 /** Gestures per page of My gestures (two-line rows). */
 export const GESTURE_PAGE = 4
 /** What Settings › Camera source accepts as a stream URL (the proxy checks the rest). */
@@ -453,6 +458,9 @@ export class Controller {
    * card's is aborted, in main too, so a rate-limited call doesn't keep retrying for nobody.
    */
   private llmCalls = new Map<AbortController, () => boolean>()
+  /** The caption window is open: whether FaceTime is the app in front (see startFrontAppCheck). */
+  private faceTimeInFront = true
+  private frontAppTimer: ReturnType<typeof setInterval> | null = null
   constructor(private services: Services) {
     this.subscribe()
   }
@@ -461,6 +469,7 @@ export class Controller {
     this.unsubscribe?.()
     this.unsubscribe = null
     this.clearTimers()
+    this.stopFrontAppCheck()
   }
 
   /** Swap service implementations (mock <-> real) at runtime. */
@@ -556,7 +565,7 @@ export class Controller {
     // A quick-menu pick keeps waiting for its details, also after a movement that was no sign.
     if (this.intentPrefix) return { kind: 'ready', hint: `${this.intentPrefix}: sign the details` }
     if (this.signingTask) return { kind: 'ready', hint: SIGN_TASK_HINT }
-    return getApp().captioning ? { kind: 'ready', hint: CAPTIONS_HINT } : { kind: 'ready' }
+    return this.captionsApply() ? { kind: 'ready', hint: CAPTIONS_HINT } : { kind: 'ready' }
   }
 
   /** The signed words go, the context they were signed for (quick-menu prefix, a gesture's task) stays. */
@@ -662,10 +671,39 @@ export class Controller {
   setCaptioning(open: boolean): void {
     if (getApp().captioning === open) return
     setApp({ captioning: open })
+    if (open) this.startFrontAppCheck()
+    else this.stopFrontAppCheck()
     // Captions are Command mode's streamed words (Spell mode reads letters, Dictation types them),
     // and the mode stays Command while the window is open (see cycleMode).
     if (open && getApp().mode !== 'command') return this.switchMode('command')
     if (this.view.kind === 'ready' && !this.intentPrefix && !this.signingTask) this.setView(this.idleView())
+  }
+
+  /** Whether signing is captioning the call now: the caption window is open and FaceTime is the app in front. Anywhere else the agent hears it. */
+  private captionsApply(): boolean {
+    return getApp().captioning && this.faceTimeInFront
+  }
+
+  /** While the caption window is open, FaceTime being in front (or not) decides where signing goes. */
+  private startFrontAppCheck(): void {
+    this.faceTimeInFront = true // the window opens with a call, so FaceTime is where the user is until a check says otherwise
+    this.stopFrontAppCheck()
+    const check = async (): Promise<void> => {
+      const app = await this.services.frontmostApp().catch(() => null)
+      if (!app || !getApp().captioning) return // unknown: keep what was known
+      const inFront = isFaceTime(app)
+      if (inFront === this.faceTimeInFront) return
+      this.faceTimeInFront = inFront
+      // Ready's hint says where signing goes.
+      if (this.view.kind === 'ready' && !this.intentPrefix && !this.signingTask) this.setView(this.idleView())
+    }
+    void check()
+    this.frontAppTimer = setInterval(() => void check(), FRONT_APP_CHECK_MS)
+  }
+
+  private stopFrontAppCheck(): void {
+    if (this.frontAppTimer) clearInterval(this.frontAppTimer)
+    this.frontAppTimer = null
   }
 
   toggleCamera(): void {
@@ -1004,7 +1042,7 @@ export class Controller {
   private endPhrase(): void {
     if (!this.tokens.length) return this.cancel()
     if (getApp().mode === 'spell') return void this.spellSuggestions()
-    if (getApp().captioning && !this.intentPrefix && !this.signingTask) return this.captionPhrase()
+    if (this.captionsApply() && !this.intentPrefix && !this.signingTask) return this.captionPhrase()
     void this.sendPhrase()
   }
 
