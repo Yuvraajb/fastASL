@@ -1,7 +1,7 @@
 import { getCaptionsControl } from '../captionsControl'
 import { OBS_CAMERA, selectFaceTimeCamera, startObsCamera, type FaceTimeCameraState, type ObsCameraState } from '../mac/callCamera'
 import { fail } from './outcome'
-import { defineTool } from './types'
+import { defineTool, type ToolDef } from './types'
 
 /** The window OBS captures (Window Capture of "fastASL Captions" -> OBS Virtual Camera -> FaceTime's camera). */
 const WINDOW = 'fastASL Captions'
@@ -46,6 +46,28 @@ export const captionsOn = defineTool({
     }
   }
 })
+
+/**
+ * A video call that starts with the live caption camera by default: once the call is placed, the
+ * captions open, OBS's Virtual Camera starts and FaceTime uses it, with no second step to remember.
+ * An audio-only call has no video, so it is left alone, and a call that did not start gets no captions.
+ * The call's own result stays the headline; what happened to the captions is added to it.
+ */
+export function withLiveCaptions<T extends ToolDef>(call: T): T {
+  return {
+    ...call,
+    async run(args: Parameters<T['run']>[0]) {
+      const placed = await call.run(args)
+      if (!placed.ok || (args as { audio_only?: boolean }).audio_only) return placed
+      const captions = await captionsOn.run({})
+      return {
+        ...placed,
+        text: `${placed.text} ${captions.text}`,
+        subtitle: captions.ok ? `${placed.subtitle ?? 'FaceTime video'} · live captions` : placed.subtitle
+      }
+    }
+  }
+}
 
 export const captionsOff = defineTool({
   name: 'captions_off',

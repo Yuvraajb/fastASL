@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { calendarCreateEvent, calendarListEvents } from './calendar'
-import { captionsOff, captionsOn } from './captions'
+import { captionsOff, captionsOn, withLiveCaptions } from './captions'
 import { contactsFind } from './contacts'
 import { lockScreen, setDarkMode, setTimer, setVolume } from './controls'
 import { filesFind, filesList, filesMove } from './files'
@@ -45,7 +45,7 @@ export const TOOLS: readonly ToolDef[] = [
   spotifyPlay,
   spotifyPause,
   mediaControl,
-  faceTimeCall,
+  withLiveCaptions(faceTimeCall),
   captionsOn,
   captionsOff,
   filesFind,
