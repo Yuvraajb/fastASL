@@ -13,7 +13,8 @@ import { callsComplete, confirmDetailsFor, errorText, parseArgs, performCall, su
 import { buildDroidTools } from './droidTools'
 import { SYSTEM_PROMPT, turnPrompt } from './prompt'
 import { Run } from './run'
-import { findFastaslTool, matchPermissionTool, SCRIPT_HELPERS } from './toolNames'
+import type { McpConfig } from './mcpConfig'
+import { findFastaslTool, matchPermissionTool, mcpToolAllowed, mcpToolWrites, SCRIPT_HELPERS } from './toolNames'
 import type { DroidSessionLike, RunOutcome, SessionFactory, ToolRunner } from './types'
 
 /** How long a stopped turn may take to wind down before the session is replaced. */
@@ -30,6 +31,8 @@ export interface AgentDeps {
   addRecentTask(task: CompletedTask): void
   /** Working directory for the droid process (an empty folder, so no project files are in reach). */
   cwd: string
+  /** External MCP servers the user opted into (see mcpConfig.ts); empty by default. */
+  mcp?: McpConfig
   now?: () => Date
   timeZone?: () => string
 }
@@ -273,10 +276,26 @@ export class AgentService {
    * as a success: a reply with no tool call is an answer, not a task done.
    */
   private finish(run: Run, turn?: { finished: boolean; error?: string; reply?: string }): RunOutcome {
-    const complete = (turn?.finished ?? true) && callsComplete(run.calls, run.declined)
-    const result = summarize(run.calls, { complete, declined: run.declined, error: turn?.error, reply: turn?.reply })
+    // A run whose work happened entirely inside an external MCP server has no recorded calls;
+    // it still did something, and its reply is the only thing worth showing.
+    const acted = run.calls.length > 0 || run.external.length > 0
+    const complete =
+      (turn?.finished ?? true) &&
+      (run.calls.length > 0 ? callsComplete(run.calls, run.declined) : acted && !run.declined)
+    const result = summarize(run.calls, {
+      complete,
+      declined: run.declined,
+      error: turn?.error,
+      reply: turn?.reply,
+      external: run.external
+    })
     const succeeded = run.calls.filter((c) => c.outcome.ok).map((c) => c.record)
     this.lastCalls = complete ? succeeded : []
+    if (process.env.FASTASL_LOG === '1')
+      console.info(
+        `[agent] done complete=${complete} calls=${run.calls.length} external=${run.external.length}` +
+          ` reply=${turn?.reply ? JSON.stringify(turn.reply.slice(0, 80)) : 'none'}`
+      )
     run.emit({ type: 'done', runId: run.runId, result, complete })
     if (turn && complete) {
       const at = (this.deps.now?.() ?? new Date()).getTime()
@@ -301,6 +320,10 @@ export class AgentService {
     if (!run || run.stopped || toolUses.length === 0) return cancel
 
     const matched: [ToolDef, ToolArgs][] = []
+    // Calls into the external MCP servers the user opted into. Reads run straight through;
+    // anything that could change something is confirmed like our own write tools.
+    const external: { name: string; args: Record<string, unknown>; writes: boolean }[] = []
+    const mcpNames = this.deps.mcp?.names ?? []
     for (const use of toolUses) {
       // Droid calls MCP tools from a Script: allowed when every call inside is ours (or loads tool schemas).
       if (use.details.type === ToolConfirmationType.Script) {
@@ -308,6 +331,15 @@ export class AgentService {
           if (SCRIPT_HELPERS.has(call.toolName)) continue
           const def = findFastaslTool(call.toolName, this.deps.tools)
           if (!def) {
+            if (mcpToolAllowed(call.toolName, mcpNames)) {
+              console.info('[agent] external tool call:', call.toolName)
+              external.push({
+                name: call.toolName,
+                args: (call.toolInput ?? {}) as Record<string, unknown>,
+                writes: mcpToolWrites(call.toolName)
+              })
+              continue
+            }
             console.warn('[agent] cancelled a script calling a non-fastasl tool:', call.toolName)
             return cancel
           }
@@ -317,6 +349,15 @@ export class AgentService {
       }
       const def = matchPermissionTool(use, this.deps.tools)
       if (!def) {
+        if (mcpToolAllowed(use.toolUse.name, mcpNames)) {
+          console.info('[agent] external tool call:', use.toolUse.name)
+          external.push({
+            name: use.toolUse.name,
+            args: (use.toolUse.input ?? {}) as Record<string, unknown>,
+            writes: mcpToolWrites(use.toolUse.name)
+          })
+          continue
+        }
         console.warn('[agent] cancelled a non-fastasl tool:', use.toolUse.name, use.details)
         return cancel
       }
@@ -336,14 +377,34 @@ export class AgentService {
       confirmed.push(def.name)
     }
 
+    // A third-party server is never run without the user seeing which tool it is.
+    for (const call of external.filter((c) => c.writes)) {
+      if (!(await run.confirm(call.name, { kind: 'generic', title: 'External tool', lines: [call.name] }))) {
+        if (!run.stopped) run.declined = true
+        return cancel
+      }
+    }
+
     const offered = options.some((o) => o.value === ToolConfirmationOutcome.ProceedOnce)
     if (!offered || run.stopped) return cancel
     // Approvals exist only for a request that is allowed as a whole, so a partly declined one leaves none behind.
     for (const name of confirmed) run.approve(name)
+    // External calls have no tool handler to record them, so remember them here.
+    for (const call of external) run.recordExternal(call.name, call.args)
     return ToolConfirmationOutcome.ProceedOnce
   }
 
   // -- session ----------------------------------------------------------------
+
+  /** Droid's prompt plus a note about any external MCP servers the user opted into. */
+  private systemPrompt(): string {
+    const names = this.deps.mcp?.names ?? []
+    if (names.length === 0) return SYSTEM_PROMPT
+    return (
+      `${SYSTEM_PROMPT}\n- The user also added these external MCP servers: ${names.join(', ')}. ` +
+      'Their tools are allowed too, and every call into one is confirmed on the card first.'
+    )
+  }
 
   private ensureSession(): Promise<Result<DroidSessionLike>> {
     if (this.disposed) return Promise.resolve({ ok: false, error: 'Stopped' })
@@ -367,9 +428,10 @@ export class AgentService {
         apiKey,
         execPath: execPath.value,
         cwd: this.deps.cwd,
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt: this.systemPrompt(),
         tools: this.droidTools,
-        permissionHandler: (params) => this.onPermission(params)
+        permissionHandler: (params) => this.onPermission(params),
+        ...(this.deps.mcp && this.deps.mcp.servers.length ? { mcp: this.deps.mcp } : {})
       })
       return { ok: true, value: session }
     } catch (error) {

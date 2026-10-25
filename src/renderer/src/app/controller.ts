@@ -357,6 +357,18 @@ export function countSigns(templates: readonly SignTemplate[]): Record<string, n
 
 const hasLetters = (templates: readonly SignTemplate[]): boolean => templates.some((t) => t.kind === 'letter')
 
+/**
+ * Demo tasks for the gesture shortcuts, one per external MCP server. The option's label is the
+ * task itself, so picking one binds the whole sentence to the shape: performing it later sends
+ * that sentence to the agent (MCP calls are not ours, so they never compile into a replay).
+ */
+export const DEMO_TASKS = [
+  'List the three newest files on my Desktop.',
+  'Fetch https://wttr.in/Los+Angeles?format=3 and read me the weather.',
+  'Remember that my preferred meeting time is 10am.',
+  'Read the newest message in Slack channel C0CBX5R1MLN, tell me what it says, then reply that I am on my way.'
+] as const
+
 export function settingsOptions(page: SettingsPage): string[] {
   switch (page.page) {
     case 'root':
@@ -364,7 +376,9 @@ export function settingsOptions(page: SettingsPage): string[] {
     case 'teachPick':
       return [...TEACH_LABELS.slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
     case 'newGesturePick':
-      return [...page.tasks.slice(0, 4), 'Sign a new task']
+      // "Sign a new task" keeps its place (the fist count people already know); the MCP demo
+      // sentences come after it.
+      return [...page.tasks.slice(0, 1), 'Sign a new task', ...DEMO_TASKS]
     case 'gestures':
       return page.gestures.slice(page.offset, page.offset + GESTURE_PAGE).map((g) => g.name)
     case 'gestureDetail':
@@ -1595,8 +1609,11 @@ export class Controller {
       }
       case 'newGesturePick': {
         const options = settingsOptions(page)
-        if (index === options.length - 1) this.signNewTask()
-        else this.startShapeCapture(options[index])
+        const choice = options[index]
+        if (!choice) return
+        // By label, not position: the demo tasks sit after it.
+        if (choice === 'Sign a new task') this.signNewTask()
+        else this.startShapeCapture(choice)
         return
       }
       case 'gestures': {

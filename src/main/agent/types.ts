@@ -1,5 +1,6 @@
 import type { ClientPermissionHandler, DroidStreamMessage, DroidTool } from '@factory/droid-sdk/node'
 import type { AgentResult, ToolCallRecord } from '@shared/types'
+import type { McpConfig } from './mcpConfig'
 import type { ToolDef, ToolOutcome } from '../tools/types'
 
 /** The slice of a Droid session the agent uses; the real one is `DroidSession`, tests use a fake. */
@@ -17,6 +18,8 @@ export interface SessionOptions {
   systemPrompt: string
   /** The fastasl tools, served to Droid by an in-process MCP server. */
   tools: DroidTool[]
+  /** External MCP servers the user opted into, if any. */
+  mcp?: McpConfig
   permissionHandler: ClientPermissionHandler
 }
 

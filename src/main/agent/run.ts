@@ -9,6 +9,12 @@ import type { RecordedCall, RunContext } from './types'
 export class Run implements RunContext {
   readonly runId = randomUUID()
   readonly calls: RecordedCall[] = []
+  /**
+   * External MCP tools the user approved on this run. Their calls happen inside droid, so they
+   * never reach `calls`: without this the card said "didn't run any action" after Slack had
+   * already posted.
+   */
+  readonly external: { tool: string; args: Record<string, unknown> }[] = []
   /** The user answered "no" on a Confirm card. */
   declined = false
   private isStopped = false
@@ -72,6 +78,11 @@ export class Run implements RunContext {
 
   record(call: RecordedCall): void {
     this.calls.push(call)
+  }
+
+  /** Remember an approved external MCP call, so the result card can report it. */
+  recordExternal(tool: string, args: Record<string, unknown>): void {
+    this.external.push({ tool, args })
   }
 
   /** One approval per confirmed call; the tool handler consumes it, so nothing runs unconfirmed. */

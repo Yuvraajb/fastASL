@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, session, systemPreferences } from 'electron'
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdirSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
 import type { AgentEvent, IdentifySignRequest, Result } from '@shared/types'
@@ -26,6 +26,15 @@ const mockServices = process.env.FASTASL_MOCK === '1'
 
 app.setName('fastASL')
 loadEnv()
+
+// Which build is actually running: the bundled main's own modification time. Rebuilding without
+// relaunching keeps the old one in memory, and that has cost us more than one debugging round.
+try {
+  const built = statSync(__filename).mtime.toISOString().slice(11, 19)
+  console.info(`[app] build ${built}Z`)
+} catch {
+  /* a packaged build may not expose it; not worth failing over */
+}
 
 let overlay: OverlayWindow | null = null
 let stage: BrowserWindow | null = null

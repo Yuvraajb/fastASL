@@ -65,6 +65,13 @@ export function callsComplete(calls: readonly RecordedCall[], declined: boolean)
   return [...lastWrite.values()].every(Boolean)
 }
 
+/** "mcp__slack__post_message" / "slack___post_message" -> "slack/post_message". */
+export function externalLabel(tool: string): string {
+  const parts = tool.split(/__+|___+/).filter(Boolean)
+  const clean = parts[0] === 'mcp' ? parts.slice(1) : parts
+  return clean.length >= 2 ? `${clean[0]}/${clean.slice(1).join('/')}` : (clean[0] ?? tool)
+}
+
 export interface Ending {
   /** The run did the whole task (see callsComplete; an agent turn must also have finished normally). */
   complete: boolean
@@ -73,6 +80,8 @@ export interface Ending {
   stopped?: boolean
   /** Why an agent turn broke off, when it did. */
   error?: string
+  /** External MCP calls the user approved (they run inside droid, so they never reach `calls`). */
+  external?: readonly { tool: string }[]
   /** The model's final text, from a turn that finished normally (see AgentResult.reply). */
   reply?: string
 }
@@ -121,7 +130,21 @@ export function summarize(calls: readonly RecordedCall[], ending: Ending): Agent
   const withReply = reply ? { reply } : {}
   // Lookups made for a task the user then cancelled are not worth a headline.
   const best = write ?? (ending.declined ? undefined : ok.at(-1))
-  if (!best) return { title: 'Nothing was done', subtitle: shortfall(calls, ending, false), evidence, ...withReply }
+  if (!best) {
+    const external = ending.external ?? []
+    // Work done inside an MCP server leaves no recorded calls. Reporting "nothing was done"
+    // right after it replied in Slack was wrong; the agent's words are the result.
+    if (external.length > 0) {
+      const label = externalLabel(external.at(-1)!.tool)
+      return {
+        title: reply ? firstLine(reply) : 'Done',
+        subtitle: reply ? externalLabel(external[0].tool) : label,
+        evidence,
+        ...withReply
+      }
+    }
+    return { title: 'Nothing was done', subtitle: shortfall(calls, ending, false), evidence, ...withReply }
+  }
   const { title, subtitle, text, view } = best.outcome
   return {
     title: title ?? firstLine(text),

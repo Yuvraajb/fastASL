@@ -40,6 +40,36 @@ export function matchPermissionTool<T extends { name: string }>(
 }
 
 /**
+ * Whether a tool id belongs to one of the opted-in external MCP servers. The SDK does not
+ * document MCP tool ids, so any id that names the server as a whole token counts
+ * ("server", "mcp__server__tool", "server___tool", "server/tool").
+ */
+export function mcpToolAllowed(name: string | undefined, servers: readonly string[]): boolean {
+  if (!name || servers.length === 0) return false
+  const id = name.toLowerCase()
+  return servers.some((server) => {
+    const s = server.toLowerCase()
+    return id === s || new RegExp(`(^|[^a-z0-9])${s}([^a-z0-9]|$)`).test(id)
+  })
+}
+
+/**
+ * Whether an external MCP tool reads or changes things. Reads (search, list, get) are
+ * allowed without a card so a lookup never stalls the run; anything that could send,
+ * post, write or delete is still confirmed.
+ */
+const MCP_READ = /(^|_)(list|get|read|search|fetch|find|show|view|history|describe|info|profile|replies|threads|users|channels|nodes|graph)(_|$)/i
+
+/**
+ * Anything not recognisably a lookup is treated as a write, so it is confirmed before it runs.
+ * An allowlist rather than a deny-list: `slack_reply_to_thread` slipped through as a "read"
+ * and posted to Slack with no card.
+ */
+export function mcpToolWrites(name: string): boolean {
+  return !MCP_READ.test(name)
+}
+
+/**
  * The listed Droid tools to disable: everything that is not ours. Unless every
  * fastasl tool was recognised in the list, the id format is not understood and
  * an unrecognised MCP id might be one of ours, so only built-ins are returned
@@ -47,12 +77,19 @@ export function matchPermissionTool<T extends { name: string }>(
  */
 export function foreignToolIds(
   listed: readonly { id: string; source?: string }[],
-  ours: readonly { name: string }[]
+  ours: readonly { name: string }[],
+  mcpServers: readonly string[] = []
 ): { ids: string[]; sure: boolean } {
   const recognised = new Set(listed.map((t) => findFastaslTool(t.id, ours)).filter((t) => t !== undefined))
   const sure = recognised.size === ours.length
   const ids = listed
-    .filter((t) => !findFastaslTool(t.id, ours) && !KEPT_BUILTINS.has(t.id) && (sure || t.source === 'native'))
+    .filter(
+      (t) =>
+        !findFastaslTool(t.id, ours) &&
+        !KEPT_BUILTINS.has(t.id) &&
+        !mcpToolAllowed(t.id, mcpServers) &&
+        (sure || t.source === 'native')
+    )
     .map((t) => t.id)
   return { ids, sure }
 }

@@ -342,6 +342,31 @@ describe('AgentService', () => {
     warn.mockRestore()
   })
 
+  it('records an approved MCP call and shows the agent reply on Done', async () => {
+    const script: TurnScript = async function* (session) {
+      const use = {
+        ...toolUse('Script', {}),
+        details: {
+          type: ToolConfirmationType.Script,
+          calls: [{ toolName: 'slack___slack_post_message', toolInput: { channel_id: 'C1', text: 'on my way' } }]
+        }
+      } as const
+      // droid runs the script itself; here we only need the permission request it sends.
+      await session.requestPermission([use as never])
+      yield resultMessage('success', 'The newest message asks about a League game; I replied that you are on your way.')
+    }
+    const ctx = makeAgent([script], { mcp: { servers: [], names: ['slack'] } })
+    const run = await startRun(ctx)
+    const confirm = await waitForConfirm(ctx.events)
+    // The third-party tool is shown to the user before it runs.
+    expect(confirm.tool).toBe('slack___slack_post_message')
+    await ctx.agent.respond(confirm.requestId, true)
+    await run.completion
+    const done = ofType(ctx.events, 'done')[0]
+    expect(done.complete).toBe(true)
+    expect(done.result.title).toContain('newest message')
+  })
+
   it('refuses a write tool that reaches the handler without the user approving it', async () => {
     const results: unknown[] = []
     const sneaky: TurnScript = async function* (session) {

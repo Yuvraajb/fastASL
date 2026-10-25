@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { defineTool, type ToolDef, type ToolOutcome } from '../tools/types'
-import { callsComplete, cleanReply, confirmDetailsFor, summarize, type Ending } from './calls'
+import { callsComplete, cleanReply, confirmDetailsFor, externalLabel, summarize, type Ending } from './calls'
 import type { RecordedCall } from './types'
 import { makeTools } from './testing/fakes'
 
@@ -140,5 +140,33 @@ describe('confirmDetailsFor', () => {
     const broken: ToolDef = { ...plain, confirmDetails: () => { throw new Error('bad date') } }
     expect(confirmDetailsFor(broken, { title: 'Ideas', tags: [] }).kind).toBe('generic')
     warn.mockRestore()
+  })
+})
+
+describe('runs whose work happened inside an MCP server', () => {
+  const ending = (extra: Partial<Ending> = {}): Ending => ({
+    complete: true,
+    declined: false,
+    external: [{ tool: 'mcp__slack__slack_post_message' }],
+    ...extra
+  })
+
+  it('reports what the agent said instead of "nothing was done"', () => {
+    const result = summarize([], ending({ reply: 'The newest message asks about a League game. I replied that you are on your way.' }))
+    expect(result.title).toContain('The newest message')
+    expect(result.subtitle).toBe('slack/slack_post_message')
+    expect(result.reply).toContain('on your way')
+  })
+
+  it('still says nothing was done when no external call ran either', () => {
+    const result = summarize([], { complete: false, declined: false })
+    expect(result.title).toBe('Nothing was done')
+    expect(result.subtitle).toBe("The agent didn't run any action")
+  })
+
+  it('labels a tool id readably', () => {
+    expect(externalLabel('mcp__slack__slack_post_message')).toBe('slack/slack_post_message')
+    expect(externalLabel('slack___post_message')).toBe('slack/post_message')
+    expect(externalLabel('plain')).toBe('plain')
   })
 })
