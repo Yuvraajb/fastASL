@@ -1981,6 +1981,26 @@ describe('the conversation with the agent', () => {
   })
 })
 
+describe('replaceLastToken (FRIEND over TIME)', () => {
+  it('swaps the last streamed word for the longer sign, in the strip and the composing bubble', () => {
+    sign(word('call'), word('time'))
+    c.replaceLastToken('time', word('friend'))
+    expect(getApp().view).toMatchObject({ kind: 'building', tokens: [word('call'), word('friend')], sentence: 'Call friend' })
+    expect(getApp().composing.tokens).toEqual([word('call'), word('friend')])
+    sign(word('time'))
+    c.replaceLastToken('time', word('friend'))
+    expect(viewAs('building').sentence).toBe('Call friend friend')
+  })
+
+  it('a first word is swapped too; with a different word last, the new one is just added', () => {
+    sign(word('time'))
+    c.replaceLastToken('time', word('friend'))
+    expect(getApp().view).toEqual({ kind: 'recognizing', token: 'friend', isWord: true })
+    c.replaceLastToken('time', word('call'))
+    expect(viewAs('building').sentence).toBe('Friend call')
+  })
+})
+
 describe('the caption camera (captioning)', () => {
   const captionsReady = { kind: 'ready', hint: expect.stringMatching(/^Captions on/) }
 

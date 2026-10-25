@@ -7,6 +7,7 @@ import { summarizeMotion } from '../engine/recognition/motionSummary'
 import { Segmenter } from '../engine/recognition/segmenter'
 import { RecognitionSession, type Movement, type RecognitionEvent } from '../engine/recognition/session'
 import { STREAM_RULES } from '../engine/recognition/streamRules'
+import { supersede } from '../engine/recognition/streamRules/supersede'
 import type { Classification } from '../engine/recognition/recognizer'
 import { TEACH_REASONS, TeachSession } from '../engine/recognition/teach'
 import { decide, describeTop, ISLR_MAX_RANK, withTaught, yieldToGesture, type FinalDecision, type TaughtDecision } from '../engine/model/decide'
@@ -75,11 +76,15 @@ export function signLike(m: Pick<Movement, 'entered' | 'left' | 'durationMs'>): 
   return 'yes'
 }
 
+/** A recognition event as routed: a streamed word may replace the one before it (supersede). */
+type Routed = RecognitionEvent | (Extract<RecognitionEvent, { type: 'token' }> & { replaces: string })
+
 type Target = Pick<
   Controller,
   | 'gesture'
   | 'signStart'
   | 'token'
+  | 'replaceLastToken'
   | 'ambiguousSign'
   | 'signRejected'
   | 'teachListening'
@@ -216,7 +221,9 @@ export function connectRecognition(
   /** Recent tracked frames (hands, face, pose): the model's context around a movement. */
   const history: FrameSample[] = []
   /** Streaming words that came while the model was judging an earlier movement: they follow its word. */
-  let queued: RecognitionEvent[] = []
+  let queued: Routed[] = []
+  /** The last streamed word and its frame time (see supersede: FRIEND over TIME). */
+  let lastStreamed: { word: string; t: number } | null = null
   /** Dev: when the streaming matcher's state was last logged. */
   let lastDbg = -Infinity
   const forgetMovement = (): void => {
@@ -326,7 +333,7 @@ export function connectRecognition(
     if (s.view !== prev.view) followTeachPage(s.view)
   })
 
-  const route = (e: RecognitionEvent, rejectedMovement: Movement | null = null): void => {
+  const route = (e: Routed, rejectedMovement: Movement | null = null): void => {
     log(`[sign] ${describe(e)}`)
     if (e.type === 'signStart') {
       moving = true
@@ -357,7 +364,10 @@ export function connectRecognition(
       forgetMovement()
       listenForget()
     }
-    if (e.type === 'token') return controller.token(tokenFor(e.text, e.kind))
+    if (e.type === 'token') {
+      const token = tokenFor(e.text, e.kind)
+      return 'replaces' in e && e.replaces ? controller.replaceLastToken(e.replaces, token) : controller.token(token)
+    }
     // A close call between letters takes the best guess: asking for every letter would
     // stall fingerspelling, and the spelling suggestions fix the word at the end.
     if (e.kind === 'letter') return controller.token(tokenFor(e.options[0], 'letter'))
@@ -577,10 +587,17 @@ export function connectRecognition(
         if (e.type === 'token' && e.streamed) {
           // A streaming sign, mid-movement: its movement gets no outcome (the session settles it),
           // so no model word or guess for it. It waits only for an earlier movement's verdict.
-          log(`[stream] ${e.text}`)
-          if (judging) queued.push(e)
+          const verdict = supersede(lastStreamed, e.text, frame.t)
+          if (verdict === 'drop') {
+            log(`[stream] ${e.text} dropped: still ${lastStreamed?.word}'s movement`)
+            continue
+          }
+          const routed: Routed = verdict === 'replace' && lastStreamed ? { ...e, replaces: lastStreamed.word } : e
+          log(`[stream] ${e.text}${verdict === 'replace' ? ` (replaces ${lastStreamed?.word})` : ''}`)
+          lastStreamed = { word: e.text, t: frame.t }
+          if (judging) queued.push(routed)
           else {
-            route(e)
+            route(routed)
             shown = true
           }
           continue

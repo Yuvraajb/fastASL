@@ -1022,6 +1022,22 @@ export class Controller {
     })
   }
 
+  /**
+   * A streamed word that was the start of a longer sign (TIME, the first hook of FRIEND): the
+   * longer one takes its place in the phrase. With no such word last, it is just added.
+   */
+  replaceLastToken(old: string, token: Token): void {
+    const view = this.view
+    const last = this.tokens.at(-1)
+    if (!last || last.text !== old || (view.kind !== 'recognizing' && view.kind !== 'building')) return this.token(token)
+    this.tokens[this.tokens.length - 1] = token
+    this.phraseVersion++
+    this.forgetInterpretation()
+    this.syncComposing()
+    if (view.kind === 'recognizing') this.setView({ ...view, token: token.text, isWord: token.kind === 'word' })
+    else this.setView({ ...view, tokens: [...this.tokens], current: token.text, sentence: assembleSentence(this.tokens) })
+  }
+
   /** Whether new text continues what fastASL typed last (and so needs a space before it). */
   private continuesRun(): boolean {
     return this.lastTyped !== null && Date.now() - this.lastTyped.at < TYPED_RUN_MS

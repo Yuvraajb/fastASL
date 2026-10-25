@@ -1050,3 +1050,10 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - **Live fix: Call wasn't pressed.** The script read `entire contents of` each item of `repeat with w in windows`, which System Events refuses ("Can't make item 1 of entire contents ... into type specifier"), so the card said "Press Call in FaceTime". Windows are now addressed by index (`entire contents of window i`), the form that worked by hand. Checked on the user's Mac by pressing Cancel on a fictional 555 number: found and pressed in about 1 s.
     - FRIEND is now Darren Wu (the user's .env).
 
+## FRIEND over TIME, in the phrase
+
+225. **A FRIEND right after a TIME replaces it; a TIME right after FRIEND is dropped.** Live, signing FRIEND (a few hooks) came out "time time friend time friend time friend time": each hook reads as TIME's tap, and FRIEND fires only on its second hook. The rules alone (entry 217) can't see the next hook coming, so it is settled in the sequence (`streamRules/supersede.ts`, applied where streamed words are routed in `recognitionInput.ts`):
+    - FRIEND within 1.5 s (frame time) of TIME: the TIME token is swapped for FRIEND (`Controller.replaceLastToken`), so the strip, the composing bubble and the captions read "friend".
+    - TIME within 2.5 s after FRIEND: dropped, logged as `[stream] time dropped`.
+    - Cost: a real TIME signed less than 2.5 s after FRIEND is lost, and TIME then FRIEND within 1.5 s reads as one FRIEND. Neither is in the demo phrases.
+
