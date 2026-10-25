@@ -46,6 +46,7 @@ export interface LlmServiceOptions {
  * schemas, and its reply goes through the same validation, corrective retry and sanitizing.
  */
 export function createLlmService({ tools, provider, overrides }: LlmServiceOptions): LlmService {
+  if (provider.ok && provider.value === 'droid') return droidLlmService()
   const llm = llmSource(provider, overrides)
   const vision = llmSource(provider, overrides, 'vision')
   return {
@@ -54,3 +55,33 @@ export function createLlmService({ tools, provider, overrides }: LlmServiceOptio
     identifySign: (req, onStatus, signal) => identifySignWith(req, vision, onStatus, signal)
   }
 }
+
+/**
+ * LLM_PROVIDER=droid: no model besides the Factory Droid agent. The signed words go to the agent
+ * as they are (ASL glosses in signing order) and it reads them itself, one hop instead of two. No
+ * spelling suggestions, and no sign guesses (they need a vision model).
+ */
+export function droidLlmService(): LlmService {
+  return {
+    async interpret(req) {
+      const words = req.tokens.join(' ').trim() || req.sentence.trim()
+      if (!words && !req.intentPrefix) return { ok: false, error: 'Nothing signed yet' }
+      const glosses = req.intentPrefix ? `${req.intentPrefix}: ${words}` : words
+      const sentence = words ? words.charAt(0).toUpperCase() + words.slice(1) : glosses
+      return {
+        ok: true,
+        value: {
+          sentence,
+          intent: req.mode === 'command' ? `(ASL glosses, in signing order) ${glosses}` : null,
+          alternatives: [],
+          confidence: 0.9,
+          needs_confirmation: false,
+          context_actions: []
+        }
+      }
+    },
+    spellSuggest: async () => ({ ok: true, value: [] }),
+    identifySign: async () => ({ ok: false, error: 'Sign guesses need a vision model: set LLM_PROVIDER=gemini or claude' })
+  }
+}
+

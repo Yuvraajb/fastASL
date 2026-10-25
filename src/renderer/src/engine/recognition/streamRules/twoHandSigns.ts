@@ -35,7 +35,9 @@ export const TUNING = {
     /** Sideways strokes of at least `amp`: each hand at least `strokes`, one of them at least `strokesMax`. */
     amp: 0.2,
     strokes: 2,
-    strokesMax: 3
+    strokesMax: 3,
+    /** The window's first `onsetMs` must show the shake starting (a hand out of view, or both still). */
+    onsetMs: 250
   },
   time: {
     ms: 1000,
@@ -52,7 +54,7 @@ export const TUNING = {
     near: 1.2,
     /** Fingertip strokes up / down of at least `tap`: 2 = one tap (down and back up). */
     tap: 0.25,
-    strokes: 2
+    strokes: 1
   },
   open: {
     ms: 900,
@@ -64,7 +66,14 @@ export const TUNING = {
     drop: 0.6,
     flatShare: 0.8,
     /** Fingers not pointing down: wrist → knuckle image y below this. */
-    notDown: -0.3
+    notDown: -0.3,
+    /** Share of the first 3 frames of the opening with both hands flat. */
+    startFlat: 0,
+    /** Median knuckle-width ratio of the last 3 frames at most this (palms up looks wide). */
+    endWidth: 0.85,
+    /** The opening takes at least this long, and no hand moves faster than `maxSpeed` hand lengths / s between frames. */
+    minMs: 200,
+    maxSpeed: 20
   },
   music: {
     ms: 1500,
@@ -172,8 +181,9 @@ export interface Hand {
   /** Extension 0 (curled) .. 1 (straight): thumb, index, middle, ring, pinky. */
   ext: readonly number[]
   /**
-   * The tracker's handedness label: +1 for the signer's right hand (labelled 'Left' on a raw,
-   * un-mirrored frame), -1 for the left. It flickers, so use it only as a vote over a window.
+   * The tracker's handedness label: +1 'Right' (the app's HandLandmarker labels the signer's own
+   * right hand 'Right'), -1 'Left'. It flickers, and both hands can get the same label, so it is
+   * only used as a vote over a window.
    */
   right: number
 }
@@ -225,7 +235,7 @@ function measureUncached(sample: HandSample, t: number, aspect: number): Hand | 
     dy: ay / Math.max(len2, 1e-9),
     pts,
     ext,
-    right: sample.handedness === 'Left' ? 1 : -1
+    right: sample.handedness === 'Right' ? 1 : -1
   }
 }
 
@@ -396,6 +406,17 @@ function smooth(values: readonly number[]): number[] {
 
 const last = <T>(xs: readonly T[]): T => xs[xs.length - 1]
 
+/** Whether a track jumps (moves faster than `maxSpeed` hand lengths / s between sightings) from time t0 on. */
+function jumps(track: readonly (Hand | null)[], t0: number, L: number, maxSpeed: number): boolean {
+  let prev: Hand | null = null
+  for (const h of track) {
+    if (!h || h.t < t0) continue
+    if (prev && dist(h, prev) / L / (Math.max(h.t - prev.t, 1) / 1000) > maxSpeed) return true
+    prev = h
+  }
+  return false
+}
+
 /** The track's hand at time t, or the nearest one seen within 200 ms. */
 function nearestIn(track: readonly (Hand | null)[], t: number): Hand | null {
   let best: Hand | null = null
@@ -436,8 +457,17 @@ function openFires(history: readonly FrameSample[], { aspect }: StreamContext): 
     const drop = Math.max(Math.abs(end.a.y - start.a.y), Math.abs(end.b.y - start.b.y)) / L
     if (drop > P.drop * (gapEnd - gapStart)) continue
     const span = both.slice(i)
+    // A real opening takes time and is continuous: a jump (tracking glitch, hands re-found
+    // elsewhere) is no movement.
+    if (end.a.t - start.a.t < P.minMs) continue
+    if (jumps(pair.a, start.a.t, L, P.maxSpeed) || jumps(pair.b, start.b.t, L, P.maxSpeed)) continue
     if (fraction(span, (p) => flat(p.a) && flat(p.b)) < P.flatShare) continue
     if (fraction(span, (p) => p.a.dy < P.notDown && p.b.dy < P.notDown) < 0.6) continue
+    // OPEN starts from two flat hands side by side, not from bunched fingertips (the end of MEETING).
+    if (fraction(span.slice(0, 3), (p) => flat(p.a) && flat(p.b)) < P.startFlat) continue
+    // ...and does not end palms up, wide apart (hands separating into WHAT).
+    const tail = span.slice(-3)
+    if (median(tail.flatMap((p) => [p.a.width, p.b.width])) > P.endWidth) continue
     return true
   }
   return false
@@ -662,19 +692,34 @@ function whatFires(history: readonly FrameSample[], { aspect }: StreamContext): 
   const frames = framesOf(history, aspect, P.ms)
   if (last(frames).hands.length !== 2) return false
   const pair = pairUp(frames)
-  const a = present(pair.a)
-  const b = present(pair.b)
+  const L0 = (unit(present(pair.a)) + unit(present(pair.b))) / 2
+  // Only the stretch since the hands were last close together or uneven counts: the shake happens
+  // with them apart (after MEETING, say, the hands first separate, which is no shake).
+  let from = 0
+  for (let i = 0; i < pair.t.length; i++) {
+    const [p, q] = [pair.a[i], pair.b[i]]
+    if (p && q && (Math.abs(p.x - q.x) / L0 < P.gap || Math.abs(p.y - q.y) / L0 > P.height)) from = i + 1
+  }
+  const a = present(pair.a.slice(from))
+  const b = present(pair.b.slice(from))
   if (a.length < 5 || b.length < 5) return false
   if (fraction(a, open) < P.openShare || fraction(b, open) < P.openShare) return false
   const L = (unit(a) + unit(b)) / 2
-  for (let i = 0; i < pair.t.length; i++) {
-    const [p, q] = [pair.a[i], pair.b[i]]
-    if (p && q && (Math.abs(p.x - q.x) / L < P.gap || Math.abs(p.y - q.y) / L > P.height)) return false
-  }
   if (median(a.map((h) => h.width)) < P.palmUp || median(b.map((h) => h.width)) < P.palmUp) return false
   const sa = strokeCount(smooth(a.map((h) => h.x / L)), P.amp)
   const sb = strokeCount(smooth(b.map((h) => h.x / L)), P.amp)
-  return Math.min(sa, sb) >= P.strokes && Math.max(sa, sb) >= P.strokesMax
+  if (Math.min(sa, sb) < P.strokes || Math.max(sa, sb) < P.strokesMax) return false
+  // The shake must start inside the window, so one long shake is one WHAT (the matcher clears the
+  // history when a word fires): before it, the hands were close (from > 0), out of view, or still.
+  if (from > 0) return true
+  const t0 = pair.t[0]
+  const early = pair.t.map((t, i) => (t - t0 <= P.onsetMs ? i : -1)).filter((i) => i >= 0)
+  if (early.some((i) => !pair.a[i] || !pair.b[i])) return true
+  const still = (track: readonly (Hand | null)[]): boolean => {
+    const xs = early.flatMap((i) => (track[i] ? [track[i]!.x / L] : []))
+    return Math.max(...xs) - Math.min(...xs) < P.amp
+  }
+  return still(pair.a) && still(pair.b)
 }
 
 // --------------------------------------------------------------------------------- PLEASE
@@ -762,10 +807,10 @@ export const ALL_RULES: StreamRule[] = [
 
 /**
  * The words that reach about 60% recall on real signers with low false fires
- * (twoHandSigns.eval.test.ts). MUSIC does not yet: its base forearm is mostly out of view in the
- * test clips, so it stays off.
+ * (twoHandSigns.eval.test.ts). Not yet, so off: MUSIC (its base forearm is mostly out of view in
+ * the clips) and STOP (about 40% on clips tracked like the app, and the most false fires).
  */
-const VALIDATED = new Set(['time', 'email', 'stop', 'play', 'what', 'open', 'please'])
+const VALIDATED = new Set(['time', 'email', 'play', 'what', 'open', 'please'])
 
 /** The rules the app runs: base-hand signs first, then the two-hand movements, then PLEASE. */
 export const TWO_HAND_RULES: StreamRule[] = ALL_RULES.filter((r) => VALIDATED.has(r.word))

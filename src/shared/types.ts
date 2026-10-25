@@ -130,7 +130,7 @@ export interface SignGuess {
 }
 
 /** Which LLM answers interpret and spellSuggest (LLM_PROVIDER in .env; unset = claude). */
-export type LlmProviderName = 'claude' | 'gemini' | 'local' | 'mock'
+export type LlmProviderName = 'claude' | 'gemini' | 'local' | 'mock' | 'droid'
 
 /** Main -> renderer while an interpret / spellSuggest / identifySign call runs, e.g. "Rate limited, retrying...". */
 export interface LlmStatusEvent {

@@ -64,7 +64,7 @@ describe('parseLlmProvider', () => {
   it('names an unknown value and the valid ones', () => {
     expect(parseLlmProvider(' openai ')).toEqual({
       ok: false,
-      error: 'Unknown LLM_PROVIDER "openai": use claude, gemini, local or mock'
+      error: 'Unknown LLM_PROVIDER "openai": use claude, gemini, local, mock or droid'
     })
   })
 })
@@ -171,7 +171,7 @@ describe('createLlmService', () => {
       provider: parseLlmProvider('gpt'),
       overrides: { claude: claude.provider }
     })
-    const error = { ok: false, error: 'Unknown LLM_PROVIDER "gpt": use claude, gemini, local or mock' }
+    const error = { ok: false, error: 'Unknown LLM_PROVIDER "gpt": use claude, gemini, local, mock or droid' }
     expect(await service.interpret(request)).toEqual(error)
     expect(await service.spellSuggest({ letters: 'KR', frontmost: null })).toEqual(error)
     expect(claude.calls).toHaveLength(0)
@@ -285,5 +285,15 @@ describe('createLlmService', () => {
       error: 'Gemini has no quota for gemini-nope on this key. Change GEMINI_SIGN_MODEL in .env'
     })
     expect(models).toEqual(['gemini-nope', 'gemini-nope'])
+  })
+})
+
+describe('LLM_PROVIDER=droid', () => {
+  it('sends the signed glosses to the agent as they are, with no model call', async () => {
+    const llm = createLlmService({ tools: () => [], provider: { ok: true, value: 'droid' } })
+    const res = await llm.interpret({ tokens: ['tomorrow', 'meeting', 'what', 'time'], sentence: '', mode: 'command', frontmost: null, gestures: [] })
+    expect(res).toMatchObject({ ok: true, value: { sentence: 'Tomorrow meeting what time', intent: '(ASL glosses, in signing order) tomorrow meeting what time' } })
+    expect(await llm.spellSuggest({ letters: 'KRIS', frontmost: null })).toEqual({ ok: true, value: [] })
+    expect((await llm.identifySign({ frames: [], motion: '', mode: 'command', known: [] })).ok).toBe(false)
   })
 })

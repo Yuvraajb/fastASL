@@ -115,8 +115,10 @@ export function llmUnavailable(provider: string, keys: KeyStatus): string | null
     case 'local':
     case 'mock':
       return null
+    case 'droid':
+      return 'Sign guesses need a vision model: set LLM_PROVIDER=gemini or claude'
     default:
-      return 'Set LLM_PROVIDER in .env to claude, gemini, local or mock'
+      return 'Set LLM_PROVIDER in .env to claude, gemini, local, mock or droid'
   }
 }
 

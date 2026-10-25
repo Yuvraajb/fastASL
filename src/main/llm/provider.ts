@@ -6,7 +6,7 @@ import { localSource, type LocalChat, type LocalConfig, type LocalShow } from '.
 import { mockLlm } from './mock'
 import type { LlmSource } from './structured'
 
-export const LLM_PROVIDERS: readonly LlmProviderName[] = ['claude', 'gemini', 'local', 'mock']
+export const LLM_PROVIDERS: readonly LlmProviderName[] = ['claude', 'gemini', 'local', 'mock', 'droid']
 
 /** LLM_PROVIDER, trimmed and case-insensitive. Unset or blank is claude; anything else unknown is an error. */
 export function parseLlmProvider(raw: string | undefined): Result<LlmProviderName> {
@@ -15,7 +15,7 @@ export function parseLlmProvider(raw: string | undefined): Result<LlmProviderNam
   const known = LLM_PROVIDERS.find((p) => p === value)
   return known
     ? { ok: true, value: known }
-    : { ok: false, error: `Unknown LLM_PROVIDER "${raw?.trim()}": use claude, gemini, local or mock` }
+    : { ok: false, error: `Unknown LLM_PROVIDER "${raw?.trim()}": use claude, gemini, local, mock or droid` }
 }
 
 /** Transports to use instead of the real clients (tests). */
@@ -56,5 +56,8 @@ export function llmSource(
       return localSource(overrides.localChat, overrides.localConfig, overrides.localShow)
     case 'mock':
       return () => ({ ok: true, value: mockLlm })
+    case 'droid':
+      // No separate LLM: createLlmService answers interpret itself and the Droid agent reads the signs.
+      return () => ({ ok: false, error: 'LLM_PROVIDER=droid has no separate model' })
   }
 }
