@@ -1,7 +1,7 @@
 import type { AgentStep, Mode } from '@shared/types'
 import type { PickProgress } from './store'
 import type { ChatMessage, Composing, Token, View } from './types'
-import { cameraFallbackNotice, IDENTIFYING, NOT_A_SIGN, QUICK_MENU, UNDERSTANDING_STEP } from './controller'
+import { cameraFallbackNotice, QUICK_MENU, UNDERSTANDING_STEP } from './controller'
 import { MOCK_SCREENSHOT_PATH, MOCK_SCREENSHOT_SUBTITLE, MOCK_SCREENSHOT_THUMB } from './mockThumb'
 import type { MockPose } from './live'
 import { STREAM_LOST, STREAM_NOT_MJPEG } from '../engine/camera/cameraSource'
@@ -322,7 +322,6 @@ export const MOCK_SCENES: Record<string, MockScene> = {
       settings: {
         page: 'gestures',
         gestures: [
-          { id: 'builtin-peace', name: 'Peace sign', task: 'Take a screenshot', builtin: true },
           { id: 'g2', name: 'Gesture 2', task: 'Play Motion Sickness on Spotify' },
           { id: 'g3', name: 'Gesture 3', task: 'Open Notes' },
           { id: 'g4', name: 'Gesture 4', task: 'Text Sam on my way' },
@@ -403,46 +402,6 @@ export const MOCK_SCENES: Record<string, MockScene> = {
     mode: 'dictation',
     notice: 'Turn on System Events for fastASL in Privacy & Security › Automation',
     pose: 'twoHands'
-  },
-  // Guess, confirm, learn: a movement no taught word matched goes to the LLM while the phrase carries on.
-  signIdentifying: {
-    view: {
-      kind: 'building',
-      tokens: [
-        { text: 'meeting', kind: 'word' },
-        { text: 'tomorrow', kind: 'word' }
-      ],
-      current: null,
-      sentence: 'Meeting tomorrow'
-    },
-    notice: IDENTIFYING,
-    pose: 'palm'
-  },
-  signGuess: {
-    view: { kind: 'didYouMean', options: ['HELLO', 'HI', 'GOODBYE'], purpose: 'learn' },
-    pose: 'palm'
-  },
-  signLearned: {
-    view: { kind: 'recognizing', token: 'hello', isWord: true },
-    notice: 'Learned HELLO',
-    pose: 'palm'
-  },
-  settingsTeachShow: {
-    view: { kind: 'settings', settings: { page: 'teachShow', phase: 'waiting' } },
-    pose: 'palm'
-  },
-  settingsTeachShowIdentifying: {
-    view: { kind: 'settings', settings: { page: 'teachShow', phase: 'identifying' } },
-    pose: 'palm'
-  },
-  settingsTeachShowGuess: {
-    view: { kind: 'settings', settings: { page: 'teachShow', phase: 'guess', guesses: ['HELLO', 'HI', 'GOODBYE'] } },
-    pick: { count: 1, progress: 0.5 },
-    pose: 'point'
-  },
-  settingsTeachShowRetry: {
-    view: { kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', reason: NOT_A_SIGN } },
-    pose: 'palm'
   },
   // Command mode's chat card: camera, transcript, footer.
   chatEmpty: { view: { kind: 'ready' }, chat: [], pose: 'palm' },
@@ -603,13 +562,6 @@ export const SCREENSHOT_ORDER: string[] = [
   'settingsCameraUrl',
   'settingsCameraError',
   'settingsCameraLost',
-  'signIdentifying',
-  'signGuess',
-  'signLearned',
-  'settingsTeachShow',
-  'settingsTeachShowIdentifying',
-  'settingsTeachShowGuess',
-  'settingsTeachShowRetry',
   'chatEmpty',
   'chatComposing',
   'chatWorking',

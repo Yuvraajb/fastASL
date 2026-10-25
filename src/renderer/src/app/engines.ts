@@ -1,10 +1,9 @@
-import { canvasEncoder, FrameRing } from '../engine/camera/frameRing'
 import { CameraPipeline } from '../engine/camera/pipeline'
 import { loadSignModel, MissingModelError } from '../engine/model/runtime'
 import type { SignModel } from '../engine/model/signModel'
 import { knownSigns } from '../engine/model/vocabulary'
 import type { FrameSample } from '../engine/types'
-import { showsSign, takesSigns, type Controller } from './controller'
+import { takesSigns, type Controller } from './controller'
 import { connectGestures } from './gestureInput'
 import { connectRecognition } from './recognitionInput'
 import { connectShapeCapture } from './shapeInput'
@@ -31,16 +30,6 @@ export function subscribeFrames(fn: (frame: FrameSample) => void): () => void {
 /** Starts the camera with the store's settings and follows later changes. Returns a stop function. */
 export function startEngines(controller: Controller): () => void {
   const { cameraOn, cameraSource } = getApp()
-  // Guess, confirm, learn: the last few seconds of frames (small JPEGs at 8 fps), kept only
-  // while a guess could use them, so the camera costs nothing extra anywhere else.
-  const ring = new FrameRing(canvasEncoder())
-  const stopCapture = subscribeFrames((frame) => {
-    if (live.mock || !live.source || !controller.wantsSignFrames()) {
-      if (ring.all.length) ring.clear()
-      return
-    }
-    ring.offer(live.source, live.sourceWidth, live.sourceHeight, frame.t)
-  })
   // The pretrained sign model loads in the background; until then (or without its files) only the
   // taught signs are recognized. Once it is there, the camera tracks the face (and the body pose
   // for ASL Citizen) too, and the LLM is told the model's words.
@@ -55,7 +44,7 @@ export function startEngines(controller: Controller): () => void {
   const trackForModel = (): void => {
     const s = getApp()
     const signing = takesSigns(s.view) && s.mode !== 'spell'
-    const forModel = model !== null && (showsSign(s.view) || signing)
+    const forModel = model !== null && signing
     camera.setExtras({ face: signing || forModel, pose: forModel && Boolean(model?.hasCitizen) })
   }
   trackForModel()
@@ -73,7 +62,7 @@ export function startEngines(controller: Controller): () => void {
       if (err instanceof MissingModelError) controller.notify(message, MISSING_MODEL_NOTICE_MS)
     }
   )
-  const recognition = connectRecognition(controller, () => ring.all, {
+  const recognition = connectRecognition(controller, {
     model: () => model,
     holdingGesture: () => gestures.holding()
   })
@@ -102,8 +91,6 @@ export function startEngines(controller: Controller): () => void {
     stopStatus()
     stopLog?.()
     camera.stop()
-    stopCapture()
-    ring.clear()
     gestures.stop()
     stopRecognition()
     recognition.stop()

@@ -53,6 +53,21 @@ describe('mail_send run', () => {
     })
   })
 
+  it('attaches files after the recipients and waits before sending', () => {
+    const script = sendMailScript({ to: ['a@x.com'], subject: 's', body: 'b', attachments: ['/Users/me/Documents/cv.pdf'] })
+    expect(script).toContain('make new attachment with properties {file name:(POSIX file "/Users/me/Documents/cv.pdf")} at after the last paragraph')
+    expect(script.indexOf('attachment')).toBeGreaterThan(script.indexOf('to recipient'))
+    expect(script.indexOf('delay 2')).toBeLessThan(script.indexOf('send msg'))
+  })
+
+  it('shows the attachment names on the confirm card and refuses files outside the allowed folders', async () => {
+    expect(mailSend.confirmDetails?.({ to: 'a@x.com', subject: 's', body: 'b', attachments: ['/Users/me/Documents/cv.pdf'] })).toMatchObject({
+      attachments: ['cv.pdf']
+    })
+    await expect(mailSend.run({ to: 'a@x.com', subject: 's', body: 'b', attachments: ['/etc/passwd'] })).rejects.toThrow('Only files in Desktop')
+    expect(runMock).not.toHaveBeenCalled()
+  })
+
   it('resolves an exact contact name to their email first', async () => {
     runMock.mockResolvedValueOnce(contactRow('Sarah Chen', '', 'sarah@example.com')).mockResolvedValueOnce('true')
     const outcome = await mailSend.run({ to: 'sarah chen, bo@example.com', subject: 'Hi', body: 'Yo' })

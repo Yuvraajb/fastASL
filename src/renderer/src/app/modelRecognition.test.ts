@@ -143,16 +143,15 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('recognition order: the pretrained model, then taught signs, then an LLM guess', () => {
+describe('recognition order: the pretrained model, then taught signs', () => {
   it('once loaded, the camera tracks the face and the LLM is told the model’s words', async () => {
     await start(fakeModel({ status: 'rejected' }))
     expect(camera.setExtras).toHaveBeenCalledWith({ face: true, pose: false })
     expect(getApp().modelWords).toEqual(knownSigns(false))
   })
 
-  it('a sign nobody taught that the model knows becomes its word at once, and nothing is asked', async () => {
+  it('a sign nobody taught that the model knows becomes its word at once', async () => {
     const model = fakeModel({ status: 'accepted', word: 'thank you', p: 0.95 })
-    const unknown = vi.spyOn(controller, 'unknownSign')
     await start(model)
     await play([sign(UNKNOWN.reach, 2001, { restAfterMs: 2500 })])
     expect(model.classify).toHaveBeenCalledTimes(1)
@@ -161,12 +160,9 @@ describe('recognition order: the pretrained model, then taught signs, then an LL
     expect(window.start).toBeGreaterThan(0)
     expect(window.end).toBeLessThan(window.frames.length - 1)
     expect(views).toEqual([{ kind: 'recognizing', token: 'thank you', isWord: true }])
-    expect(unknown).not.toHaveBeenCalled()
   })
 
-  it('a streaming sign comes first: its movement goes to neither the model nor the LLM', async () => {
-    const identify = vi.fn(async () => ({ ok: true as const, value: { is_sign: false, candidates: [] } }))
-    controller.setServices({ ...mockServices(), identifySign: identify, signGuessUnavailable: () => null, sendsFrames: () => true })
+  it('a streaming sign comes first: its movement does not go to the model', async () => {
     // A model that would name any movement it saw.
     const model = fakeModel({ status: 'accepted', word: 'thank you', p: 0.95 })
     await start(model)
@@ -175,7 +171,6 @@ describe('recognition order: the pretrained model, then taught signs, then an LL
     await play([hello])
     expect(views).toEqual([{ kind: 'recognizing', token: 'hello', isWord: true }])
     expect(model.classify).not.toHaveBeenCalled()
-    expect(identify).not.toHaveBeenCalled()
   })
 
   it('the model unsure, a taught sign still matches: the taught word', async () => {
@@ -183,16 +178,6 @@ describe('recognition order: the pretrained model, then taught signs, then an LL
     await start(fakeModel({ status: 'rejected' }))
     await play([sign(WORDS.HELLO, 2002)])
     expect(views).toEqual([{ kind: 'recognizing', token: 'hello', isWord: true }])
-  })
-
-  it('neither knows the movement: it goes to the LLM guess as before, with the model’s words as known signs', async () => {
-    const identify = vi.fn(async () => ({ ok: true as const, value: { is_sign: false, candidates: [] } }))
-    controller.setServices({ ...mockServices(), identifySign: identify, signGuessUnavailable: () => null, sendsFrames: () => true })
-    await start(fakeModel({ status: 'rejected' }))
-    await play([sign(UNKNOWN.reach, 2003, { restAfterMs: 2500 })])
-    expect(identify).toHaveBeenCalledTimes(1)
-    const [req] = identify.mock.calls[0] as unknown as [{ known: string[] }]
-    expect(req.known).toEqual(expect.arrayContaining(['HELLO', 'THANK YOU', 'CALL', 'EAT']))
   })
 
   it('a close call becomes "Did you mean" between the model’s two words', async () => {
@@ -273,16 +258,6 @@ describe('control gestures are not swallowed by model words', () => {
     await play([hold('A', 300, 2012)])
     expect(getApp().view.kind).toBe(kind)
     if (kind === 'building') expect(getApp().view).toMatchObject({ sentence: 'Meeting at tomorrow' })
-  })
-
-  it('Show me a sign: the model names it at once, with no LLM call', async () => {
-    const identify = vi.fn()
-    controller.setServices({ ...mockServices(), identifySign: identify, signGuessUnavailable: () => null, sendsFrames: () => true })
-    await start(fakeModel({ status: 'accepted', word: 'thank you', p: 0.95 }))
-    controller.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting' } })
-    await play([rest, sign(UNKNOWN.reach, 2010, { restAfterMs: 600 })], 1200)
-    await vi.waitFor(() => expect(getApp().view).toEqual({ kind: 'settings', settings: { page: 'teachShow', phase: 'guess', guesses: ['THANK YOU'] } }))
-    expect(identify).not.toHaveBeenCalled()
   })
 })
 

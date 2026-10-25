@@ -38,8 +38,7 @@ export function simulateGesture(g: SimGesture): void {
     fingers3: { gesture: 'fingers', count: 3 },
     fingers4: { gesture: 'fingers', count: 4 },
     fingers5: { gesture: 'fingers', count: 5 },
-    handsDown: { gesture: 'handsDown' },
-    peace: { gesture: 'shape', shapeId: 'builtin-peace' }
+    handsDown: { gesture: 'handsDown' }
   }
   controller.gesture(map[g])
 }

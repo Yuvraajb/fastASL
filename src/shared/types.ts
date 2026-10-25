@@ -159,7 +159,7 @@ export type ConfirmDetails =
       guestsLabel?: string
       videoLabel?: string
     }
-  | { kind: 'mail'; to: string; subject: string; body: string }
+  | { kind: 'mail'; to: string; subject: string; body: string; attachments?: string[] }
   | { kind: 'message'; to: string; text: string }
   | { kind: 'generic'; title: string; lines: string[] }
 
@@ -227,7 +227,7 @@ export interface ShortcutRunResult {
   subtitle: string
   compiled: boolean
   durationMs: number
-  /** What the result opens (the peace sign's screenshot), from the tool outcome. */
+  /** What the result opens (a shortcut's screenshot), from the tool outcome. */
   view?: ViewAction
 }
 
@@ -255,7 +255,6 @@ export type SimGesture =
   | 'fingers5'
   | 'handsDown'
   | 'signToken'
-  | 'peace'
 
 export type DevCommand =
   | { type: 'setView'; id: string }

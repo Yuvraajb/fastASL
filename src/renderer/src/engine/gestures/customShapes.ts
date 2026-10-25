@@ -5,7 +5,7 @@ import { knn, type LabeledVector } from '../recognition/knn'
 import { Recognizer } from '../recognition/recognizer'
 import type { FrameSample, HandSample, SensitivityProfile } from '../types'
 import type { ShapeMatcher } from './engine'
-import { analyzeHand, FINGERS, fingerCount, isFist, isOpenPalm, isPeace, isThumbsUp, type HandShape } from './handShape'
+import { analyzeHand, FINGERS, fingerCount, isFist, isOpenPalm, isThumbsUp, type HandShape } from './handShape'
 
 /*
  * Custom gesture shapes: a saved handshape is a handful of static vectors (recognition's
@@ -98,7 +98,6 @@ function controlShapeName(shape: HandShape): string | null {
   if (isThumbsUp(shape)) return 'a thumbs-up'
   if (isFist(shape)) return 'a fist'
   if (isOpenPalm(shape)) return 'an open palm'
-  if (isPeace(shape)) return 'the peace sign'
   const count = fingerCount(shape)
   return count ? `${count} finger${count === 1 ? '' : 's'}` : null
 }

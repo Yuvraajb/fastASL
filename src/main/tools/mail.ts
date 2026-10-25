@@ -1,6 +1,8 @@
+import { basename } from 'node:path'
 import { z } from 'zod'
 import { appleScriptString as q, runAppleScript } from '../mac/osascript'
 import { findContact } from './contacts'
+import { allowedFile } from './files'
 import { fail } from './outcome'
 import { defineTool } from './types'
 
@@ -19,6 +21,8 @@ export interface OutgoingMail {
   to: string[]
   subject: string
   body: string
+  /** Real paths of files to attach (validated by the caller). */
+  attachments?: string[]
 }
 
 /** Builds and sends a message in Mail (never shown on screen). Returns "true" when Mail accepts it. */
@@ -26,6 +30,11 @@ export function sendMailScript(mail: OutgoingMail): string {
   const recipients = mail.to.map(
     (address) => `\t\tmake new to recipient at end of to recipients with properties {address:${q(address)}}`
   )
+  const attachments = (mail.attachments ?? []).flatMap((path) => [
+    '\ttell content of msg',
+    `\t\tmake new attachment with properties {file name:(POSIX file ${q(path)})} at after the last paragraph`,
+    '\tend tell'
+  ])
   return [
     'tell application "Mail"',
     '\tset msg to make new outgoing message with properties ' +
@@ -33,6 +42,9 @@ export function sendMailScript(mail: OutgoingMail): string {
     '\ttell msg',
     ...recipients,
     '\tend tell',
+    ...attachments,
+    // Mail attaches asynchronously: give it a moment before sending.
+    ...(attachments.length ? ['\tdelay 2'] : []),
     '\treturn (send msg) as text',
     'end tell'
   ].join('\n')
@@ -59,19 +71,28 @@ export const mailSend = defineTool({
   description:
     'Send an email from the Mail app. `to` is one or more comma-separated email addresses or full names ' +
     'exactly as saved in Contacts (partial names are refused; use contacts_find to get the exact name). ' +
-    'Needs an email address in Contacts; for someone with only a phone number, offer message_send instead.',
+    'Needs an email address in Contacts; for someone with only a phone number, offer message_send instead. ' +
+    '`attachments` are full file paths from files_find (Desktop, Downloads or Documents only).',
   schema: {
     to: z.string().trim().min(1),
     subject: z.string(),
-    body: z.string()
+    body: z.string(),
+    attachments: z.array(z.string()).max(5).optional()
   },
   risk: 'write',
   stepLabel: () => 'Sending email',
-  confirmDetails: (args) => ({ kind: 'mail', to: args.to, subject: args.subject, body: args.body }),
+  confirmDetails: (args) => ({
+    kind: 'mail',
+    to: args.to,
+    subject: args.subject,
+    body: args.body,
+    ...(args.attachments?.length ? { attachments: args.attachments.map((p) => basename(p)) } : {})
+  }),
   async run(args) {
     const to = await resolveAddresses(args.to)
     if (!to.length) return fail('Add at least one recipient')
-    const sent = await runAppleScript(sendMailScript({ to, subject: args.subject, body: args.body }), {
+    const attachments = await Promise.all((args.attachments ?? []).map(allowedFile))
+    const sent = await runAppleScript(sendMailScript({ to, subject: args.subject, body: args.body, attachments }), {
       app: 'Mail',
       launch: true,
       timeoutMs: 30_000
@@ -80,9 +101,9 @@ export const mailSend = defineTool({
     const others = to.length > 1 ? ` +${to.length - 1}` : ''
     return {
       ok: true,
-      text: `Sent "${args.subject}" to ${to.join(', ')}.`,
+      text: `Sent "${args.subject}" to ${to.join(', ')}${attachments.length ? ` with ${attachments.map((p) => basename(p)).join(', ')} attached` : ''}.`,
       title: 'Email sent',
-      subtitle: `to ${to[0]}${others}`
+      subtitle: `to ${to[0]}${others}${attachments.length ? ` · ${attachments.length} attached` : ''}`
     }
   }
 })

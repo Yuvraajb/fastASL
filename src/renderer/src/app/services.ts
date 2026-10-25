@@ -322,6 +322,7 @@ export function mockServices(): Services {
     },
     async runShortcut(gestureId) {
       await wait(400)
+      // The mock gesture whose task is a screenshot (tests and screenshot scenes use this id).
       if (gestureId === 'builtin-peace') {
         return {
           ok: true,

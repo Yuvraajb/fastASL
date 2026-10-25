@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { IDENTIFYING } from '../app/controller'
 import { useApp } from '../app/store'
 import { MODE_LABEL, statusFor, type StatusInfo, type View } from '../app/types'
 import { StatusLabel } from './StatusLabel'
@@ -12,8 +11,6 @@ import './Header.css'
  */
 const SIGNING_VIEWS: ReadonlySet<View['kind']> = new Set(['ready', 'recognizing', 'building', 'conversation', 'dictation'])
 const LISTENING: StatusInfo = { label: 'Listening...', tone: 'active' }
-/** An unknown sign is with the LLM (the notice IDENTIFYING, which Notice leaves to the header). */
-const IDENTIFYING_STATUS: StatusInfo = { label: 'Identifying...', tone: 'idle' }
 
 /** How long the mode label stays highlighted after a swipe switches modes. */
 const MODE_FLASH_MS = 1600
@@ -46,9 +43,8 @@ function useModeFlash(): boolean {
 export function Header({ view, status, close = false, onClose, title = 'fastASL' }: HeaderProps): React.JSX.Element {
   const mode = useApp((s) => s.mode)
   const signing = useApp((s) => s.signing)
-  const identifying = useApp((s) => s.notice === IDENTIFYING)
   const flashing = useModeFlash()
-  const live = SIGNING_VIEWS.has(view.kind) ? (signing ? LISTENING : identifying ? IDENTIFYING_STATUS : null) : null
+  const live = SIGNING_VIEWS.has(view.kind) ? (signing ? LISTENING : null) : null
   const info = status === undefined ? (live ?? statusFor(view, mode)) : status
   const showMode = mode !== 'command' || flashing
   return (

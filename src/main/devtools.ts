@@ -45,13 +45,6 @@ export const DEV_VIEWS: { id: string; label: string }[] = [
   { id: 'settingsSensitivity', label: 'Settings: sensitivity' },
   { id: 'missingKey', label: 'Missing key notice' },
   { id: 'palmHold', label: 'Collapsed + palm hold' },
-  { id: 'signIdentifying', label: 'Guess: identifying sign' },
-  { id: 'signGuess', label: 'Guess: is this HELLO?' },
-  { id: 'signLearned', label: 'Guess: learned HELLO' },
-  { id: 'settingsTeachShow', label: 'Settings: show me a sign' },
-  { id: 'settingsTeachShowIdentifying', label: 'Settings: show me a sign (identifying)' },
-  { id: 'settingsTeachShowGuess', label: 'Settings: show me a sign (guess)' },
-  { id: 'settingsTeachShowRetry', label: 'Settings: show me a sign (not a sign)' }
 ]
 
 const GESTURES: { gesture: SimGesture; label: string; accelerator: string }[] = [
@@ -67,8 +60,7 @@ const GESTURES: { gesture: SimGesture; label: string; accelerator: string }[] = 
   { gesture: 'fingers4', label: '4 fingers', accelerator: 'Control+Alt+4' },
   { gesture: 'fingers5', label: '5 fingers', accelerator: 'Control+Alt+5' },
   { gesture: 'handsDown', label: 'Both hands down (end phrase)', accelerator: 'Control+Alt+H' },
-  { gesture: 'signToken', label: 'Simulate a recognized sign', accelerator: 'Control+Alt+S' },
-  { gesture: 'peace', label: 'Peace sign shortcut', accelerator: 'Control+Alt+V' }
+  { gesture: 'signToken', label: 'Simulate a recognized sign', accelerator: 'Control+Alt+S' }
 ]
 
 function send(cmd: DevCommand): void {

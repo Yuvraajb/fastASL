@@ -33,6 +33,24 @@ describe('system prompt', () => {
     expect(SYSTEM_PROMPT).toMatch(/one ongoing conversation/)
   })
 
+  it('walks a meeting with a person through contact, calendar, an email offer, then mail', () => {
+    const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Meeting with a person'))
+    expect(rule).toBeDefined()
+    const order = ['contacts_find', 'calendar_list_events', 'calendar_create_event', 'Want me to email', 'mail_send'].map((t) => rule!.indexOf(t))
+    expect(order.every((i) => i >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(rule).toContain('titled exactly "Meeting with <their first name>"')
+    expect(rule).toContain('do NOT send anything yet')
+    expect(rule).toContain('If they say no, or the event was cancelled, send nothing')
+  })
+
+  it('reads spelled letters as a person, without naming anyone', () => {
+    const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Meeting with a person'))!
+    expect(rule).toContain('spelled letters ("KC", "K C"): pass the letters to contacts_find unchanged')
+    expect(rule).toContain('initials of a first and last name')
+    expect(SYSTEM_PROMPT).not.toMatch(/Krishna|Chandra/)
+  })
+
   it('keeps every safety rule', () => {
     for (const rule of [
       'Use ONLY the tools from the "fastasl" MCP server',

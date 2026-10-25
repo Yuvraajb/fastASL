@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTemplatePack, TEMPLATE_DIMS } from '@shared/templatePack'
 import type { Settings, SignTemplate } from '@shared/types'
 import {
-  BUILTIN_PEACE,
   DEFAULT_SETTINGS,
   getGestures,
   getSettings,
@@ -153,12 +152,12 @@ describe('getGestures', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it('always starts with the built-in peace sign, which the file can override', () => {
-    expect(getGestures()).toEqual([BUILTIN_PEACE])
+  it('has no gestures until some are saved, and ignores a saved built-in peace sign', () => {
+    expect(getGestures()).toEqual([])
     write({ not: 'a list' })
-    expect(getGestures()).toEqual([BUILTIN_PEACE])
-    write([{ id: BUILTIN_PEACE.id, task: 'Text me', builtin: false }])
-    expect(getGestures()).toEqual([{ ...BUILTIN_PEACE, task: 'Text me', builtin: true }])
+    expect(getGestures()).toEqual([])
+    write([{ id: 'builtin-peace', task: 'Take a screenshot', builtin: true }])
+    expect(getGestures()).toEqual([])
   })
 
   it('drops hand-edited entries that cannot run and fills in the rest', () => {
@@ -169,7 +168,7 @@ describe('getGestures', () => {
       { id: 'g2', name: 'Gesture 2', task: 'Open Notes', shape: [[0.1, 0.2], null, 'x'], compiled: 'open_app', createdAt: 5 },
       { id: 'g3', task: 'Open Calculator' }
     ])
-    expect(getGestures().slice(1)).toEqual([
+    expect(getGestures()).toEqual([
       { id: 'g2', name: 'Gesture 2', task: 'Open Notes', shape: [[0.1, 0.2]], createdAt: 5 },
       { id: 'g3', name: 'g3', task: 'Open Calculator', shape: [], createdAt: 0 }
     ])

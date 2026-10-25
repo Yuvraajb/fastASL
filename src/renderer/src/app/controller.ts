@@ -6,18 +6,14 @@ import type {
   CameraSource,
   CustomGesture,
   EnvKey,
-  IdentifySignRequest,
   IntentResult,
   Mode,
   Result,
   ShortcutRunResult,
-  SignGuess,
   SignTemplate,
   ViewAction
 } from '@shared/types'
 import { CAPTURE_REASONS, type ShapeCapture } from '../engine/gestures/customShapes'
-import { dominantSlot, keepActiveHand } from '../engine/recognition/features'
-import { wordTemplate } from '../engine/recognition/teach'
 import { getApp, setApp } from './store'
 import type { Services } from './services'
 import {
@@ -117,43 +113,6 @@ const STREAM_URL = /^https?:\/\/\S+$/i
 const CAMERA_FALLBACK_NOTICE_MS = 8000
 const BUILTIN_CAMERA: CameraSource = { kind: 'builtin' }
 export const cameraFallbackNotice = (error: string): string => `${error}. Using the MacBook camera.`
-
-/** Guess, confirm, learn: one identifySign call at a time, and at least this long between them. */
-export const SIGN_GUESS_COOLDOWN_MS = 3000
-/** Why a guess failed (no key, a rate limit) is shown at most this often, so it doesn't nag. */
-export const SIGN_GUESS_ERROR_EVERY_MS = 60_000
-/** The notice while the LLM looks at a movement. */
-export const IDENTIFYING = 'Identifying sign...'
-/** Teach a sign: the first option on every page of the list. */
-export const SHOW_ME = 'Show me a sign'
-/** Teach › Show me a sign: after the guesses, the list-based teaching. */
-export const NONE_OF_THESE = 'None of these: pick from list'
-export const NOT_A_SIGN = "That didn't look like a sign. Try again."
-
-/**
- * A movement no taught word matched, ready to be guessed: camera frames across it (none on the
- * mock provider), what hand tracking measured, and its frame vectors, which become the word's
- * template when the user confirms a guess.
- */
-export interface UnknownMovement {
-  frames: string[]
-  motion: string
-  features: number[][]
-}
-
-/**
- * A confirmed guess's movement as it is learned: a one-handed sign (by the LLM's account) keeps
- * only the signing hand (the user's dominant one when known), so the other hand in view isn't
- * expected next time.
- */
-function learnedFrames(features: number[][], hands: 1 | 2 | undefined): number[][] {
-  return hands === 1 ? keepActiveHand(features, dominantSlot(getApp().templates)) : features
-}
-
-/** The word labels taught so far, which a guess may name. */
-function taughtWords(templates: readonly SignTemplate[]): string[] {
-  return [...new Set(templates.filter((t) => t.kind === 'word').map((t) => t.label))]
-}
 
 /** The agent run on the card. Only its events are shown; anything else is stale. */
 interface AgentRunState {
@@ -269,30 +228,6 @@ function collectsPhrase(view: View): boolean {
   return view.kind === 'ready' || view.kind === 'recognizing' || view.kind === 'building' || isReply(view)
 }
 
-/**
- * Where a guessed sign can start and land: the views that add a recognized sign to the phrase
- * (or type it, in Dictation), the agent's reply included. Not while the agent works on one.
- */
-function guessView(view: View): boolean {
-  switch (view.kind) {
-    case 'ready':
-    case 'recognizing':
-    case 'building':
-    case 'dictation':
-      return true
-    case 'conversation':
-      return view.phase === 'reply'
-    default:
-      return false
-  }
-}
-
-/** Teach › Show me a sign, waiting for (or hearing) its one repetition. */
-export function showsSign(view: View): boolean {
-  if (view.kind !== 'settings' || view.settings.page !== 'teachShow') return false
-  return view.settings.phase === 'waiting' || view.settings.phase === 'listening'
-}
-
 /** Which gestures make sense in each view (and mode). The gesture engine ignores the rest. */
 export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureName> {
   switch (view.kind) {
@@ -318,7 +253,7 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
       return new Set(['thumbsUp', 'fist'])
     case 'didYouMean':
       // Swipe left edits what a spelling list was made from: the spelled letters.
-      if (view.purpose === 'sign' || view.purpose === 'learn') return new Set(['fingers', 'fist', 'thumbsUp'])
+      if (view.purpose === 'sign') return new Set(['fingers', 'fist', 'thumbsUp'])
       return new Set(['fingers', 'fist', 'thumbsUp', 'swipeLeft'])
     case 'quickMenu':
       return new Set(['fingers', 'fist'])
@@ -334,9 +269,6 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
         case 'teachRecord':
           // Letters are held still and S, T, M, N read as a fist: a swipe goes back instead.
           return new Set([view.settings.kind === 'letter' ? 'swipeLeft' : 'fist'])
-        case 'teachShow':
-          // The sign itself may show fingers or a thumbs up: those pick only once there are guesses.
-          return new Set(view.settings.phase === 'guess' ? ['fingers', 'thumbsUp', 'fist'] : ['fist'])
         case 'newGestureHold':
           // The new shape may read as a fist (or a thumbs up) while it is formed: until a recording
           // is refused, only a swipe goes back.
@@ -362,8 +294,6 @@ export function gestureScreen(view: View): string {
   if (view.kind === 'settings' && view.settings.page === 'newGestureHold') {
     return view.settings.reason ? 'shapeRefused' : 'shapeHold'
   }
-  // The guesses come up while the hand may still hold the sign's last shape (two fingers, say).
-  if (view.kind === 'settings' && view.settings.page === 'teachShow') return `teachShow:${view.settings.phase}`
   // The reply brings Ready's gestures: a thumbs up or fist already up while the agent worked must be made again.
   if (view.kind === 'conversation') return `conversation:${view.phase}`
   return view.kind
@@ -412,7 +342,7 @@ export const STARTER_WORDS = [
 ]
 export const LETTERS = 'ABCDEFGHIKLMNOPQRSTUVWXY'.split('')
 const TEACH_LABELS = [...STARTER_WORDS, ...LETTERS]
-/** Signs per page of the teach list: with Show me a sign and Spell a new word, five rows (fingers 1-5). */
+/** Signs per page of the teach list: with Spell a new word, four rows (fingers 1-4). */
 export const TEACH_PAGE = 3
 /** Repetitions recorded per sign (TeachSession defaults). */
 const TEACH_REPS = { word: 5, letter: 5 } as const
@@ -432,9 +362,7 @@ export function settingsOptions(page: SettingsPage): string[] {
     case 'root':
       return SETTINGS_ROOT
     case 'teachPick':
-      return [SHOW_ME, ...TEACH_LABELS.slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
-    case 'teachShow':
-      return page.phase === 'guess' ? [...(page.guesses ?? []), NONE_OF_THESE] : []
+      return [...TEACH_LABELS.slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
     case 'newGesturePick':
       return [...page.tasks.slice(0, 4), 'Sign a new task']
     case 'gestures':
@@ -450,10 +378,10 @@ export function settingsOptions(page: SettingsPage): string[] {
   }
 }
 
-/** "Gesture 2", "Gesture 3"…: the first number no saved gesture uses (the peace sign is gesture 1). */
+/** "Gesture 1", "Gesture 2"…: the first number no saved gesture uses. */
 export function nextGestureName(gestures: readonly Pick<CustomGesture, 'name'>[]): string {
   const names = new Set(gestures.map((g) => g.name))
-  let n = 2
+  let n = 1
   while (names.has(`Gesture ${n}`)) n++
   return `Gesture ${n}`
 }
@@ -515,17 +443,6 @@ export class Controller {
    * card's is aborted, in main too, so a rate-limited call doesn't keep retrying for nobody.
    */
   private llmCalls = new Map<AbortController, () => boolean>()
-  /** Bumped whenever the phrase changes (a sign added or deleted, an edit, a reset): a guess started before is superseded. */
-  private phraseVersion = 0
-  /** The identifySign call in flight: at most one. */
-  private signGuess: AbortController | null = null
-  private lastGuessAt = -Infinity
-  private lastGuessErrorAt = -Infinity
-  /** "Is this HELLO?" on screen: the list, the movement a pick learns, and where the card goes back to. */
-  private learning: { list: View; features: number[][]; hands: Map<string, 1 | 2>; back: View } | null = null
-  /** Teach › Show me a sign: the movement its guesses are for. */
-  private shown: { guess: View; features: number[][]; hands: Map<string, 1 | 2> } | null = null
-
   constructor(private services: Services) {
     this.subscribe()
   }
@@ -534,9 +451,6 @@ export class Controller {
     this.unsubscribe?.()
     this.unsubscribe = null
     this.clearTimers()
-    // A guess still running would otherwise land on whatever card comes next.
-    this.signGuess?.abort()
-    this.signGuess = null
   }
 
   /** Swap service implementations (mock <-> real) at runtime. */
@@ -637,14 +551,12 @@ export class Controller {
 
   /** The signed words go, the context they were signed for (quick-menu prefix, a gesture's task) stays. */
   private startNextPhrase(): void {
-    this.phraseVersion++
     this.tokens = []
     this.forgetInterpretation()
     this.syncComposing()
   }
 
   private resetPhrase(): void {
-    this.phraseVersion++
     this.tokens = []
     this.forgetInterpretation()
     this.intentPrefix = undefined
@@ -864,7 +776,7 @@ export class Controller {
         if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
         else if (g === 'thumbsUp') this.pickOption(0)
         else if (g === 'swipeLeft') this.change()
-        else if (g === 'fist') return view.purpose === 'learn' ? this.declineGuess() : this.cancel()
+        else if (g === 'fist') return this.cancel()
         return
       case 'quickMenu':
         if (g === 'fingers' && input.count) this.pickOption(input.count - 1)
@@ -888,7 +800,7 @@ export class Controller {
         else if (page.page === 'teachSpell' && g === 'swipeLeft') this.deleteTeachLetter(page.letters)
         else if (page.page === 'teachSpell' && g === 'thumbsUp') this.confirmTeachWord()
         else if (page.page === 'teachRecord' && g === 'swipeLeft') this.settingsBack()
-        else if (page.page === 'teachShow' && g === 'thumbsUp') this.pickOption(0)
+        
         else if (page.page === 'gestures' && (g === 'swipeLeft' || g === 'swipeRight')) this.gesturePage(page, g === 'swipeRight' ? 1 : -1)
         else if (page.page === 'newGestureHold' && g === 'swipeLeft') this.settingsBack()
         else if (page.page === 'newGestureHold' && g === 'thumbsUp') this.startShapeCapture(page.task)
@@ -925,7 +837,6 @@ export class Controller {
       else if (view.kind === 'confirm') void this.respondConfirm(false)
       else if (view.kind === 'settings') this.settingsBack()
       else if (view.kind === 'toast') this.leaveToast(view.returnTo)
-      else if (view.kind === 'didYouMean' && view.purpose === 'learn') this.declineGuess()
       else {
         // The X on the dictation card starts a new run of text: no space before the next sign.
         if (view.kind === 'dictation') this.lastTyped = null
@@ -987,14 +898,12 @@ export class Controller {
       return
     }
     if (mode === 'dictation' && (view.kind === 'dictation' || view.kind === 'ready')) {
-      this.phraseVersion++
       return this.dictate(token, view.kind === 'dictation' ? view.text : '')
     }
     if (view.kind === 'didYouMean' && view.purpose === 'sign') return
     if (!collectsPhrase(view)) return
     // A sign on the agent's reply starts the next message: the card moves on to it.
     if (isReply(view)) this.startNextPhrase()
-    this.phraseVersion++
     this.tokens.push(token)
     this.forgetInterpretation()
     // The chat's composing bubble shows it at once, as the forming sentence.
@@ -1040,128 +949,6 @@ export class Controller {
     this.setView({ kind: 'didYouMean', options: options.slice(0, 3), purpose: 'sign' })
   }
 
-  // ---------------------------------------------------------------- guess, confirm, learn
-
-  /**
-   * Whether a movement no taught word matched may go to the LLM now: an LLM is available, no
-   * guess is in flight, the last one started SIGN_GUESS_COOLDOWN_MS ago or more, and the card is
-   * where a sign lands (not Spell mode). Recognition asks before it builds the request.
-   */
-  guessesSigns(): boolean {
-    if (this.services.signGuessUnavailable() !== null || this.signGuess) return false
-    if (Date.now() - this.lastGuessAt < SIGN_GUESS_COOLDOWN_MS) return false
-    return getApp().mode !== 'spell' && guessView(this.view)
-  }
-
-  /**
-   * Whether the camera's recent frames should be kept for a guess: a provider that looks at
-   * them, and a card where a guess can start. Elsewhere none are captured.
-   */
-  wantsSignFrames(): boolean {
-    if (this.services.signGuessUnavailable() !== null || !this.services.sendsFrames()) return false
-    if (showsSign(this.view)) return true
-    return getApp().mode !== 'spell' && guessView(this.view)
-  }
-
-  /**
-   * Recognition: a whole, clean movement of sign length that no taught word matched, already
-   * rejected as any such movement (Listening ended), and no control gesture or letter followed
-   * it. The card carries on, with "Identifying sign..." while the LLM looks at it; "Is this X?"
-   * follows if it names a sign. A sign recognized meanwhile, an edit, a mode switch or a screen
-   * where signs don't land supersedes the guess, which is then cancelled.
-   */
-  unknownSign(movement: UnknownMovement): void {
-    if (!this.guessesSigns()) return
-    const version = this.phraseVersion
-    const abort = new AbortController()
-    const current = (): boolean => this.signGuess === abort && this.phraseVersion === version && guessView(this.view)
-    this.signGuess = abort
-    this.lastGuessAt = Date.now()
-    this.llmCalls.set(abort, current)
-    this.showLlmStatus(current, IDENTIFYING)
-    void this.guessSign(movement, current, abort)
-  }
-
-  private async guessSign(movement: UnknownMovement, current: () => boolean, abort: AbortController): Promise<void> {
-    const res = await this.identify(movement, current, abort)
-    const still = current()
-    if (this.signGuess === abort) this.signGuess = null
-    if (!still) return // superseded or cancelled: nothing is learned
-    if (!res.ok) return this.guessFailed(res.error)
-    if (!res.value.length) return // not a sign: carry on, as for any movement nothing matched
-    const view = this.view
-    const list: View = { kind: 'didYouMean', options: res.value, purpose: 'learn' }
-    this.learning = { list, features: movement.features, hands: res.hands, back: isListening(view) ? this.idleView() : view }
-    this.setView(list)
-  }
-
-  /** One identifySign call: its status lines as the notice while it is the card's, its glosses (none when it's no sign). */
-  private async identify(
-    movement: UnknownMovement,
-    current: () => boolean,
-    abort: AbortController
-  ): Promise<{ ok: true; value: string[]; hands: Map<string, 1 | 2> } | { ok: false; error: string }> {
-    const { mode, templates } = getApp()
-    const req: IdentifySignRequest = {
-      frames: movement.frames,
-      motion: movement.motion,
-      // Show me a sign (Settings) may be opened from Spell mode; a sign is a word either way.
-      mode: mode === 'spell' ? 'command' : mode,
-      // The pretrained model's words too, so a guess names them as the model does ("THANK YOU").
-      known: [...new Set([...taughtWords(templates), ...getApp().modelWords])]
-    }
-    let call: Promise<Result<SignGuess>>
-    try {
-      call = this.services.identifySign(req, (status) => this.showLlmStatus(current, status), abort.signal)
-    } catch (err) {
-      // A bridge that throws instead of answering (an old preload) is a failed guess, never a stuck one.
-      call = Promise.resolve({ ok: false, error: errorText(err) })
-    }
-    const res = await settled(call)
-    this.llmCalls.delete(abort)
-    this.clearLlmStatus(current)
-    if (!res.ok) return { ok: false, error: failureText(res) }
-    const picked = res.value.is_sign ? res.value.candidates.filter((c) => c.gloss).slice(0, 3) : []
-    return { ok: true, value: picked.map((c) => c.gloss), hands: new Map(picked.map((c) => [c.gloss, c.hands])) }
-  }
-
-  /** A failed guess (no key, a rate limit, no network): the movement stays rejected, and why is said at most once a minute. */
-  private guessFailed(error: string): void {
-    if (error === 'Cancelled') return
-    const now = Date.now()
-    if (now - this.lastGuessErrorAt < SIGN_GUESS_ERROR_EVERY_MS) return
-    this.lastGuessErrorAt = now
-    this.notifyLlmError(error)
-  }
-
-  /** "Is this X?" picked: the word joins the phrase as a recognized sign would, and that movement is learned as it. */
-  private confirmGuess(gloss: string): void {
-    const learning = this.learning
-    this.learning = null
-    if (!learning || this.view !== learning.list) return
-    this.setView(learning.back)
-    // On the agent's reply (the phrase was sent meanwhile) the word starts the next message, like any sign there.
-    this.token({ text: gloss.toLowerCase(), kind: 'word' })
-    void this.learnSign(gloss, learning.features, learning.hands.get(gloss))
-  }
-
-  /** Fist (or X) on "Is this X?": nothing is learned and the card goes back to the phrase. */
-  private declineGuess(): void {
-    const back = this.learning?.back ?? this.idleView()
-    this.learning = null
-    this.setView(back)
-  }
-
-  /**
-   * Saves the confirmed movement as one more template of `label` (a new word, or another
-   * example of one already taught), so recognition knows it next time. A notice says so: a
-   * toast would interrupt the phrase.
-   */
-  private async learnSign(label: string, features: number[][], hands?: 1 | 2): Promise<void> {
-    const error = await this.addTemplates([wordTemplate(label, learnedFrames(features, hands))])
-    this.notify(error ? `Couldn't save ${label}: ${error}` : `Learned ${label}`)
-  }
-
   /** Both hands down / stillness ended the phrase. */
   phraseEnd(): void {
     const kind = this.view.kind
@@ -1185,7 +972,6 @@ export class Controller {
     } else {
       this.tokens.pop()
     }
-    this.phraseVersion++
     this.forgetInterpretation()
     this.syncComposing()
     if (!this.tokens.length) return this.cancel()
@@ -1307,10 +1093,8 @@ export class Controller {
     this.startShapeCapture(task)
   }
 
-  /** "Edit" on a list (swipe left, the button): back to the phrase it came from. On "Is this X?" it declines. */
+  /** "Edit" on a list (swipe left, the button): back to the phrase it came from. */
   private change(): void {
-    const view = this.view
-    if (view.kind === 'didYouMean' && view.purpose === 'learn') return this.declineGuess()
     this.resumeBuilding()
   }
 
@@ -1321,10 +1105,7 @@ export class Controller {
     const choice = options[index]
     switch (view.kind) {
       case 'didYouMean':
-        if (view.purpose === 'learn') {
-          this.confirmGuess(choice)
-        } else if (view.purpose === 'sign') {
-          this.phraseVersion++
+        if (view.purpose === 'sign') {
           this.tokens.push({ text: choice, kind: 'word' })
           this.forgetInterpretation()
           this.syncComposing()
@@ -1643,7 +1424,7 @@ export class Controller {
     this.shortcut = pending
     const res = await pending
     if (this.shortcut !== pending) return // stopped, or replaced by a newer run
-    // The peace sign's screenshot shows as a thumbnail, which thumbs up opens in Preview.
+    // A shortcut's screenshot shows as a thumbnail, which thumbs up opens in Preview.
     const shot = res.ok ? imagePath(res.view) : null
     const thumb = shot ? await this.loadThumb(shot) : undefined
     if (this.shortcut !== pending) return // stopped, or replaced while the thumbnail loaded
@@ -1682,7 +1463,7 @@ export class Controller {
     if (page.page === 'gestureDetail') return void this.openGestureList(page.gesture.id)
     if (page.page === 'newGestureHold') return this.startNewGesture()
     if (page.page === 'teachRecord') return this.setView({ kind: 'settings', settings: this.teachList(page.label) })
-    if (page.page === 'teachSpell' || page.page === 'teachShow') return this.setView({ kind: 'settings', settings: this.teachList() })
+    if (page.page === 'teachSpell') return this.setView({ kind: 'settings', settings: this.teachList() })
     this.openSettings()
   }
 
@@ -1750,7 +1531,7 @@ export class Controller {
     if (page) this.setView({ kind: 'settings', settings: { ...page, done, listening: false, reason } })
   }
 
-  /** Teach › record (or Show me a sign) finished: add the new templates to signs.json, then back to the teach list. */
+  /** Teach › record finished: add the new templates to signs.json, then back to the teach list. */
   async teachLearned(label: string, learned: SignTemplate[]): Promise<void> {
     const view = this.view
     const error = await this.addTemplates(learned)
@@ -1778,78 +1559,6 @@ export class Controller {
     }
   }
 
-  // ---------------------------------------------------------------- Teach › Show me a sign
-
-  private showPage(): Extract<SettingsPage, { page: 'teachShow' }> | null {
-    const view = this.view
-    return view.kind === 'settings' && view.settings.page === 'teachShow' ? view.settings : null
-  }
-
-  /** Opens Show me a sign, waiting for one repetition (or saying why no guess can be made). */
-  private openShowSign(): void {
-    const reason = this.services.signGuessUnavailable()
-    this.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', ...(reason ? { reason } : {}) } })
-  }
-
-  /** Show me a sign: a movement started. */
-  showSignListening(): void {
-    const page = this.showPage()
-    if (page?.phase === 'waiting') this.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'listening' } })
-  }
-
-  /** Show me a sign: the movement was no repetition (a raise, too short, too long): wait for the next. */
-  showSignEnded(reason?: string): void {
-    const page = this.showPage()
-    if (page?.phase !== 'waiting' && page?.phase !== 'listening') return
-    if (page.phase === 'waiting' && !reason) return
-    this.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', ...(reason ? { reason } : {}) } })
-  }
-
-  /**
-   * Show me a sign: one clean repetition. The pretrained sign model may already have named it
-   * (`named`, glosses), which is offered at once; otherwise the LLM names it. Either way the
-   * guesses come with the list as a way out.
-   */
-  showSign(movement: UnknownMovement, named: string[] = []): void {
-    const page = this.showPage()
-    if (page?.phase !== 'waiting' && page?.phase !== 'listening') return
-    if (named.length) {
-      const guess: View = { kind: 'settings', settings: { page: 'teachShow', phase: 'guess', guesses: named.slice(0, 3) } }
-      this.shown = { guess, features: movement.features, hands: new Map() }
-      return this.setView(guess)
-    }
-    const unavailable = this.services.signGuessUnavailable()
-    if (unavailable) return this.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', reason: unavailable } })
-    const identifying: View = { kind: 'settings', settings: { page: 'teachShow', phase: 'identifying' } }
-    this.setView(identifying)
-    const abort = new AbortController()
-    const current = (): boolean => this.view === identifying
-    this.signGuess?.abort()
-    this.signGuess = abort
-    this.lastGuessAt = Date.now()
-    this.llmCalls.set(abort, current)
-    void (async () => {
-      const res = await this.identify(movement, current, abort)
-      if (this.signGuess === abort) this.signGuess = null
-      if (!current()) return // went back meanwhile
-      const waiting = (reason: string): void =>
-        this.setView({ kind: 'settings', settings: { page: 'teachShow', phase: 'waiting', reason } })
-      if (!res.ok) return waiting(res.error)
-      if (!res.value.length) return waiting(NOT_A_SIGN)
-      const guess: View = { kind: 'settings', settings: { page: 'teachShow', phase: 'guess', guesses: res.value } }
-      this.shown = { guess, features: movement.features, hands: res.hands }
-      this.setView(guess)
-    })()
-  }
-
-  /** A guess picked on Show me a sign: that one repetition is learned as the word ("Learned HELLO"). */
-  private confirmShownSign(gloss: string): void {
-    const shown = this.shown
-    this.shown = null
-    if (!shown || this.view !== shown.guess) return
-    void this.teachLearned(gloss, [wordTemplate(gloss, learnedFrames(shown.features, shown.hands.get(gloss)))])
-  }
-
   /** Loads the recorded signs (signs.json) into the store; recognition follows it, and so does an open teach page. */
   async loadTemplates(): Promise<void> {
     const saved = await window.fastasl?.getTemplates().catch(() => null)
@@ -1875,7 +1584,6 @@ export class Controller {
       case 'teachPick': {
         const options = settingsOptions(page)
         const label = options[index]
-        if (index === 0) return this.openShowSign()
         if (index === options.length - 1) {
           const canSpell = hasLetters(getApp().templates)
           this.setView({ kind: 'settings', settings: { page: 'teachSpell', letters: '', canSpell } })
@@ -1883,12 +1591,6 @@ export class Controller {
         }
         const kind = label.length === 1 ? 'letter' : 'word'
         this.setView({ kind: 'settings', settings: { page: 'teachRecord', label, kind, done: 0, total: TEACH_REPS[kind] } })
-        return
-      }
-      case 'teachShow': {
-        const guesses = page.guesses ?? []
-        if (index < guesses.length) this.confirmShownSign(guesses[index])
-        else this.setView({ kind: 'settings', settings: this.teachList() })
         return
       }
       case 'newGesturePick': {

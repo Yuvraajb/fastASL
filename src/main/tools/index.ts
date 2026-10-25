@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { calendarCreateEvent, calendarListEvents } from './calendar'
 import { contactsFind } from './contacts'
+import { lockScreen, setDarkMode, setTimer, setVolume } from './controls'
+import { filesFind, filesList, filesMove } from './files'
 import { mailSend } from './mail'
 import { faceTimeCall } from './facetime'
 import { mediaControl } from './media'
@@ -40,6 +42,13 @@ export const TOOLS: readonly ToolDef[] = [
   spotifyPause,
   mediaControl,
   faceTimeCall,
+  filesFind,
+  filesList,
+  filesMove,
+  setVolume,
+  setDarkMode,
+  setTimer,
+  lockScreen,
   openAppTool,
   webSearchTool,
   typeTextTool,

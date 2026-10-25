@@ -347,6 +347,7 @@ function ConfirmLines({ details }: { details: ConfirmDetails }): React.JSX.Eleme
           </p>
           {details.subject ? <p className="cf__line">{details.subject}</p> : null}
           <p className="cf__line cf__line--clamp cf__line--dim">{details.body}</p>
+          {details.attachments?.length ? <p className="cf__line">Attached: {details.attachments.join(', ')}</p> : null}
         </>
       )
     case 'message':

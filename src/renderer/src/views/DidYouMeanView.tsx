@@ -7,16 +7,14 @@ type Props = { view: DidYouMean }
 
 const fingersHint = (count: number): string => (count > 1 ? `hold up 1–${count} fingers` : 'hold up 1 finger')
 
-/** The list's heading: a learn list asks about the LLM's best guess ("Is this HELLO?"). */
+/** The list's heading. */
 function listTitle(view: DidYouMean): string {
   if (view.purpose === 'spell') return 'Pick a spelling'
-  if (view.purpose === 'learn') return `Is this ${view.options[0] ?? 'a sign'}?`
   return 'Did you mean...'
 }
 
-/** Hint under the list: a learn list says what a fist does (nothing is learned). */
+/** Hint under the list. */
 function listHint(view: DidYouMean): string[] | null {
-  if (view.purpose === 'learn') return [fingersHint(view.options.length), 'thumbs up = 1', 'fist = no']
   if (view.purpose === 'sign') return null
   return [fingersHint(view.options.length), 'swipe ← edit']
 }

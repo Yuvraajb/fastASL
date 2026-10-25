@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import type { GestureInput, GestureName } from '../../app/controller'
 import { SENSITIVITY, type FrameSample } from '../types'
 import {
-  BUILTIN_PEACE_ID,
   GestureEngine,
   HANDS_DOWN_MS,
   HOLD_MS,
@@ -57,8 +56,7 @@ describe('holds', () => {
     ['fingers', { pose: 'peace', noise: 0.002 }, { gesture: 'fingers', count: 2 }, HOLD_MS.fingers],
     ['fingers', { pose: 'threeAsl', noise: 0.002 }, { gesture: 'fingers', count: 3 }, HOLD_MS.fingers],
     ['fingers', { pose: 'four', noise: 0.002 }, { gesture: 'fingers', count: 4 }, HOLD_MS.fingers],
-    ['fingers', PALM, { gesture: 'fingers', count: 5 }, HOLD_MS.fingers],
-    ['shape', { pose: 'peace', noise: 0.002 }, { gesture: 'shape', shapeId: BUILTIN_PEACE_ID }, HOLD_MS.shape]
+    ['fingers', PALM, { gesture: 'fingers', count: 5 }, HOLD_MS.fingers]
   ]
   for (const [gesture, hand, input, ms] of cases) {
     it(`fires ${JSON.stringify(input)} once after ${ms} ms still`, () => {
@@ -87,17 +85,20 @@ describe('holds', () => {
     expect(pick.progress().palmHold).toBe(0)
 
     const shape = engineFor(['shape'])
-    play(shape, new Timeline().hold(400, { pose: 'peace' }).frames)
-    expect(shape.progress().shape?.id).toBe(BUILTIN_PEACE_ID)
+    shape.setShapeMatcher(() => ({ id: 'custom-1' }))
+    play(shape, new Timeline().hold(400, { pose: 'relaxed', noise: 0.002 }).frames)
+    expect(shape.progress().shape?.id).toBe('custom-1')
     expect(shape.progress().shape?.progress).toBeCloseTo(0.5, 1)
   })
 
-  it('prefers palmHold over fingers{5} and fingers{2} over the peace shape when both are active', () => {
+  it('prefers palmHold over fingers{5} and fingers{2} over a custom shape when both are active', () => {
     expect(play(engineFor(['palmHold', 'fingers']), new Timeline().hold(1500, PALM).frames)[0].input).toEqual({
       gesture: 'palmHold'
     })
     const peace = new Timeline().hold(1500, { pose: 'peace' }).frames
-    expect(play(engineFor(['fingers', 'shape']), peace)[0].input).toEqual({ gesture: 'fingers', count: 2 })
+    const both = engineFor(['fingers', 'shape'])
+    both.setShapeMatcher(() => ({ id: 'custom-1' }))
+    expect(play(both, peace)[0].input).toEqual({ gesture: 'fingers', count: 2 })
   })
 
   it('does not fire anything for a relaxed hand, ASL A or C', () => {
@@ -530,12 +531,6 @@ describe('custom shapes', () => {
     expect(matcher).toHaveBeenCalledWith(tl.frames[0].hands[0])
   })
 
-  it('lets a custom shape win over the built-in peace sign', () => {
-    const engine = engineFor(['shape'])
-    engine.setShapeMatcher(() => ({ id: 'my-v' }))
-    expect(play(engine, new Timeline().hold(1500, { pose: 'peace' }).frames)[0].input.shapeId).toBe('my-v')
-  })
-
   it('keeps built-in control shapes ahead of custom shapes', () => {
     const engine = engineFor(['fist', 'shape'])
     engine.setShapeMatcher(() => ({ id: 'anything' }))
@@ -556,7 +551,7 @@ describe('custom shapes', () => {
     expect(again.map((f) => f.input)).toEqual([{ gesture: 'shape', shapeId: 'custom-1' }])
   })
 
-  it('does not call the matcher while shapes are inactive, and falls back to peace when cleared', () => {
+  it('does not call the matcher while shapes are inactive, and fires nothing once it is cleared', () => {
     const engine = engineFor(['fist'])
     const matcher = vi.fn(() => null)
     engine.setShapeMatcher(matcher)
@@ -565,7 +560,6 @@ describe('custom shapes', () => {
 
     engine.setShapeMatcher(null)
     engine.setActive(new Set<GestureName>(['shape']))
-    const fired = play(engine, new Timeline({ t0: 2000 }).hold(1500, { pose: 'peace' }).frames)
-    expect(fired[0].input).toEqual({ gesture: 'shape', shapeId: BUILTIN_PEACE_ID })
+    expect(play(engine, new Timeline({ t0: 2000 }).hold(1500, { pose: 'peace' }).frames)).toEqual([])
   })
 })

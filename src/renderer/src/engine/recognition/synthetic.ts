@@ -59,6 +59,8 @@ export const SHAPES = {
   ONE: { curls: [0, 1, 1, 1], spread: 0.3, thumbOut: 0.2, thumbFlex: 0.9 },
   L: { curls: [0, 1, 1, 1], spread: 0.3, thumbOut: 1, thumbFlex: 0 },
   V: { curls: [0, 0, 1, 1], spread: 1.8, thumbOut: 0.2, thumbFlex: 0.9 },
+  // ASL K: a V with the thumb raised to touch the middle finger.
+  K: { curls: [0, 0, 1, 1], spread: 1.2, thumbOut: 0.55, thumbFlex: 0.3 },
   W: { curls: [0, 0, 0, 1], spread: 1.6, thumbOut: 0.2, thumbFlex: 0.9 },
   I: { curls: [1, 1, 1, 0], spread: 0.3, thumbOut: 0.2, thumbFlex: 0.9 },
   Y: { curls: [1, 1, 1, 0], spread: 1, thumbOut: 1, thumbFlex: 0 },
@@ -463,7 +465,7 @@ export const UNKNOWN: Record<string, SignSpec> = {
 }
 
 /** Letters the synthetic hand can make (static, one hand). */
-export const LETTER_SHAPES = ['A', 'B', 'C', 'D', 'E', 'I', 'L', 'O', 'S', 'V', 'W', 'Y'] as const
+export const LETTER_SHAPES = ['A', 'B', 'C', 'D', 'E', 'I', 'K', 'L', 'O', 'S', 'V', 'W', 'Y'] as const
 
 /**
  * A stand-in for FaceLandmarker's points whose bounding box is `box` (normalized image

@@ -30,6 +30,13 @@ const SAMPLE_ARGS: Record<string, Record<string, unknown>> = {
   spotify_pause: {},
   media_control: { action: 'play' },
   facetime_call: { contact_name: 'Dad' },
+  files_find: { query: 'resume' },
+  files_list: { folder: 'Desktop' },
+  files_move: { folder: 'Desktop', files: ['a.png'], destination: 'Screenshots' },
+  set_volume: { level: 30 },
+  set_dark_mode: { mode: 'on' },
+  set_timer: { minutes: 5 },
+  lock_screen: {},
   open_app: { name: 'Calendar' },
   web_search: { query: 'weather' },
   type_text: { text: 'hello' },
@@ -45,7 +52,7 @@ describe('tool registry', () => {
 
   it('asks for confirmation exactly for tools that send or create', () => {
     const write = TOOLS.filter((t) => t.risk === 'write').map((t) => t.name)
-    expect(write.sort()).toEqual(['calendar_create_event', 'facetime_call', 'mail_send', 'message_send'])
+    expect(write.sort()).toEqual(['calendar_create_event', 'facetime_call', 'files_move', 'lock_screen', 'mail_send', 'message_send'])
   })
 
   it('gives every write tool a confirm card', () => {

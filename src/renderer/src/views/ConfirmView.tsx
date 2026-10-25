@@ -48,6 +48,7 @@ function DetailLines({ details }: { details: ConfirmDetails }): React.JSX.Elemen
           </p>
           {details.subject ? <p className="detail__line">{details.subject}</p> : null}
           <p className="detail__line detail__line--clamp detail__line--dim">{details.body}</p>
+          {details.attachments?.length ? <p className="detail__line">Attached: {details.attachments.join(', ')}</p> : null}
         </>
       )
     case 'message':

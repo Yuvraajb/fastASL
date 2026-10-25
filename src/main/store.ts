@@ -99,17 +99,6 @@ export function importTemplatePack(json: unknown): { added: number; skipped: num
   return { added, skipped: pack.templates.length - added }
 }
 
-/** The built-in peace-sign screenshot shortcut is always present. */
-export const BUILTIN_PEACE: CustomGesture = {
-  id: 'builtin-peace',
-  name: 'Peace sign',
-  task: 'Take a screenshot',
-  shape: [],
-  compiled: [{ tool: 'take_screenshot', args: {}, ok: true }],
-  builtin: true,
-  createdAt: 0
-}
-
 const isNumberList = (v: unknown): v is number[] => Array.isArray(v) && v.every((x) => typeof x === 'number')
 
 /**
@@ -136,10 +125,8 @@ export function getGestures(): CustomGesture[] {
   const entries = (Array.isArray(saved) ? saved : []).filter(
     (g): g is Partial<CustomGesture> => typeof g === 'object' && g !== null
   )
-  const builtin = entries.find((g) => g.id === BUILTIN_PEACE.id)
-  const peace = toGesture({ ...BUILTIN_PEACE, ...builtin })[0] ?? BUILTIN_PEACE
-  const custom = entries.filter((g) => g.id !== BUILTIN_PEACE.id).flatMap(toGesture)
-  return [{ ...peace, builtin: true }, ...custom]
+  // The built-in peace-sign shortcut is gone: a saved entry for it is ignored.
+  return entries.filter((g) => g.id !== 'builtin-peace').flatMap(toGesture)
 }
 
 export function saveGestures(gestures: CustomGesture[]): void {

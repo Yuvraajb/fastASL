@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { STATIC_FEATURE_DIM, staticFeatures } from '../recognition/features'
 import { performHolds, rng, SHAPES, type ShapeName } from '../recognition/synthetic'
 import { SENSITIVITY, type FrameSample } from '../types'
-import { BUILTIN_PEACE_ID, GestureEngine } from './engine'
+import { GestureEngine } from './engine'
 import { CAPTURE_REASONS, SHAPE_SAMPLES, captureShape, shapeMatcher, type ShapeCapture } from './customShapes'
 import { makeHand, Timeline, type HandSpec, type PoseName } from './synthetic'
 
@@ -92,7 +92,7 @@ describe('captureShape', () => {
     ['fist', 'a fist'],
     ['thumbsUp', 'a thumbs-up'],
     ['openPalm', 'an open palm'],
-    ['peace', 'the peace sign'],
+    ['peace', '2 fingers'],
     ['one', '1 finger'],
     ['twoTogether', '2 fingers'],
     ['three', '3 fingers'],
@@ -108,7 +108,6 @@ describe('captureShape', () => {
 
   it('refuses a shape too close to a saved one, by name', () => {
     const existing = [
-      { id: BUILTIN_PEACE_ID, name: 'Peace sign', shape: [] },
       { id: 'g2', name: 'Gesture 2', shape: saved(captureShape(hold('Y', 7), ASPECT)) }
     ]
     expect(captureShape(hold('Y', 8), ASPECT, { gestures: existing })).toEqual({ ok: false, reason: CAPTURE_REASONS.taken('Gesture 2') })
@@ -144,9 +143,9 @@ describe('shapeMatcher', () => {
   const L = saved(captureShape(hold('L', 7), ASPECT))
   const hand = (shape: ShapeName, seed: number, extra: HoldOptions = {}) => hold(shape, seed, extra)[15].hands[0]
 
-  it('is null without any recorded shape (the built-in peace sign has none)', () => {
+  it('is null without any recorded shape', () => {
     expect(shapeMatcher([])).toBeNull()
-    expect(shapeMatcher([{ id: BUILTIN_PEACE_ID, shape: [] }])).toBeNull()
+    expect(shapeMatcher([{ id: 'empty', shape: [] }])).toBeNull()
   })
 
   it('ignores malformed samples from a hand-edited file', () => {
@@ -170,17 +169,14 @@ describe('shapeMatcher', () => {
     expect(match(makeHand({ pose: 'relaxed' }, { aspect: ASPECT }))).toBeNull()
   })
 
-  it('drives the engine: a saved shape held still fires its id, ahead of the peace sign', () => {
+  it('drives the engine: a saved shape held still fires its id, and a peace-sign hand fires nothing', () => {
     const engine = new GestureEngine({ aspect: ASPECT })
     engine.setActive(new Set(['shape']))
     engine.setShapeMatcher(shapeMatcher([{ id: 'y', shape: Y }], ASPECT))
     const fired = [...hold('Y', 30, {}, 1500), ...pose({ pose: 'peace' }, 1500).map((f) => ({ ...f, t: f.t + 2000 }))].flatMap((f) =>
       engine.update(f)
     )
-    expect(fired).toEqual([
-      { gesture: 'shape', shapeId: 'y' },
-      { gesture: 'shape', shapeId: BUILTIN_PEACE_ID }
-    ])
+    expect(fired).toEqual([{ gesture: 'shape', shapeId: 'y' }])
   })
 })
 

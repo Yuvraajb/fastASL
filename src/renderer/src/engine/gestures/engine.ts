@@ -10,7 +10,7 @@
  *   fingers{n}  1 index | 2 index+middle | 3 index+middle+ring or ASL 3 | 4 thumb folded | 5 open palm   0.8 s
  *   thumbsUp    fingers curled, thumb straight, pointing up, tip clearly above the knuckles   0.5 s
  *   fist        fingers curled, thumb not pointing up (so ASL A is not a fist)          0.9 s
- *   shape{id}   custom matcher hit, else the built-in V / peace ('builtin-peace')        0.8 s
+ *   shape{id}   a custom shape matched (New gesture)                                       0.8 s
  *   handsDown   no hands for 1.2 s after hands were visible; once until they come back
  *   swipeLeft/Right  wrist travels ≥ 0.22 frame widths within 300 ms, peak speed ≥ 1.2 widths/s
  *                    (over ≥ 60 ms), horizontal travel > 2.2 × vertical
@@ -57,15 +57,12 @@ import {
   isFist,
   isFlatHand,
   isOpenPalm,
-  isPeace,
   isThumbsUp,
   LANDMARK_COUNT,
   WRIST,
   type HandShape
 } from './handShape'
 import { detectSwipe, HandTracks, STILL_SPEED, SWIPE, wristSpeed, type SwipeGesture, type Track } from './motion'
-
-export const BUILTIN_PEACE_ID = 'builtin-peace'
 
 type HoldGesture = 'palmHold' | 'fingers' | 'thumbsUp' | 'fist' | 'shape'
 
@@ -296,7 +293,6 @@ export class GestureEngine {
     const wantCustom = this.active.has('shape') || [...this.s.spent].some((k) => k.startsWith('shape:'))
     const custom = this.matcher && wantCustom ? this.matcher(hand) : null
     if (custom) inputs.push({ gesture: 'shape', shapeId: custom.id })
-    if (isPeace(shape)) inputs.push({ gesture: 'shape', shapeId: BUILTIN_PEACE_ID })
     return inputs
   }
 
