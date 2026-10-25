@@ -36,6 +36,8 @@ export interface Services {
   signGuessUnavailable(): string | null
   /** Whether identifySign should get camera frames: not on the mock provider, which never looks at them. */
   sendsFrames(): boolean
+  /** The caption camera: signed glosses (ASL order) as one English sentence, or an error to keep the glosses. */
+  captionText(glosses: string[]): Promise<Result<string>>
   agentRun(req: AgentRunRequest): Promise<Result<{ runId: string }>>
   agentStop(): Promise<void>
   agentRespond(requestId: string, approved: boolean): Promise<void>
@@ -86,6 +88,8 @@ export function ipcServices(): Services {
     signGuessUnavailable: () =>
       typeof api.identifySign === 'function' ? llmUnavailable(api.llmProvider, getApp().keyStatus) : 'Restart fastASL to guess signs',
     sendsFrames: () => api.llmProvider !== 'mock',
+    captionText: (glosses) =>
+      typeof api.captionsTranslate === 'function' ? api.captionsTranslate(glosses) : Promise.resolve({ ok: false, error: 'Restart fastASL' }),
     agentRun: (req) => api.agentRun(req),
     agentStop: () => api.agentStop(),
     agentRespond: (id, approved) => api.agentRespond(id, approved),
@@ -208,6 +212,8 @@ export function mockServices(): Services {
     },
     signGuessUnavailable: () => null,
     sendsFrames: () => false,
+    // No captions model in the mock: the captions keep the signs as signed.
+    captionText: async () => ({ ok: false, error: 'No captions model in the mock' }),
     async agentRun(req) {
       const runId = `mock-${Date.now()}`
       const run = ++active

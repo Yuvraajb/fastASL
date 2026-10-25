@@ -1018,3 +1018,11 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - The captions also show a phrase again when the same words are sent twice (keyed on the message, not its text).
     - Tests: `controller.test.ts` (the caption camera block), `captions/publish.test.ts`. `npx vitest run`: 1268 passed, 9 skipped; `npm run typecheck` passes. Not verified live yet.
 
+221. **Captions are English: the signs (ASL order) become one sentence on the local model.** TOMORROW TIME WHAT MEETING is captioned "What time is the meeting tomorrow?" (`src/main/llm/caption.ts`).
+    - **Model:** Ollama on the Mac (LOCAL_LLM_URL / LOCAL_LLM_MODEL, llama3.2 by default) whatever LLM_PROVIDER is. Measured warm: 0.2 to 0.9 s a phrase, free, and the call never leaves the Mac. Gemini answered 404 (model not available) for both the configured and the older model, and the Droid agent would take seconds. The model loads when the caption window opens (a cold load takes about 13 s), and stays loaded for 30 minutes.
+    - **Flow:** the phrase is captioned as signed at once, then the English replaces it (in the transcript and the caption) when the model answers. One sign is not sent. No model, an error or a bad answer: the caption keeps the signs.
+    - **The check:** a small model guesses (YES came back as "I'm okay.", NO as "I don't know."), so a sentence must still say every signed word: by a longer form (call: calling) or a listed synonym (HELLO: hi; MOM: mother). ME / I / MY are free. Irregular forms (GO: went) fail it and keep the signs, which is the safe side.
+    - **Prompt:** ASL order (time first, question word last), first person, present tense without a time sign, no added facts, JSON `{"sentence"}`; four worked examples.
+    - **Live run** on 16 demo phrases with the real prompt: 15 became English, all correct; DAD MEETING TOMORROW YES was refused by the check ("...right?") and kept the signs.
+    - Tests: `caption.test.ts` (the check, the request, failures), `controller.test.ts` (English replaces the signs; one sign or no answer keeps them).
+

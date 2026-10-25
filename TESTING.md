@@ -927,9 +927,10 @@ Setup: Command mode, `FASTASL_CAPTIONS=1 FASTASL_LOG=1 npm run dev` (or the tray
 1. **Captions on.** **Expected:** the overlay's composing bubble reads "Captions on: what you sign goes to the call, not the agent".
 2. **Live words.** Sign TOMORROW MEETING. **Expected:** the words appear in the captions box (green outline, blinking caret) as each one fires, and in the overlay's composing bubble.
 3. **Phrase end.** Lower your hands. **Expected:** the phrase is a sent bubble in the overlay, with no "Understanding" and no agent steps. The captions show it for about 8 s. The overlay is Ready again at once.
-4. **Back to back.** Sign WHAT TIME right after. **Expected:** it is captioned the same way; nothing waits on an agent. Sign the same word twice in two phrases (YES, then YES). **Expected:** the caption shows it again the second time.
-5. **A resting fist.** Hold a fist still for 2 s between signs. **Expected:** the card stays up and captions keep working.
-6. **Commands still work.** Thumbs up, pick "Send message" (2 fingers), sign the details, lower your hands. **Expected:** this one goes to the agent as usual.
-7. **Close the caption window.** **Expected:** the hint goes away; the next phrase goes to the agent again.
-8. **OBS and FaceTime.** In OBS add a Window Capture of "fastASL Captions" and Start Virtual Camera; in FaceTime pick Video › OBS Virtual Camera. **Expected:** the other side sees the camera with the captions.
+4. **English.** Needs Ollama running with llama3.2 (`ollama pull llama3.2`). Sign TOMORROW TIME WHAT MEETING and lower your hands. **Expected:** the caption shows the signs, then within about a second "What time is the meeting tomorrow?" (the overlay's sent bubble changes too; `[caption] ... ->` in the log). CALL FRIEND: "I'm going to call my friend." A single sign stays as signed. With Ollama stopped, the signs stay and nothing else breaks.
+5. **Back to back.** Sign WHAT TIME right after. **Expected:** it is captioned the same way; nothing waits on an agent. Sign the same word twice in two phrases (YES, then YES). **Expected:** the caption shows it again the second time.
+6. **A resting fist.** Hold a fist still for 2 s between signs. **Expected:** the card stays up and captions keep working.
+7. **Commands still work.** Thumbs up, pick "Send message" (2 fingers), sign the details, lower your hands. **Expected:** this one goes to the agent as usual.
+8. **Close the caption window.** **Expected:** the hint goes away; the next phrase goes to the agent again.
+9. **OBS and FaceTime.** In OBS add a Window Capture of "fastASL Captions" and Start Virtual Camera; in FaceTime pick Video › OBS Virtual Camera. **Expected:** the other side sees the camera with the captions.
 

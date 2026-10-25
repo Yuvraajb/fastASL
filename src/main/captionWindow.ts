@@ -1,7 +1,8 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { IPC } from '@shared/ipc'
-import type { CaptionState } from '@shared/types'
+import type { CaptionState, Result } from '@shared/types'
+import { translateGlosses } from './llm/caption'
 
 /**
  * The caption camera: a plain 1280x720 window with the camera and big live captions of what the
@@ -27,6 +28,14 @@ export function registerCaptions(): void {
     if (win && !win.isDestroyed()) win.webContents.send(IPC.captionsState, state)
   })
   ipcMain.handle(IPC.captionsOpen, () => isOpen())
+  ipcMain.handle(IPC.captionsTranslate, async (_e, glosses: unknown): Promise<Result<string>> => {
+    if (!Array.isArray(glosses) || !glosses.every((g) => typeof g === 'string')) return { ok: false, error: 'bad glosses' }
+    const t0 = Date.now()
+    const res = await translateGlosses(glosses)
+    const said = glosses.join(' ').toUpperCase()
+    console.log(`[caption] ${said} -> ${res.ok ? `"${res.value}"` : `kept the signs (${res.error})`} in ${Date.now() - t0} ms`)
+    return res
+  })
 }
 
 /** Tells every other window (the overlay) that the caption window opened or closed. */
@@ -67,4 +76,6 @@ export function openCaptionWindow(load: (win: BrowserWindow, query: Record<strin
   })
   load(win, { captions: '1' })
   announce(true)
+  // Loads the caption model now (a cold load takes seconds), not on the first phrase.
+  void translateGlosses(['HELLO', 'FRIEND'])
 }

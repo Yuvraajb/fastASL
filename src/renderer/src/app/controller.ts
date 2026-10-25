@@ -228,6 +228,12 @@ function settled<T>(call: Promise<Result<T>>): Promise<Result<T>> {
 
 /** Join recognized tokens into display text. Consecutive letters form one word. */
 export function assembleSentence(tokens: Token[]): string {
+  const text = phraseWords(tokens).join(' ').trim()
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
+}
+
+/** The phrase's words: each sign, and each run of spelled letters as one word. */
+export function phraseWords(tokens: Token[]): string[] {
   const words: string[] = []
   let spelled = ''
   for (const t of tokens) {
@@ -240,8 +246,7 @@ export function assembleSentence(tokens: Token[]): string {
     words.push(t.text)
   }
   if (spelled) words.push(spelled)
-  const text = words.join(' ').trim()
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
+  return words
 }
 
 /**
@@ -1203,11 +1208,19 @@ export class Controller {
    * The caption camera is open: the phrase is for the person on the call. It goes into the
    * transcript as sent (the caption shows it) and nowhere else, and the card is Ready for the next
    * phrase at once: an agent run would stop the signs, and the captions with them, until it ended.
+   * A phrase of two signs or more then becomes English (TOMORROW MEETING WHAT TIME: "What time
+   * is the meeting tomorrow?") when the captions model answers; until then, or if it can't, the
+   * signs show as signed.
    */
   private captionPhrase(): void {
-    this.postChat({ from: 'you', kind: 'text', text: assembleSentence(this.tokens) })
+    const glosses = phraseWords(this.tokens)
+    const [id] = this.postChat({ from: 'you', kind: 'text', text: assembleSentence(this.tokens) })
     this.resetPhrase()
     this.setView(this.idleView())
+    if (glosses.length < 2) return
+    void this.services.captionText(glosses).then((res) => {
+      if (res.ok) this.patchChat(id, (m) => (m.kind === 'text' ? { ...m, text: res.value } : m))
+    })
   }
 
   /**

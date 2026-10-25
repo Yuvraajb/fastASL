@@ -1987,6 +1987,29 @@ describe('the caption camera (captioning)', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
+  it('a phrase becomes English when the captions model answers; one sign, or no answer, keeps the signs', async () => {
+    const captionText = vi
+      .spyOn(services, 'captionText')
+      .mockResolvedValueOnce({ ok: true, value: 'What time is the meeting tomorrow?' })
+      .mockResolvedValueOnce({ ok: false, error: 'fetch failed' })
+    c.setCaptioning(true)
+    sign(word('tomorrow'), word('time'), word('what'), word('meeting'))
+    g('handsDown')
+    expect(getApp().chat.at(-1)).toMatchObject({ kind: 'text', text: 'Tomorrow time what meeting' })
+    await settle()
+    expect(captionText).toHaveBeenCalledWith(['tomorrow', 'time', 'what', 'meeting'])
+    expect(getApp().chat.at(-1)).toMatchObject({ from: 'you', kind: 'text', text: 'What time is the meeting tomorrow?' })
+    sign(word('call'), word('friend'))
+    g('handsDown')
+    await settle()
+    expect(getApp().chat.at(-1)).toMatchObject({ kind: 'text', text: 'Call friend' })
+    sign(word('yes'))
+    g('handsDown')
+    await settle()
+    expect(getApp().chat.at(-1)).toMatchObject({ kind: 'text', text: 'Yes' })
+    expect(captionText).toHaveBeenCalledTimes(2)
+  })
+
   it('a quick-menu pick still goes to the agent', async () => {
     const run = vi.spyOn(services, 'agentRun')
     c.setCaptioning(true)

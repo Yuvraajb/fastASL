@@ -65,7 +65,8 @@ export const IPC = {
   captionsUpdate: 'captions:update',
   captionsState: 'captions:state',
   captionsOpen: 'captions:open',
-  captionsOpenChanged: 'captions:open-changed'
+  captionsOpenChanged: 'captions:open-changed',
+  captionsTranslate: 'captions:translate'
 } as const
 
 export interface CardSize {
@@ -140,4 +141,6 @@ export interface FastAslApi {
   captionsOpen(): Promise<boolean>
   /** Overlay: the caption camera window opened or closed. */
   onCaptionsOpen(cb: (open: boolean) => void): () => void
+  /** Overlay: signed glosses (ASL order) as one English sentence for the captions (local Ollama). */
+  captionsTranslate(glosses: string[]): Promise<Result<string>>
 }
