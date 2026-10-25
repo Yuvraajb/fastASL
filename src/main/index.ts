@@ -15,7 +15,8 @@ import { TOOLS } from './tools'
 import { getFrontmostApp } from './mac/frontmost'
 import { typeText } from './mac/typeText'
 import { imageThumb } from './thumbs'
-import { openCaptionWindow, registerCaptions } from './captionWindow'
+import { CAPTION_TITLE, openCaptionWindow, registerCaptions } from './captionWindow'
+import { setCaptionsControl } from './captionsControl'
 
 const screenshots = process.env.FASTASL_SCREENSHOTS === '1'
 const dev = !app.isPackaged || process.env.FASTASL_DEV === '1'
@@ -223,6 +224,11 @@ async function boot(): Promise<void> {
 
   registerCaptions()
   const openCaptions = (): void => openCaptionWindow(loadRenderer)
+  // The agent's captions_on / captions_off open and close the same window.
+  setCaptionsControl({
+    open: openCaptions,
+    close: () => BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.getTitle() === CAPTION_TITLE)?.close()
+  })
   setupTray({
     dev,
     onToggle: () => {

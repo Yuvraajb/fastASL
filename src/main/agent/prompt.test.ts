@@ -54,6 +54,13 @@ describe('system prompt', () => {
     expect(rule).toContain('ASK: Until when? | 3:30 PM | 4 PM | 5 PM')
   })
 
+  it('turns on live captions after a call starts', () => {
+    const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Calls:'))
+    expect(rule).toBeDefined()
+    expect(rule).toContain('after a facetime_call starts, call captions_on')
+    expect(rule).toContain('captions_off stops them')
+  })
+
   it('tells the agent how to expand a few signed keywords into a whole job', () => {
     expect(SYSTEM_PROMPT).toContain('Reading the signs:')
     expect(SYSTEM_PROMPT).toContain('MEETING (plus a person, a day, a time) means set the meeting up on the calendar and tell the person by email')

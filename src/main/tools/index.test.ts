@@ -33,6 +33,8 @@ const SAMPLE_ARGS: Record<string, Record<string, unknown>> = {
   spotify_pause: {},
   media_control: { action: 'play' },
   facetime_call: { contact_name: 'Dad' },
+  captions_on: {},
+  captions_off: {},
   files_find: { query: 'resume' },
   files_list: { folder: 'Desktop' },
   files_move: { folder: 'Desktop', files: ['a.png'], destination: 'Screenshots' },
