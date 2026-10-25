@@ -13,6 +13,7 @@ import {
   HandFist,
   Mail,
   MessageSquare,
+  Settings,
   ThumbsUp,
   type LucideIcon
 } from 'lucide-react'
@@ -442,6 +443,8 @@ function ChatFooter({ items }: { items: (string | HintItem)[] }): React.JSX.Elem
         onClick={() => controller.tap('captions')}
       />
       <Hint items={items} className="chatcard__hint" />
+      {/* Settings by click too (swipe up still works): New gesture, Teach a sign, camera... */}
+      <IconButton icon={Settings} label="Settings" size={28} iconSize={17} onClick={() => controller.tap('settings')} />
       <IconButton icon={ChevronDown} label="Minimize" size={28} iconSize={17} onClick={() => controller.tap('collapse')} />
     </footer>
   )

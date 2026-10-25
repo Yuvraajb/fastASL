@@ -618,7 +618,7 @@
 /* Slim: camera | the gestures that act now | minimize. */
 .chatcard__footer {
   display: grid;
-  grid-template-columns: 28px 28px minmax(0, 1fr) 28px;
+  grid-template-columns: 28px 28px minmax(0, 1fr) 28px 28px;
   align-items: center;
   gap: 6px;
   height: 28px;
