@@ -43,6 +43,8 @@ export type NewChatMessage = WithoutId<ChatMessage>
 export const UNDERSTANDING_STEP: AgentStep = { id: 'understanding', label: 'Understanding', status: 'current' }
 /** The label on a message signed as a new gesture's task (New gesture › Sign a new task). */
 export const GESTURE_TASK_LABEL = 'Gesture task'
+/** New gesture offers these after the recent tasks: tasks no sign can say yet. */
+export const GESTURE_SUGGESTIONS = ['Open 6 Claude Code terminals']
 /** The transcript's line when the agent was stopped, or a sent phrase was dropped before it reached the agent. */
 export const STOPPED_NOTE = 'Stopped'
 export const CANCELLED_NOTE = 'Cancelled'
@@ -1922,10 +1924,12 @@ export class Controller {
   startNewGesture(task?: string): void {
     void (async () => {
       const recent = (await window.fastasl?.getRecentTasks().catch(() => [])) ?? []
-      const tasks = [task, this.lastCompleted?.intent, ...recent.map((t) => t.intent)].filter(
+      const done = [task, this.lastCompleted?.intent, ...recent.map((t) => t.intent)].filter(
         (t, i, all): t is string => Boolean(t) && all.indexOf(t) === i
       )
-      this.setView({ kind: 'settings', settings: { page: 'newGesturePick', tasks: tasks.slice(0, 4) } })
+      const suggested = GESTURE_SUGGESTIONS.filter((s) => !done.includes(s))
+      const tasks = [...done.slice(0, 4 - suggested.length), ...suggested]
+      this.setView({ kind: 'settings', settings: { page: 'newGesturePick', tasks } })
     })()
   }
 

@@ -25,6 +25,7 @@ import {
   TOAST_MS,
   TOAST_THUMB_MS,
   CANCELLED_NOTE,
+  GESTURE_SUGGESTIONS,
   GESTURE_TASK_LABEL,
   STOPPED_NOTE,
   UNDERSTANDING_STEP,
@@ -553,11 +554,25 @@ describe('settings', () => {
     expect(viewAs('settings').settings).toEqual({ page: 'sensitivity', current: 'high' })
   })
 
+  it('new gesture offers Open 6 Claude Code terminals after the recent tasks, once', async () => {
+    c.openSettings()
+    fingers(2)
+    await settle()
+    expect(optionsFor(getApp().view)).toEqual(['Open Notes', 'Open 6 Claude Code terminals', 'Sign a new task'])
+    fingers(2)
+    expect(viewAs('settings').settings).toEqual({ page: 'newGestureHold', task: 'Open 6 Claude Code terminals', countdown: 3 })
+    // Once it has run, it is a recent task: listed there, not twice.
+    api.getRecentTasks.mockResolvedValue([{ intent: 'Open 6 Claude Code terminals', title: 'Opened 6 Claude Code terminals', at: 1, evidence: [] }, ...RECENT])
+    c.startNewGesture()
+    await settle()
+    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open 6 Claude Code terminals', 'Open Notes'] })
+  })
+
   it('new gesture lists recent tasks, then holds for the shape', async () => {
     c.openSettings()
     fingers(2)
     await settle()
-    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes', ...GESTURE_SUGGESTIONS] })
     fingers(1)
     expect(viewAs('settings').settings).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 3 })
   })
@@ -666,14 +681,14 @@ describe('settings by hand', () => {
     c.openSettings()
     fingers(2)
     await settle()
-    expect(page()).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+    expect(page()).toEqual({ page: 'newGesturePick', tasks: ['Open Notes', ...GESTURE_SUGGESTIONS] })
     fingers(1)
     expect(page()).toEqual({ page: 'newGestureHold', task: 'Open Notes', countdown: 3 })
     g('fist') // the shape being formed may read as a fist: only a swipe goes back
     expect(page()).toMatchObject({ page: 'newGestureHold' })
     g('swipeLeft')
     await settle()
-    expect(page()).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+    expect(page()).toEqual({ page: 'newGesturePick', tasks: ['Open Notes', ...GESTURE_SUGGESTIONS] })
     g('fist')
     expect(page()).toEqual({ page: 'root' })
   })
@@ -832,7 +847,7 @@ describe('new gesture', () => {
     hold()
     g('swipeLeft')
     await settle()
-    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes', ...GESTURE_SUGGESTIONS] })
     await settle(6000) // the countdown stopped with the page
     expect(viewAs('settings').settings.page).toBe('newGesturePick')
 
@@ -846,12 +861,12 @@ describe('new gesture', () => {
   })
 
   describe('Sign a new task', () => {
-    /** Settings › New gesture › 2 (Sign a new task, after Open Notes). */
+    /** Settings › New gesture › 3 (Sign a new task, after Open Notes and the suggestion). */
     async function signNewTask(): Promise<void> {
       c.openSettings()
       fingers(2)
       await settle()
-      fingers(2)
+      fingers(3)
     }
 
     it("goes to Ready with a hint; the phrase's intent becomes the task instead of an agent run", async () => {
@@ -1697,7 +1712,7 @@ describe('the conversation with the agent', () => {
     // Not a completed task: New gesture doesn't suggest it.
     c.startNewGesture()
     await settle()
-    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes'] })
+    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Open Notes', ...GESTURE_SUGGESTIONS] })
 
     void c.runAgent('Play jazz', 'Play jazz.')
     await settle()
@@ -1706,7 +1721,7 @@ describe('the conversation with the agent', () => {
     expect(conversation('reply').answer?.ok).toBe(true)
     c.startNewGesture()
     await settle()
-    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Play jazz', 'Open Notes'] })
+    expect(viewAs('settings').settings).toEqual({ page: 'newGesturePick', tasks: ['Play jazz', 'Open Notes', ...GESTURE_SUGGESTIONS] })
   })
 
   it("holds events until agentRun replies with the run id, then shows only that run's", async () => {
@@ -2315,7 +2330,7 @@ describe('the chat transcript (Command mode)', () => {
     c.openSettings()
     fingers(2)
     await settle()
-    fingers(2) // Sign a new task
+    fingers(3) // Sign a new task
     expect(getApp().composing).toEqual({ tokens: [], label: GESTURE_TASK_LABEL })
     sendPhrase(...MEETING)
     await settle(500)

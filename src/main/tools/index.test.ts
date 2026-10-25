@@ -33,7 +33,8 @@ const SAMPLE_ARGS: Record<string, Record<string, unknown>> = {
   open_app: { name: 'Calendar' },
   web_search: { query: 'weather' },
   type_text: { text: 'hello' },
-  take_screenshot: {}
+  take_screenshot: {},
+  claude_code_open: { count: 6 }
 }
 
 describe('tool registry', () => {

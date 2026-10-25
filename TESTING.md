@@ -935,3 +935,12 @@ Setup: Command mode, `FASTASL_CAPTIONS=1 FASTASL_LOG=1 npm run dev` (or the tray
    Also: with the window open, swipe left and right. **Expected:** the mode stays Command. Quit in Spell mode and relaunch with `FASTASL_CAPTIONS=1`: **Expected:** Command mode.
 9. **OBS and FaceTime.** In OBS add a Window Capture of "fastASL Captions" and Start Virtual Camera; in FaceTime pick Video › OBS Virtual Camera. **Expected:** the other side sees the camera with the captions.
 
+## Gesture: open 6 Claude Code terminals
+
+Setup: Command mode, `npm run dev` with FACTORY_API_KEY set. Optional: FASTASL_CLAUDE_DIR in .env for the folder (default: home).
+
+1. **Make the gesture.** Swipe up (Settings), 2 fingers (New gesture). **Expected:** the list shows recent tasks, then "Open 6 Claude Code terminals", then "Sign a new task". Hold up the number for "Open 6 Claude Code terminals", then hold your chosen shape still through the countdown. **Expected:** the gesture is saved.
+2. **Run it.** Back in Ready, make the shape. **Expected:** the first time, macOS asks to let fastASL (Electron in dev) control Terminal: allow it. Six Terminal windows open, tiled 3x2 over the screen, each starting Claude Code in the folder; the toast reads "Opened 6 Claude Code terminals".
+3. **Again.** Close the windows and make the shape again. **Expected:** the same, faster (the compiled call replays with no model).
+4. **By sign or text.** Ask the agent "open 2 claude code terminals". **Expected:** two windows, side by side.
+

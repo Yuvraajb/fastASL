@@ -1028,3 +1028,13 @@ Decisions made while building, in the order they came up. Each entry: what, why,
 
 222. **The caption window keeps Command mode.** Live, the captions stopped again: the saved mode was Spell (letters only, no streamed words), most likely from a signing movement read as a swipe. While the caption window is open, opening it switches to Command mode, swipes no longer change the mode, and the mode saved from last time is not applied. Closing the window gives the swipes back. Test: `controller.test.ts` (the caption camera block).
 
+## Gesture: open Claude Code terminals
+
+223. **A tool opens Claude Code in tiled Terminal windows, and New gesture offers it as a task.** The user wanted a custom gesture that opens 6 Claude Code instances at once, set up and run from the overlay.
+    - **Tool** `claude_code_open` (`tools/terminal.ts`, `mac/terminal.ts`): `count` 1 to 8, optional `folder`. JXA opens Terminal windows one by one with `do script`, each running `cd <folder> && clear && <claude>`, and tiles them over the main screen's visible area: up to 3 in a row, then two rows (6 is 3x2). Terminal because it is what the user runs; the claude path comes from the installer's spots (~/.local/bin first), since a new shell may not have it on PATH.
+    - **Folder:** FASTASL_CLAUDE_DIR from .env, else home. A folder that isn't there is refused before anything opens.
+    - **Risk 'read' (no Confirm):** it opens windows and changes nothing else; each Claude Code asks for its own permissions. A gesture that needs a thumbs-up every time would defeat the point.
+    - **New gesture:** "Open 6 Claude Code terminals" is listed after the recent tasks (GESTURE_SUGGESTIONS), since no sign says "Claude Code" yet. Once it has run it is a recent task and isn't listed twice. "Sign a new task" moves to the next number.
+    - **Running it:** the first time the gesture fires, the agent reads the task and calls the tool; after a complete run the call is compiled, so later runs replay it with no model.
+    - **Verified:** the tiling script opened and tiled 2 test windows (echo, not claude) on the user's Mac, which were then closed. Tests: `mac/terminal.test.ts`, `tools/terminal.test.ts`, `controller.test.ts`. The first run from fastASL asks macOS for permission to control Terminal.
+

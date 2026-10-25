@@ -9,6 +9,7 @@ import { notesRead, notesSearch } from './notes'
 import { fail, failFrom } from './outcome'
 import { spotifyPause, spotifyPlay, spotifySearch } from './spotify'
 import { getFrontmostAppTool, openAppTool, takeScreenshotTool, typeTextTool, webSearchTool } from './system'
+import { claudeCodeOpen } from './terminal'
 import type { ToolDef, ToolOutcome } from './types'
 
 /** A tool's run() must never throw: whoever calls it (agent or replay) gets a failed outcome instead. */
@@ -43,7 +44,8 @@ export const TOOLS: readonly ToolDef[] = [
   openAppTool,
   webSearchTool,
   typeTextTool,
-  takeScreenshotTool
+  takeScreenshotTool,
+  claudeCodeOpen
 ].map(neverThrows)
 
 export function findTool(name: string): ToolDef | undefined {
