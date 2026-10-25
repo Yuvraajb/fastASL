@@ -1744,6 +1744,62 @@ describe('the conversation with the agent', () => {
   describe('the reply card', () => {
     const reply = (answer: Answer): View => ({ kind: 'conversation', phase: 'reply', said: 'Hi.', steps: [], answer })
 
+    it('a question with choices: the reply carries them, and the agent line that asks is parsed', () => {
+      expect(answerFor({ title: '', subtitle: '', evidence: [], reply: 'ASK: When? | Morning | Evening' }, true)).toEqual({
+        ok: true,
+        text: 'When?',
+        ask: { options: ['Morning', 'Evening'] }
+      })
+      expect(answerFor({ title: '', subtitle: '', evidence: [], reply: 'Hello!' }, true)).toEqual({ ok: true, text: 'Hello!' })
+    })
+
+    describe('with a question to answer', () => {
+      const CHOICES = ['Morning', 'Afternoon', 'Evening', 'Night']
+      const asked = (): View => reply({ ok: true, text: 'When?', ask: { options: CHOICES } })
+      const question = (): void => {
+        setApp({ chat: [{ id: 'q', from: 'agent', kind: 'text', text: 'When?', ask: { options: CHOICES } }] })
+        c.setView(asked())
+      }
+
+      it('the choices are the options, and fingers are active to pick them', () => {
+        question()
+        expect(optionsFor(getApp().view)).toEqual(CHOICES)
+        expect(activeGestures(getApp().view, 'command').has('fingers')).toBe(true)
+        expect(activeGestures(reply({ ok: true, text: 'Hello!' }), 'command').has('fingers')).toBe(false)
+      })
+
+      it('holding up 3 fingers sends "Evening" as the answer and marks it picked', async () => {
+        const run = vi.spyOn(services, 'agentRun')
+        question()
+        fingers(3)
+        await settle()
+        expect(run).toHaveBeenCalledWith(expect.objectContaining({ intent: 'Evening', sentence: 'Evening' }))
+        expect(getApp().chat.find((m) => m.id === 'q')).toMatchObject({ ask: { options: CHOICES, picked: 2 } })
+        expect(getApp().chat.some((m) => m.from === 'you' && m.kind === 'text' && m.text === 'Evening')).toBe(true)
+      })
+
+      it('a thumbs up takes the first choice, and a click on a choice takes that one', async () => {
+        const run = vi.spyOn(services, 'agentRun')
+        question()
+        g('thumbsUp')
+        await settle()
+        expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ intent: 'Morning' }))
+        question()
+        c.tap('option', 3)
+        await settle()
+        expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ intent: 'Night' }))
+      })
+
+      it('a finger count beyond the choices does nothing', async () => {
+        const run = vi.spyOn(services, 'agentRun')
+        question()
+        fingers(5)
+        await settle()
+        expect(run).not.toHaveBeenCalled()
+        expect(getApp().view).toEqual(asked())
+      })
+    })
+
     it('stays for as long as nothing happens: no idle timeout, and the conversation is never cleared', async () => {
       // The mock agent answers 1.2 s after hands down (interpret 0.5 s, then the agent 0.7 s).
       sendPhrase(word('hello'))
@@ -1795,12 +1851,11 @@ describe('the conversation with the agent', () => {
       expect(getApp().view).toEqual({ kind: 'ready' })
     })
 
-    it('an ambiguous sign on the reply asks, and the pick starts the next phrase', () => {
+    it('an ambiguous sign on the reply takes the best guess, which starts the next phrase', () => {
       c.setView(reply({ ok: true, text: 'Hello!' }))
       c.ambiguousSign(['where', 'what'])
-      expect(getApp().view).toEqual({ kind: 'didYouMean', options: ['where', 'what'], purpose: 'sign' })
-      fingers(2)
-      expect(viewAs('building')).toMatchObject({ tokens: [word('what')], sentence: 'What' })
+      expect(getApp().view).toMatchObject({ kind: 'recognizing', token: 'where' })
+      expect(getApp().composing.tokens.map((t) => t.text)).toEqual(['where'])
     })
   })
 
@@ -2093,11 +2148,9 @@ describe('the chat transcript (Command mode)', () => {
     expect(chat()).toEqual([])
   })
 
-  it('a pick in Did you mean joins the composing bubble too', () => {
+  it('a close call between signs joins the composing bubble with its best guess', () => {
     c.token(word('meeting'))
     c.ambiguousSign(['tomorrow', 'today'])
-    expect(composingWords()).toEqual(['meeting'])
-    fingers(1)
     expect(composingWords()).toEqual(['meeting', 'tomorrow'])
   })
 
@@ -2340,34 +2393,18 @@ describe('the chat transcript (Command mode)', () => {
   })
 })
 
-describe('did you mean', () => {
-  it('ambiguous sign: pick by fingers appends the chosen word', () => {
+describe('a close call between two signs', () => {
+  it('takes the best guess, with no list to pick from', () => {
     c.token(word('meeting'))
-    c.ambiguousSign(['tomorrow', 'today', 'tonight', 'Tuesday'])
-    expect(getApp().view).toEqual({
-      kind: 'didYouMean',
-      options: ['tomorrow', 'today', 'tonight'],
-      purpose: 'sign'
-    })
-    c.token(word('ignored'))
-    fingers(4)
-    expect(getApp().view.kind).toBe('didYouMean')
-    fingers(2)
-    expect(viewAs('building')).toMatchObject({ tokens: [word('meeting'), word('today')], current: 'today', sentence: 'Meeting today' })
+    c.ambiguousSign(['tomorrow', 'today', 'tonight'])
+    expect(viewAs('building')).toMatchObject({ tokens: [word('meeting'), word('tomorrow')], current: 'tomorrow', sentence: 'Meeting tomorrow' })
   })
 
-  it('thumbsUp takes the first option', () => {
-    c.ambiguousSign(['hello', 'help'])
-    g('thumbsUp')
-    expect(viewAs('building')).toMatchObject({ tokens: [word('hello')] })
-  })
-
-
-  it('"Edit" on an ambiguous sign returns to the phrase', () => {
-    sign(word('meeting'), word('at'))
+  it('a swipe left takes a wrong guess back', () => {
+    sign(word('meeting'))
     c.ambiguousSign(['three', 'tree'])
-    c.tap('secondary')
-    expect(viewAs('building')).toMatchObject({ tokens: [word('meeting'), word('at')], sentence: 'Meeting at' })
+    g('swipeLeft')
+    expect(getApp().composing.tokens.map((t) => t.text)).toEqual(['meeting'])
   })
 })
 

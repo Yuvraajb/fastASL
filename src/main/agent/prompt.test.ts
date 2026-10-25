@@ -33,23 +33,25 @@ describe('system prompt', () => {
     expect(SYSTEM_PROMPT).toMatch(/one ongoing conversation/)
   })
 
-  it('does a meeting with a person end to end: contact, questions, event, then the email', () => {
+  it('does a meeting with a person end to end: contact, questions with choices, event, then the email', () => {
     const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Meeting with a person'))
     expect(rule).toBeDefined()
-    const order = ['contacts_find', 'a) no hour yet', 'b) the hour has no AM or PM', 'c) always', 'calendar_create_event', 'mail_send'].map((t) => rule!.indexOf(t))
+    const order = ['contacts_find', 'a) no time of day yet', 'b) once you know the time of day', 'c) always last', 'calendar_create_event', 'mail_send'].map((t) => rule!.indexOf(t))
     expect(order.every((i) => i >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((a, b) => a - b))
     expect(rule).toContain('titled exactly "Meeting with <their first name>"')
+    expect(rule).toContain('with NO attendees (the email is the invitation)')
     expect(rule).toContain('Do not ask whether to email')
     expect(rule).toContain('If the event was cancelled, send nothing')
   })
 
-  it('does not look at the calendar for a meeting, and asks with numbered options the user can sign', () => {
+  it('does not look at the calendar for a meeting, and asks with choices the card can show as numbers', () => {
     const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Meeting with a person'))!
     expect(rule).toContain('skip calendar_list_events')
-    expect(rule).toContain('"1 = ..., 2 = ..." (at most three)')
-    expect(rule).toContain('A bare number or word that follows is the answer to your last question')
-    expect(rule).toContain('1 = AM, 2 = PM')
+    expect(rule).toContain('ASK: <short question> | <choice 1> | <choice 2> | <choice 3> | <choice 4>')
+    expect(rule).toContain('"ASK: When? | Morning | Afternoon | Evening | Night"')
+    expect(rule).toContain('ASK: What time? | 8 AM | 9 AM | 10 AM | 11 AM')
+    expect(rule).toContain('ASK: Until when? | 3:30 PM | 4 PM | 5 PM')
   })
 
   it('tells the agent how to expand a few signed keywords into a whole job', () => {

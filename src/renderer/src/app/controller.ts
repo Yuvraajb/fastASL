@@ -1,3 +1,4 @@
+import { parseAsk } from '@shared/ask'
 import { mergeTemplates } from '@shared/templatePack'
 import type {
   AgentEvent,
@@ -162,6 +163,9 @@ const LOOKUP_TOOLS: ReadonlySet<string> = new Set([
  * subtitle come from the tool outcomes, with the model's own line under them.
  */
 export function answerFor(result: AgentResult, complete: boolean): Answer {
+  // A question with choices ("ASK: When? | Morning | Evening"): the question is the text, the choices are picked.
+  const question = parseAsk(result.reply)
+  if (question) return { ok: true, text: question.question, ask: { options: question.options } }
   const lookupsOnly = result.evidence.every((e) => LOOKUP_TOOLS.has(e.tool))
   if (lookupsOnly && result.reply) return { ok: true, text: result.reply }
   return {
@@ -245,7 +249,11 @@ export function activeGestures(view: View, mode: Mode = 'command'): Set<GestureN
       return new Set(['thumbsUp', 'fist', 'swipeLeft', 'swipeRight', 'handsDown'])
     case 'conversation':
       // The reply stays ready for the next message: Ready's gestures (thumbs up opens the result).
-      if (view.phase === 'reply') return activeGestures({ kind: 'ready' }, mode)
+      // A question with choices is answered by holding up that many fingers.
+      if (view.phase === 'reply') {
+        const ready = activeGestures({ kind: 'ready' }, mode)
+        return view.answer?.ask ? new Set<GestureName>([...ready, 'fingers']) : ready
+      }
       return new Set(['fist'])
     case 'working':
       return new Set(['fist'])
@@ -329,6 +337,8 @@ export function optionsFor(view: View): string[] {
       return view.options
     case 'quickMenu':
       return view.options
+    case 'conversation':
+      return view.phase === 'reply' ? (view.answer?.ask?.options ?? []) : []
     case 'settings':
       return settingsOptions(view.settings)
     default:
@@ -626,7 +636,7 @@ export class Controller {
     if (failed) {
       return { from: 'agent', kind: 'error', title: answer.title ?? "Couldn't finish", ...(answer.subtitle ? { subtitle: answer.subtitle } : {}) }
     }
-    if (answer.title === undefined) return { from: 'agent', kind: 'text', text: answer.text ?? '' }
+    if (answer.title === undefined) return { from: 'agent', kind: 'text', text: answer.text ?? '', ...(answer.ask ? { ask: { options: answer.ask.options } } : {}) }
     return { from: 'agent', kind: 'result', answer }
   }
 
@@ -756,6 +766,11 @@ export class Controller {
         return
       case 'conversation':
         if (view.phase === 'reply') {
+          // A question with choices: fingers pick the choice, a thumbs up the first.
+          if (view.answer?.ask) {
+            if (g === 'fingers' && input.count) return this.pickOption(input.count - 1)
+            if (g === 'thumbsUp') return this.pickOption(0)
+          }
           // A thumbs up opens what the agent made (the screenshot in Preview); with nothing to open it is Ready's.
           if (g === 'thumbsUp' && view.answer?.view) return this.openResult(view.answer.view)
           return this.readyGesture(input)
@@ -941,12 +956,9 @@ export class Controller {
 
   /** Recognition was unsure between several signs: ask the user while a phrase is being signed. */
   ambiguousSign(options: string[]): void {
-    // Dictation types as you sign: a question per word would stall it, so it takes the best guess.
-    if (getApp().mode === 'dictation') return this.token({ text: options[0], kind: 'word' })
-    if (!collectsPhrase(this.view)) return
-    // On the reply, the pick starts the next message.
-    if (isReply(this.view)) this.startNextPhrase()
-    this.setView({ kind: 'didYouMean', options: options.slice(0, 3), purpose: 'sign' })
+    // No "Did you mean" list to stop at: a close call between signs takes the best guess, and the
+    // agent reads the sentence in its context (a wrong word is deleted with a swipe left).
+    this.token({ text: options[0], kind: 'word' })
   }
 
   /** Both hands down / stillness ended the phrase. */
@@ -1121,6 +1133,9 @@ export class Controller {
           void this.insert(choice, 'Typed')
         }
         return
+      case 'conversation':
+        this.answerQuestion(index, choice)
+        return
       case 'quickMenu':
         // The details are signed next, and the pick prefixes them.
         this.intentPrefix = choice
@@ -1131,6 +1146,15 @@ export class Controller {
         this.settingsPick(view.settings, index)
         return
     }
+  }
+
+  /** A choice of the agent's question: it stays in the transcript marked as picked, and goes back as the answer. */
+  private answerQuestion(index: number, choice: string): void {
+    const chat = getApp().chat
+    const open = (m: ChatMessage): boolean => m.kind === 'text' && m.from === 'agent' && m.ask !== undefined && m.ask.picked === undefined
+    const asked = [...chat].reverse().find(open)
+    if (asked) this.patchChat(asked.id, (m) => (m.kind === 'text' && m.from === 'agent' && m.ask ? { ...m, ask: { ...m.ask, picked: index } } : m))
+    void this.runAgent(choice, choice)
   }
 
   /** The raw letters can be picked at once; Claude's spellings join them when they arrive. */

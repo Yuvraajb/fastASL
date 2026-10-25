@@ -633,14 +633,14 @@ describe('sign recognition', () => {
     expect(getApp().view).toEqual({ kind: 'dictation', text: '' })
   })
 
-  it('two signs it cannot tell apart: Did you mean, with lower-case options', () => {
+  it('two signs it cannot tell apart: the best guess, without asking', () => {
     const reps = seeds(5, 5).map((s) => sign(WORDS.PLAY, s))
     setApp({ templates: [...teach('PLAY', 'word', reps), ...teach('GAME', 'word', reps)] })
     stop = startEngines(controller)
     play([sign(WORDS.PLAY, 960)])
     const view = getApp().view
-    expect(view).toMatchObject({ kind: 'didYouMean', purpose: 'sign' })
-    expect(view.kind === 'didYouMean' && [...view.options].sort()).toEqual(['game', 'play'])
+    expect(view.kind).toBe('recognizing')
+    expect(view.kind === 'recognizing' && ['game', 'play']).toContain(view.kind === 'recognizing' ? view.token : '')
   })
 
   it('two letters it cannot tell apart: the best guess, without asking', () => {

@@ -180,10 +180,10 @@ describe('recognition order: the pretrained model, then taught signs', () => {
     expect(views).toEqual([{ kind: 'recognizing', token: 'hello', isWord: true }])
   })
 
-  it('a close call becomes "Did you mean" between the model’s two words', async () => {
+  it('a close call between the model’s two words takes the first, without asking', async () => {
     await start(fakeModel({ status: 'ambiguous', options: ['yes', 'no'] }))
     await play([sign(UNKNOWN.reach, 2004)])
-    expect(getApp().view).toMatchObject({ kind: 'didYouMean', purpose: 'sign', options: ['yes', 'no'] })
+    expect(getApp().view).toMatchObject({ kind: 'recognizing', token: 'yes' })
   })
 
   it('a model that never answers holds the movement only MODEL_WAIT_MS: then the taught word', async () => {

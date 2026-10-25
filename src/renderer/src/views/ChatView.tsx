@@ -181,6 +181,7 @@ function Message({ m, first }: { m: ChatMessage; first: boolean }): React.JSX.El
 function Bubble({ m }: { m: Exclude<ChatMessage, { kind: 'note' }> }): React.JSX.Element {
   switch (m.kind) {
     case 'text':
+      if (m.from === 'agent' && m.ask) return <AskBubble text={m.text} ask={m.ask} />
       return <p className={`bubble bubble--${m.from}`}>{m.text}</p>
     case 'steps':
       return (
@@ -208,6 +209,33 @@ function Bubble({ m }: { m: Exclude<ChatMessage, { kind: 'note' }> }): React.JSX
 }
 
 /** The steps up to the one running (or all of them), the last few: the latest work, never what's planned next. */
+/**
+ * The agent's question with its choices, numbered. They stay in the transcript: the open ones can be
+ * picked (hold up that many fingers, a thumbs up for 1, or click), an answered one shows what was picked.
+ */
+function AskBubble({ text, ask }: { text: string; ask: { options: string[]; picked?: number } }): React.JSX.Element {
+  const answered = ask.picked !== undefined
+  return (
+    <div className="ask">
+      <p className="bubble bubble--agent">{text}</p>
+      <div className="ask__options" role="group" aria-label={text}>
+        {ask.options.map((option, i) => (
+          <button
+            key={`${i}:${option}`}
+            type="button"
+            className={`ask__chip${ask.picked === i ? ' ask__chip--picked' : ''}${answered && ask.picked !== i ? ' ask__chip--dim' : ''}`}
+            disabled={answered}
+            onClick={() => controller.tap('option', i)}
+          >
+            <span className="ask__n">{i + 1}</span>
+            {option}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function shownSteps(steps: readonly AgentStep[]): AgentStep[] {
   if (!steps.length) return [STARTING]
   const current = steps.findLastIndex((s) => s.status === 'current')
@@ -462,6 +490,7 @@ function hintFor(view: ChatCardView): (string | HintItem)[] {
       ]
     case 'conversation':
       if (view.phase !== 'reply') return [{ icon: HandFist, label: 'fist to stop' }]
+      if (view.answer?.ask) return [{ icon: Hand, label: 'hold up 1–' + view.answer.ask.options.length + ' fingers' }, { icon: ThumbsUp, label: '= 1' }]
       if (view.answer?.view) return [{ icon: ThumbsUp, label: openLabel(view.answer.view) }, 'sign to reply']
       return ['sign to reply', { icon: HandFist, label: 'hide' }]
     case 'ready':

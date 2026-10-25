@@ -58,6 +58,8 @@ export interface Answer {
   view?: ViewAction
   /** A screenshot's thumbnail (PNG data URL). */
   thumb?: string
+  /** The agent asked a question with choices (`text` is the question): pick one by fingers, a thumbs up or a click. */
+  ask?: { options: string[] }
 }
 
 /** A write the agent asked to make: waiting for a thumbs up or a fist, or answered. */
@@ -71,7 +73,8 @@ export type ChatMessage =
   /** What the user signed: the raw words, then the interpreter's sentence. `prefix`: a quick-menu pick. */
   | { id: string; from: 'you'; kind: 'text'; text: string; prefix?: string }
   /** The agent's words (no tool ran, or only lookups). */
-  | { id: string; from: 'agent'; kind: 'text'; text: string }
+  /** `ask`: the question's choices, and which one was picked (they stay in the transcript). */
+  | { id: string; from: 'agent'; kind: 'text'; text: string; ask?: { options: string[]; picked?: number } }
   /**
    * The agent at work: "Understanding", then its live steps. At most one, always the last
    * bubble, replaced by the answer when the run ends.

@@ -544,7 +544,8 @@ function describe(e: RecognitionEvent): string {
  * of a phrase, would read as a 5 (it did, in tests, with numbers on mid-phrase).
  */
 export function numbersWanted(view: View): boolean {
-  return view.kind === 'conversation' && view.phase === 'reply'
+  // A question with choices is answered by the finger-count gesture instead.
+  return view.kind === 'conversation' && view.phase === 'reply' && !view.answer?.ask
 }
 
 /**

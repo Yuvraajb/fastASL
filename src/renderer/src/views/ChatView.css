@@ -627,3 +627,64 @@
 .hint.chatcard__hint {
   min-width: 0;
 }
+
+/* ---------------------------------------------------------------- the agent's questions with choices */
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.ask__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ask__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+  cursor: pointer;
+  animation: chat-in 260ms var(--ease-spring) both;
+}
+
+.ask__chip:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.ask__chip:disabled {
+  cursor: default;
+}
+
+.ask__n {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+}
+
+.ask__chip--picked {
+  border-color: rgba(120, 220, 160, 0.7);
+  background: rgba(120, 220, 160, 0.16);
+}
+
+.ask__chip--picked .ask__n {
+  background: rgba(120, 220, 160, 0.5);
+}
+
+.ask__chip--dim {
+  opacity: 0.4;
+}
