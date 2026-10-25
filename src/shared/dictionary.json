@@ -18,6 +18,15 @@
         "pinky": "curled"
       },
       "thumb": "any"
+    },
+    "anyHand": {
+      "fingers": {
+        "index": "any",
+        "middle": "any",
+        "ring": "any",
+        "pinky": "any"
+      },
+      "thumb": "any"
     }
   },
   "locations": {
@@ -50,7 +59,7 @@
     "together": {
       "kind": "together",
       "closeByHandLengths": 1.5,
-      "endGapHandLengths": 2.5
+      "endGapHandLengths": 3.2
     }
   },
   "signs": [
@@ -73,10 +82,10 @@
       "hands": 2,
       "phases": [
         {
-          "handshape": "flatO"
+          "handshape": "anyHand"
         },
         {
-          "handshape": "flatO",
+          "handshape": "anyHand",
           "movement": "together"
         }
       ]

@@ -96,15 +96,15 @@ describe('lexicon: two-handed MEETING (both hands come together)', () => {
     expect(tokens(run([meeting(1), meeting(2)]))).toEqual(['MEETING', 'MEETING'])
   })
 
-  it('ignores two open hands coming together, one-handed signs and an empty frame', () => {
-    const clap = {
+  it('also recognizes flat open hands coming together, and ignores one-handed signs', () => {
+    const flat = {
       durationMs: 700,
       hands: [
-        { handedness: 'Right' as const, shape: 'FIVE' as const, offset: [-1.8, 0] as [number, number], path: (u: number): [number, number] => [1.4 * u, 0] },
-        { handedness: 'Left' as const, shape: 'FIVE' as const, offset: [1.8, 0] as [number, number], path: (u: number): [number, number] => [-1.4 * u, 0] }
+        { handedness: 'Right' as const, shape: 'B' as const, offset: [-1.8, 0] as [number, number], path: (u: number): [number, number] => [1.4 * u, 0] },
+        { handedness: 'Left' as const, shape: 'B' as const, offset: [1.8, 0] as [number, number], path: (u: number): [number, number] => [-1.4 * u, 0] }
       ]
     }
-    expect(tokens(run([meeting(1, clap)]))).not.toContain('MEETING')
+    expect(tokens(run([meeting(1, flat)]))).toContain('MEETING')
     for (const w of ['YES', 'NO', 'PLAY']) expect(tokens(run([meeting(1, WORDS[w])]))).not.toContain('MEETING')
   })
 

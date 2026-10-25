@@ -67,9 +67,13 @@ insert into public.handshapes (name, fingers, thumb, description) values
    'Flat-O: fingers curved to meet the thumb. "curled" means bent or folded, anything not straight.')
 on conflict (name) do nothing;
 
+insert into public.handshapes (name, fingers, thumb, description) values
+  ('anyHand', '{"index":"any","middle":"any","ring":"any","pinky":"any"}', 'any', 'Any hand shape: flat, curled or open.')
+on conflict (name) do nothing;
+
 insert into public.movements (name, kind, params, description) values
-  ('together', 'together', '{"closeByHandLengths":1.5,"endGapHandLengths":2.5}',
-   'Two hands come together: the gap closes by at least 1.5 hand lengths, to 2.5 or less.')
+  ('together', 'together', '{"closeByHandLengths":1.5,"endGapHandLengths":3.2}',
+   'Two hands come together: the gap closes by at least 1.5 hand lengths, to 3.2 or less.')
 on conflict (name) do nothing;
 
 insert into public.asl_sign_specs (word_id, handshape, palm_orientation, location, movement, hands, non_manual, instructions)
@@ -81,6 +85,6 @@ from public.words where label = 'MEETING' and owner_id is null
 on conflict (word_id) do nothing;
 
 insert into public.signs (word_id, hands, phases)
-select id, 2, '[{"handshape":"flatO"},{"handshape":"flatO","movement":"together"}]'::jsonb
+select id, 2, '[{"handshape":"anyHand"},{"handshape":"anyHand","movement":"together"}]'::jsonb
 from public.words where label = 'MEETING' and owner_id is null
 on conflict (word_id) do nothing;
