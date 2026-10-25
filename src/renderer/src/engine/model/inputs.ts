@@ -45,7 +45,8 @@ const ISLR_RIGHT_HAND = 522
  * The face's first 468 points (FaceLandmarker adds 10 iris points) fill 0-467; pose stays NaN
  * (the model doesn't use it). `swap` puts each hand in the other hand's slot.
  */
-export function islrInput(frames: readonly FrameSample[], swap = false): Float32Array {
+export function islrInput(movement: readonly FrameSample[], swap = false): Float32Array {
+  const frames = heldPoints(movement)
   const data = new Float32Array(frames.length * ISLR_POINTS * 3).fill(NaN)
   frames.forEach((frame, t) => {
     const base = t * ISLR_POINTS
@@ -101,8 +102,8 @@ export function hasPose(frames: readonly FrameSample[]): boolean {
  * one is padded with zero frames, and those padded frames count in the shoulder centre and
  * width that every point is normalized by (as in training).
  */
-export function citizenInput(frames: readonly FrameSample[], swap = false): Float32Array {
-  let raw = frames.map((frame) => {
+export function citizenInput(movement: readonly FrameSample[], swap = false): Float32Array {
+  let raw = heldPoints(movement).map((frame) => {
     const points = new Float32Array(CITIZEN_RAW_POINTS * 2)
     if (frame.pose) putXY(points, 0, frame.pose, POSE_POINTS)
     const { right, left } = signerHands(frame.hands)
@@ -166,3 +167,23 @@ export function downsample<T>(frames: readonly T[], max: number): T[] {
   }
   return out.slice(0, max)
 }
+
+/**
+ * The face and pose filled in where a frame has none: the last one seen is held, and frames
+ * before the first one get it too. The tracker runs them on alternating frames and loses them now
+ * and then. A frame without the pose zeroes the shoulders ASL Citizen normalizes everything by:
+ * on real clips, the pose missing every other frame took MEETING from 7/8 right to 0/8, and
+ * holding the last pose restored 7/8.
+ */
+export function heldPoints(frames: readonly FrameSample[]): FrameSample[] {
+  const firstFace = frames.find((f) => f.face)?.face
+  const firstPose = frames.find((f) => f.pose)?.pose
+  let face = firstFace
+  let pose = firstPose
+  return frames.map((f) => {
+    face = f.face ?? face
+    pose = f.pose ?? pose
+    return f.face === face && f.pose === pose ? f : { ...f, ...(face ? { face } : {}), ...(pose ? { pose } : {}) }
+  })
+}
+

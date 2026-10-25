@@ -38,26 +38,60 @@ export interface HandTracker {
   close(): void
 }
 
+/**
+ * The signer is the person closest to the camera. In a busy room the trackers also find people
+ * behind them, so each looks for a few and the closest is kept: the 2 largest hands (KEEP_HANDS),
+ * the largest face, the pose with the widest shoulders. With one face or pose per model, the
+ * live pose jumped between the signer and people in the background (shoulder width 0.58 one
+ * frame, 0.06 the next), which threw both sign models off.
+ */
+const CANDIDATES = 3
+const KEEP_HANDS = 2
+
 const TASK_OPTIONS = {
   runningMode: 'VIDEO',
-  numHands: 2,
+  numHands: 4,
   minHandDetectionConfidence: 0.6,
   minHandPresenceConfidence: 0.5,
   minTrackingConfidence: 0.5
 } as const
 
 export function toFrameSample(result: HandLandmarkerResult, t: number): FrameSample {
-  return {
-    t,
-    hands: result.landmarks.map((points, i) => {
-      const category = result.handedness[i]?.[0]
-      return {
-        landmarks: points.map(({ x, y, z }) => ({ x, y, z })),
-        handedness: category?.categoryName === 'Left' ? 'Left' : 'Right',
-        score: category?.score ?? 0
-      }
-    })
+  const hands = result.landmarks.map((points, i) => {
+    const category = result.handedness[i]?.[0]
+    return {
+      landmarks: points.map(({ x, y, z }) => ({ x, y, z })),
+      handedness: category?.categoryName === 'Left' ? ('Left' as const) : ('Right' as const),
+      score: category?.score ?? 0
+    }
+  })
+  // The signer's hands are the largest ones (closest to the camera); keep them in tracker order.
+  const kept = new Set([...hands].sort((a, b) => spread(b.landmarks) - spread(a.landmarks)).slice(0, KEEP_HANDS))
+  return { t, hands: hands.filter((h) => kept.has(h)) }
+}
+
+/** Size of a set of points in the image: the diagonal of their bounding box. */
+export function spread(points: readonly { x: number; y: number }[]): number {
+  if (!points.length) return 0
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity]
+  for (const { x, y } of points) {
+    x0 = Math.min(x0, x)
+    y0 = Math.min(y0, y)
+    x1 = Math.max(x1, x)
+    y1 = Math.max(y1, y)
   }
+  return Math.hypot(x1 - x0, y1 - y0)
+}
+
+/** The largest face: the signer's, not someone's behind them. */
+export function closestFace(faces: readonly NormalizedLandmark[][]): NormalizedLandmark[] | undefined {
+  return [...faces].sort((a, b) => spread(b) - spread(a))[0]
+}
+
+/** The pose with the widest shoulders (11, 12): the person closest to the camera. */
+export function closestPose(poses: readonly NormalizedLandmark[][]): NormalizedLandmark[] | undefined {
+  const width = (p: NormalizedLandmark[]): number => (p[11] && p[12] ? Math.hypot(p[11].x - p[12].x, p[11].y - p[12].y) : 0)
+  return [...poses].sort((a, b) => width(b) - width(a))[0]
 }
 
 /** scripts/fetch-assets.mjs didn't run or failed (offline install, `--ignore-scripts`), so retrying won't help. */
@@ -195,14 +229,14 @@ function extraTracker(kind: 'face' | 'pose', fileset: Fileset, delegate: Delegat
     if (!(await assetExists(modelAssetPath))) throw new Error(`${modelAssetPath} is missing — run npm run setup`)
     const baseOptions = { modelAssetPath, delegate }
     if (kind === 'face') {
-      const face = await FaceLandmarker.createFromOptions(fileset, { baseOptions, runningMode: 'VIDEO', numFaces: 1 })
-      runner = { run: (el, t) => face.detectForVideo(el, t).faceLandmarks[0], close: () => face.close() }
+      const face = await FaceLandmarker.createFromOptions(fileset, { baseOptions, runningMode: 'VIDEO', numFaces: CANDIDATES })
+      runner = { run: (el, t) => closestFace(face.detectForVideo(el, t).faceLandmarks), close: () => face.close() }
     } else {
-      const pose = await PoseLandmarker.createFromOptions(fileset, { baseOptions, runningMode: 'VIDEO', numPoses: 1 })
+      const pose = await PoseLandmarker.createFromOptions(fileset, { baseOptions, runningMode: 'VIDEO', numPoses: CANDIDATES })
       runner = {
         run: (el, t) => {
           let points: NormalizedLandmark[] | undefined
-          pose.detectForVideo(el, t, (result) => (points = result.landmarks[0]))
+          pose.detectForVideo(el, t, (result) => (points = closestPose(result.landmarks)))
           return points
         },
         close: () => pose.close()

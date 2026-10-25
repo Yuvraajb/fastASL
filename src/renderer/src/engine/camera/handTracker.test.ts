@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HandLandmarkerResult } from '@mediapipe/tasks-vision'
-import { createHandTracker, MissingAssetsError, toFrameSample } from './handTracker'
+import { closestFace, closestPose, createHandTracker, MissingAssetsError, toFrameSample } from './handTracker'
 
 const mp = vi.hoisted(() => ({
   forVisionTasks: vi.fn(async (base: string) => ({
@@ -65,7 +65,7 @@ describe('createHandTracker', () => {
     expect(options).toMatchObject({
       baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/hand_landmarker.task', delegate: 'GPU' },
       runningMode: 'VIDEO',
-      numHands: 2
+      numHands: 4
     })
   })
 
@@ -190,8 +190,8 @@ describe('face and pose tracking for the sign model', () => {
     tracker.detect(element, 20, { face: true, pose: true }) // an odd frame: starts loading the pose
     tracker.detect(element, 30, { face: true, pose: true }) // an even frame: starts loading the face
     await settle()
-    expect(mp.createFace.mock.calls[0][1]).toMatchObject({ baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/face_landmarker.task', delegate: 'GPU' }, runningMode: 'VIDEO', numFaces: 1 })
-    expect(mp.createPose.mock.calls[0][1]).toMatchObject({ baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/pose_landmarker_lite.task' }, numPoses: 1 })
+    expect(mp.createFace.mock.calls[0][1]).toMatchObject({ baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/face_landmarker.task', delegate: 'GPU' }, runningMode: 'VIDEO', numFaces: 3 })
+    expect(mp.createPose.mock.calls[0][1]).toMatchObject({ baseOptions: { modelAssetPath: 'http://localhost:5173/mediapipe/pose_landmarker_lite.task' }, numPoses: 3 })
     const a = tracker.detect(element, 40, { face: true, pose: true }) // the pose's turn
     expect(a.pose).toHaveLength(33)
     expect(a.face).toBeUndefined()
@@ -217,3 +217,22 @@ describe('face and pose tracking for the sign model', () => {
     expect(console.warn).toHaveBeenCalledWith('[handTracker] face tracking is off:', expect.stringContaining('face_landmarker.task is missing'))
   })
 })
+
+describe('choosing the signer in a busy room', () => {
+  const box = (x: number, y: number, size: number, n = 21) =>
+    Array.from({ length: n }, (_, i) => ({ x: x + (i % 2) * size, y: y + (i % 3) * size, z: 0, visibility: 1 }))
+  it('keeps the 2 largest hands, in tracker order', () => {
+    const result = {
+      landmarks: [box(0.1, 0.1, 0.02), box(0.4, 0.4, 0.2), box(0.8, 0.1, 0.03), box(0.6, 0.5, 0.15)],
+      handedness: [[{ categoryName: 'Left', score: 0.9 }], [{ categoryName: 'Right', score: 0.9 }], [{ categoryName: 'Left', score: 0.9 }], [{ categoryName: 'Left', score: 0.9 }]]
+    } as unknown as Parameters<typeof toFrameSample>[0]
+    const sample = toFrameSample(result, 0)
+    expect(sample.hands.map((h) => h.landmarks[0].x)).toEqual([0.4, 0.6])
+  })
+  it('picks the largest face and the pose with the widest shoulders', () => {
+    expect(closestFace([box(0.1, 0.1, 0.02, 468), box(0.3, 0.2, 0.3, 468)])?.[0].x).toBe(0.3)
+    const pose = (w: number) => Array.from({ length: 33 }, (_, i) => ({ x: i === 12 ? 0.5 + w : 0.5, y: 0.5, z: 0, visibility: 1 }))
+    expect(closestPose([pose(0.05), pose(0.4), pose(0.1)])?.[12].x).toBeCloseTo(0.9)
+  })
+})
+

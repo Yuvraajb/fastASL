@@ -878,3 +878,11 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - Tool descriptions for open_app, contacts_find and mail_send say the same.
 197. **A run of lookups only is answered in the model's words.** When only lookups ran (contacts_find, calendar_list_events, notes_search and so on), the conversation card shows the agent's reply, not a lookup headline like "Found 18 contacts" for a call it couldn't place.
 
+## Tracking the signer in a busy room
+
+198. **The trackers now keep the person closest to the camera.** Live MEETING attempts in a crowded hackathon hall were read as "later" or "close" by ASL Citizen, with MEETING ranked #1,000–2,400 of 2,731, and then guessed as BALL by the LLM. Replaying the recorded attempts showed why:
+    - **The pose jumped between people.** The pose landmarker kept one person, often someone behind the signer: shoulder width 0.58 one frame and 0.06 the next, and the "nose" below the shoulders.
+    - **Pose was missing from many frames.**
+    - **The fix.** Face and pose now look for up to 3 people and keep the largest face and the widest shoulders. Hands look for up to 4 and keep the 2 largest.
+199. **Face and pose are held across frames that lack them** (`heldPoints` in inputs.ts, for both models). The tracker runs them on alternating frames and loses them now and then. A frame without the pose zeroes the shoulders ASL Citizen normalizes by. On real MEETING, HELLO, MUSIC and EMAIL clips, dropping the pose every other frame took top-1 from 7/8, 2/8, 5/8 and 7/8 to 0/8 each; holding the last pose restored all of them.
+

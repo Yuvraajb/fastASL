@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Landmark } from '@shared/types'
 import type { FrameSample, HandSample } from '../types'
-import { citizenInput, CITIZEN_FRAMES, CITIZEN_KEYPOINTS, downsample, hasFace, hasPose, islrInput, ISLR_POINTS, signerHands } from './inputs'
+import { citizenInput, CITIZEN_FRAMES, CITIZEN_KEYPOINTS, downsample, hasFace, hasPose, islrInput, ISLR_POINTS, signerHands, heldPoints } from './inputs'
 import { CITIZEN_PAD, ISLR_PAD, padded } from './signModel'
 
 const points = (n: number, x: number, y = 0.5, z = 0): Landmark[] => Array.from({ length: n }, (_, i) => ({ x: x + i * 1e-3, y, z }))
@@ -48,12 +48,25 @@ describe('islrInput: [T, 543, 3] in the Kaggle layout', () => {
     expect(at(x, 1, 468)).toBeCloseTo(0.7)
   })
 
-  it('leaves missing points NaN: no face, the other hand, the pose, a frame with no hands', () => {
+  it('leaves missing points NaN (the other hand, the pose, the hands of a frame with none) and holds the face', () => {
     const x = islrInput(frames)
-    expect(at(x, 1, 0)).toBeNaN() // no face in frame 1
+    expect(at(x, 1, 0)).toBeCloseTo(at(x, 0, 0)) // frame 1 has no face: frame 0's is held
     expect(at(x, 0, 468)).toBeNaN() // only one hand in frame 0
     for (let p = 489; p < 522; p++) expect(at(x, 1, p)).toBeNaN() // pose is unused
-    for (let p = 0; p < ISLR_POINTS; p++) expect(at(x, 2, p)).toBeNaN()
+    for (let p = 468; p < ISLR_POINTS; p++) expect(at(x, 2, p)).toBeNaN() // frame 2: no hands
+  })
+
+  it('heldPoints holds the last face and pose, and gives frames before the first one the first', () => {
+    const f = (t: number, face?: number, pose?: number): FrameSample => ({
+      t,
+      hands: [],
+      ...(face !== undefined ? { face: [{ x: face, y: 0, z: 0 }] } : {}),
+      ...(pose !== undefined ? { pose: [{ x: pose, y: 0, z: 0 }] } : {})
+    })
+    const held = heldPoints([f(0), f(1, 0.1), f(2, undefined, 0.5), f(3), f(4, 0.2)])
+    expect(held.map((h) => h.face?.[0].x)).toEqual([0.1, 0.1, 0.1, 0.1, 0.2])
+    expect(held.map((h) => h.pose?.[0].x)).toEqual([0.5, 0.5, 0.5, 0.5, 0.5])
+    expect(heldPoints([f(0)])[0].face).toBeUndefined()
   })
 
   it('swapped puts each hand in the other slot', () => {
