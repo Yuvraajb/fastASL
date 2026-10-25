@@ -20,6 +20,8 @@ describe('directCommand', () => {
     expect(directCommand('Call friend', aliases)).toEqual(call('Yuvraaj SCU'))
     expect(directCommand('friend call.', aliases)).toEqual(call('Yuvraaj SCU'))
     expect(directCommand('FaceTime mom', aliases)).toEqual(call('Jane Doe'))
+    // Initials, spelled: the droid passthrough joins D W into DW (joinLetters).
+    expect(directCommand('Call DW', contactAliases({ FASTASL_CONTACT_ALIASES: 'dw=Darren Wu' }))).toEqual(call('Darren Wu'))
   })
 
   it('anything else goes to the agent', () => {

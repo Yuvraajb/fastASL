@@ -1071,3 +1071,12 @@ Decisions made while building, in the order they came up. Each entry: what, why,
     - **Needs:** the contact must have an email address in Contacts (Darren Wu had only a phone number; the action refuses before anything opens); a Mail account; Automation access to Mail and Calendar, asked by macOS once.
     - **Checked:** Calendar answered scripting on the user's Mac; Mail didn't answer within 10 s from the terminal (most likely a pending macOS permission prompt), so the layout and sending weren't run live. Tests: controller (phrase, picker, times, captions), `meeting.test.ts`, `arrange.test.ts`, `agentService.test.ts` (fixed calls). `npx vitest run`: 1309 passed, 9 skipped.
 
+## Initials as nicknames: CALL D W, MEETING D W
+
+227. **Contacts can be named by fingerspelled initials, as on Yuvraaj's facetime-live-captions branch.** FRIEND kept reading as TIME live, so the user asked for his approach: CALL then the initials letter by letter.
+    - **Nickname:** `dw=Darren Wu` in FASTASL_CONTACT_ALIASES (friend stays too). The overlay already joins a run of letters into one word (phraseWords: D W -> "DW"), so `isCallPhrase`, `meetingRequest` and the captions see "DW".
+    - **The agent path:** the droid passthrough built its sentence from the tokens joined by spaces ("Call D W"), so main's direct-call matcher saw three words. It now uses `joinLetters` (taken as is from Yuvraaj's 2e4cc66): "Call DW".
+    - **Letters must be taught.** Letters are recognized only from taught templates; Yuvraaj's demo taught exactly K and C (his fingerspelling.test.ts). D and W likewise: Settings › Teach a sign now lists the letters of initials nicknames first (`teachLabels`: D, W, then the starter words and the rest of the alphabet), so they are options 2 and 3 on the first page instead of 6 and 12 swipes in.
+    - **Hands-down 2.5 s** (was 1.2, his 3f7e807): lowering the hands between CALL and the letters no longer ends the phrase. A thumbs up or swipe right still sends at once. Tests updated as on his branch.
+    - Tests: engines (taught D and W arrive as letters, "DW"), controller (teach order, MEETING D W, CALL D W), provider (joinLetters), directCommands (Call DW). Not tried on a real hand.
+

@@ -29,6 +29,8 @@ import {
   isCallPhrase,
   localIso,
   meetingRequest,
+  phraseWords,
+  teachLabels,
   GESTURE_TASK_LABEL,
   STOPPED_NOTE,
   UNDERSTANDING_STEP,
@@ -1983,6 +1985,23 @@ describe('the conversation with the agent', () => {
   })
 })
 
+describe('teach list: contact initials first', () => {
+  it('puts the letters of initials nicknames (dw: D, W) first, words like friend stay out', () => {
+    expect(teachLabels({ dw: 'Darren Wu', friend: 'Darren Wu' }).slice(0, 4)).toEqual(['D', 'W', 'YES', 'NO'])
+    expect(teachLabels({}).slice(0, 2)).toEqual(['YES', 'NO'])
+    expect(teachLabels({ dw: 'Darren Wu' }).filter((l) => l === 'D')).toHaveLength(1)
+  })
+
+  it('Settings › Teach a sign shows them on the first page: D is 2, W is 3', () => {
+    setApp({ contactAliases: { dw: 'Darren Wu' } })
+    c.openSettings()
+    fingers(1)
+    expect(optionsFor(getApp().view)).toEqual(['Show me a sign', 'D', 'W', 'YES', 'Spell a new word'])
+    fingers(2)
+    expect(viewAs('settings').settings).toMatchObject({ page: 'teachRecord', label: 'D', kind: 'letter' })
+  })
+})
+
 describe('MEETING FRIEND: pick a time, then one confirmed action', () => {
   const ALIASES = { friend: 'Darren Wu' }
 
@@ -1992,6 +2011,9 @@ describe('MEETING FRIEND: pick a time, then one confirmed action', () => {
     expect(meetingRequest(['tomorrow', 'meeting', 'what', 'time'], ALIASES)).toBeNull()
     expect(meetingRequest(['meeting', 'dad'], ALIASES)).toBeNull()
     expect(meetingRequest(['call', 'friend'], ALIASES)).toBeNull()
+    // Spelled initials arrive as one word (phraseWords joins letters): MEETING D W.
+    expect(meetingRequest(phraseWords([word('meeting'), { text: 'D', kind: 'letter' }, { text: 'W', kind: 'letter' }]), { dw: 'Darren Wu' })).toEqual({ name: 'Darren Wu', day: 'today' })
+    expect(isCallPhrase(phraseWords([word('call'), { text: 'D', kind: 'letter' }, { text: 'W', kind: 'letter' }]))).toBe(true)
     expect(localIso(new Date(2026, 9, 5, 14, 0))).toBe('2026-10-05T14:00:00')
   })
 

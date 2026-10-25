@@ -457,7 +457,7 @@ describe('swipes', () => {
 })
 
 describe('handsDown', () => {
-  it('fires once, 1.2 s after the last hand leaves', () => {
+  it('fires once, HANDS_DOWN_MS after the last hand leaves', () => {
     const tl = new Timeline().hold(500, PALM)
     const lastSeen = tl.now - FRAME
     tl.none(5000)
@@ -465,7 +465,7 @@ describe('handsDown', () => {
   })
 
   it('re-arms when hands come back', () => {
-    const tl = new Timeline().hold(500, PALM).none(2000).hold(300, PALM).none(2000)
+    const tl = new Timeline().hold(500, PALM).none(HANDS_DOWN_MS + 500).hold(300, PALM).none(HANDS_DOWN_MS + 500)
     expect(play(engineFor(['handsDown']), tl.frames)).toHaveLength(2)
   })
 
@@ -501,7 +501,7 @@ describe('sensitivity', () => {
     const engine = engineFor(['handsDown'], { sensitivity: SENSITIVITY.low })
     const tl = new Timeline().hold(500, PALM)
     const lastSeen = tl.now - FRAME
-    tl.none(3000)
+    tl.none(HANDS_DOWN_MS * 2)
     expectOnceAt(play(engine, tl.frames), lastSeen, HANDS_DOWN_MS * SENSITIVITY.low.holdScale)
   })
 

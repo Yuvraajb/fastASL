@@ -61,10 +61,24 @@ export function createLlmService({ tools, provider, overrides }: LlmServiceOptio
  * as they are (ASL glosses in signing order) and it reads them itself, one hop instead of two. No
  * spelling suggestions, and no sign guesses (they need a vision model).
  */
+/** The signed tokens as words: a run of single capital letters (D, W) is one spelled word ("DW"), not two. */
+export function joinLetters(tokens: readonly string[]): string {
+  const words: string[] = []
+  let last: 'letter' | 'word' | null = null
+  for (const t of tokens) {
+    const isLetter = /^[A-Z]$/.test(t)
+    if (isLetter && last === 'letter') words[words.length - 1] += t
+    else words.push(t)
+    last = isLetter ? 'letter' : 'word'
+  }
+  return words.join(' ')
+}
+
 export function droidLlmService(): LlmService {
   return {
     async interpret(req) {
-      const words = req.tokens.join(' ').trim() || req.sentence.trim()
+      // CALL D W must reach the direct-call matcher as "Call DW" (initials as one nickname).
+      const words = joinLetters(req.tokens).trim() || req.sentence.trim()
       if (!words && !req.intentPrefix) return { ok: false, error: 'Nothing signed yet' }
       const glosses = req.intentPrefix ? `${req.intentPrefix}: ${words}` : words
       const sentence = words ? words.charAt(0).toUpperCase() + words.slice(1) : glosses

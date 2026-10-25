@@ -16,7 +16,7 @@ import {
 } from '../engine/recognition/synthetic'
 import { staticFeatures } from '../engine/recognition/features'
 import { TeachSession } from '../engine/recognition/teach'
-import { GestureEngine } from '../engine/gestures/engine'
+import { GestureEngine, HANDS_DOWN_MS } from '../engine/gestures/engine'
 import { RecognitionSession } from '../engine/recognition/session'
 import { SENSITIVITY, type FrameSample } from '../engine/types'
 import { Controller, QUICK_MENU } from './controller'
@@ -514,18 +514,18 @@ describe('sign recognition', () => {
     stop = startEngines(controller)
     play([sign(WORDS.HELLO, 902)], 600)
     expect(getApp().view).toEqual({ kind: 'recognizing', token: 'hello', isWord: true })
-    play([sign(WORDS.PLAY, 903)], 1500)
+    play([sign(WORDS.PLAY, 903)], HANDS_DOWN_MS + 500)
     expect(getApp().view).toEqual({ kind: 'conversation', phase: 'understanding', said: 'Hello play', steps: [] })
   })
 
   it("a sign on the agent's reply starts the next phrase, which hands down sends too", async () => {
     vi.useFakeTimers()
     stop = startEngines(controller)
-    play([sign(WORDS.HELLO, 902)], 1500)
+    play([sign(WORDS.HELLO, 902)], HANDS_DOWN_MS + 500)
     expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: 'Hello' })
     await vi.advanceTimersByTimeAsync(1200)
     expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'reply', said: 'Hello.', answer: { text: 'Hello! What can I do for you?' } })
-    play([sign(WORDS.PLAY, 903)], 1500)
+    play([sign(WORDS.PLAY, 903)], HANDS_DOWN_MS + 500)
     expect(views).toContainEqual({ kind: 'recognizing', token: 'play', isWord: true })
     expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: 'Play' })
   })
@@ -576,6 +576,14 @@ describe('sign recognition', () => {
     stop = startEngines(controller)
     play([rest, hold('L', 2500, 905)])
     expect(views).toEqual([{ kind: 'recognizing', token: 'L', isWord: false }])
+  })
+
+  it('Command mode: D and W, once taught, arrive as letters and make one spelled word (CALL D W)', () => {
+    setApp({ templates: [...TEMPLATES, ...teach('D', 'letter', seeds(5, 11).map((s) => hold('D', 900, s))), ...teach('W', 'letter', seeds(5, 12).map((s) => hold('W', 900, s)))] })
+    stop = startEngines(controller)
+    play([rest, hold('D', 2500, 906), rest, hold('W', 2500, 907)])
+    expect(getApp().composing.tokens.map((t) => t.text)).toEqual(['D', 'W'])
+    expect(getApp().view).toMatchObject({ kind: 'building', sentence: 'DW' })
   })
 
   it('Spell mode: a held letter arrives once', () => {
@@ -698,7 +706,7 @@ describe('sign recognition', () => {
   it('Spell mode: lowering the hands offers the letters at once, then the spellings', async () => {
     setApp({ mode: 'spell' })
     stop = startEngines(controller)
-    play([rest, spell('LSLS', 700, 700, 972)], 1500)
+    play([rest, spell('LSLS', 700, 700, 972)], HANDS_DOWN_MS + 500)
     expect(getApp().view).toEqual({
       kind: 'didYouMean',
       options: ['LSLS'],

@@ -297,3 +297,12 @@ describe('LLM_PROVIDER=droid', () => {
     expect((await llm.identifySign({ frames: [], motion: '', mode: 'command', known: [] })).ok).toBe(false)
   })
 })
+
+describe('joinLetters (droid passthrough)', () => {
+  it('joins a run of spelled letters into one word, so CALL D W reads "call DW"', async () => {
+    const { joinLetters } = await import('./index')
+    expect(joinLetters(['call', 'D', 'W'])).toBe('call DW')
+    expect(joinLetters(['meeting', 'D', 'W', 'tomorrow'])).toBe('meeting DW tomorrow')
+    expect(joinLetters(['hello', 'friend'])).toBe('hello friend')
+  })
+})

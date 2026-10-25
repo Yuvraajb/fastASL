@@ -11,7 +11,7 @@
  *   thumbsUp    fingers curled, thumb straight, pointing up, tip clearly above the knuckles   0.5 s
  *   fist        fingers curled, thumb not pointing up (so ASL A is not a fist)          0.9 s
  *   shape{id}   custom matcher hit, else the built-in V / peace ('builtin-peace')        0.8 s
- *   handsDown   no hands for 1.2 s after hands were visible; once until they come back
+ *   handsDown   no hands for 2.5 s after hands were visible; once until they come back
  *   swipeLeft/Right  wrist travels ≥ 0.22 frame widths within 300 ms, peak speed ≥ 1.2 widths/s
  *                    (over ≥ 60 ms), horizontal travel > 2.2 × vertical
  *   swipeUp     same upward: ≥ 0.20 frame heights, peak ≥ 1.2 heights/s
@@ -77,7 +77,8 @@ export const HOLD_MS: Record<HoldGesture, number> = {
   fist: 900,
   shape: 800
 }
-export const HANDS_DOWN_MS = 1200
+/** Long enough to lower your hands between signs (CALL, then D W) without ending the phrase. A thumbs up or a swipe right still sends at once. */
+export const HANDS_DOWN_MS = 2500
 export const REFRACTORY_MS = 700
 export const REPEAT_MS = 1500
 export const SWIPE_RETURN_MS = 1200

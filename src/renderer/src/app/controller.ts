@@ -454,7 +454,18 @@ export const STARTER_WORDS = [
   'SEND', 'EMAIL', 'TEXT', 'FRIEND', 'PLAY', 'MUSIC', 'CALENDAR', 'GOOD'
 ]
 export const LETTERS = 'ABCDEFGHIKLMNOPQRSTUVWXY'.split('')
-const TEACH_LABELS = [...STARTER_WORDS, ...LETTERS]
+/**
+ * The teach list: the letters of contact nicknames that are initials (DW for Darren Wu: D, W)
+ * first, since CALL D W and MEETING D W need those two taught, then the starter words and the rest
+ * of the alphabet.
+ */
+export function teachLabels(aliases: Readonly<Record<string, string>> = getApp().contactAliases): string[] {
+  const initials = Object.keys(aliases)
+    .filter((word) => word.length <= 3 && [...word.toUpperCase()].every((l) => LETTERS.includes(l)))
+    .flatMap((word) => [...word.toUpperCase()])
+  const first = [...new Set(initials)]
+  return [...first, ...STARTER_WORDS, ...LETTERS.filter((l) => !first.includes(l))]
+}
 /** Signs per page of the teach list: with Show me a sign and Spell a new word, five rows (fingers 1-5). */
 export const TEACH_PAGE = 3
 /** Repetitions recorded per sign (TeachSession defaults). */
@@ -475,7 +486,7 @@ export function settingsOptions(page: SettingsPage): string[] {
     case 'root':
       return SETTINGS_ROOT
     case 'teachPick':
-      return [SHOW_ME, ...TEACH_LABELS.slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
+      return [SHOW_ME, ...teachLabels().slice(page.offset, page.offset + TEACH_PAGE), 'Spell a new word']
     case 'teachShow':
       return page.phase === 'guess' ? [...(page.guesses ?? []), NONE_OF_THESE] : []
     case 'newGesturePick':
@@ -1783,13 +1794,13 @@ export class Controller {
   private teachPage(dir: 1 | -1): void {
     const view = this.view
     if (view.kind !== 'settings' || view.settings.page !== 'teachPick') return
-    const offset = Math.min(Math.max(0, view.settings.offset + dir * TEACH_PAGE), TEACH_LABELS.length - 1)
+    const offset = Math.min(Math.max(0, view.settings.offset + dir * TEACH_PAGE), teachLabels().length - 1)
     this.setView({ kind: 'settings', settings: { ...view.settings, offset: offset - (offset % TEACH_PAGE) } })
   }
 
   /** The teach list on the page showing `label` (the first page for a spelled word), with fresh counts. */
   private teachList(label?: string): SettingsPage {
-    const index = Math.max(0, label ? TEACH_LABELS.indexOf(label) : 0)
+    const index = Math.max(0, label ? teachLabels().indexOf(label) : 0)
     return { page: 'teachPick', offset: index - (index % TEACH_PAGE), recorded: countSigns(getApp().templates) }
   }
 
