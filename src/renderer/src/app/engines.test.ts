@@ -529,6 +529,23 @@ describe('sign recognition', () => {
     expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: 'Play' })
   })
 
+  it("a held number answers the agent's question: 2 fingers on the reply is the word 2, and not before", async () => {
+    vi.useFakeTimers()
+    stop = startEngines(controller)
+    play([sign(WORDS.HELLO, 902)], HANDS_DOWN_MS + 500)
+    await vi.advanceTimersByTimeAsync(1200)
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'reply' })
+    play([hold('V', 1500, 908)], HANDS_DOWN_MS + 500)
+    expect(views).toContainEqual({ kind: 'recognizing', token: '2', isWord: true })
+    expect(getApp().view).toMatchObject({ kind: 'conversation', phase: 'understanding', said: '2' })
+  })
+
+  it('a held number at the start of a phrase is no number', () => {
+    stop = startEngines(controller)
+    play([hold('V', 1500, 909)], HANDS_DOWN_MS + 500)
+    expect(views.some((v) => v.kind === 'recognizing' && v.token === '2')).toBe(false)
+  })
+
   it('a twitch never shows Listening, and Listening does not flash for a movement that is no sign', () => {
     stop = startEngines(controller)
     play([sign(UNKNOWN.scratch, 905)])

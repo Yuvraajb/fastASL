@@ -33,15 +33,23 @@ describe('system prompt', () => {
     expect(SYSTEM_PROMPT).toMatch(/one ongoing conversation/)
   })
 
-  it('does a meeting with a person end to end: contact, free slot, event, then the email', () => {
+  it('does a meeting with a person end to end: contact, questions, event, then the email', () => {
     const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Meeting with a person'))
     expect(rule).toBeDefined()
-    const order = ['contacts_find', 'calendar_list_events', 'first free one-hour slot', 'calendar_create_event', 'mail_send'].map((t) => rule!.indexOf(t))
+    const order = ['contacts_find', 'a) no hour yet', 'b) the hour has no AM or PM', 'c) always', 'calendar_create_event', 'mail_send'].map((t) => rule!.indexOf(t))
     expect(order.every((i) => i >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((a, b) => a - b))
     expect(rule).toContain('titled exactly "Meeting with <their first name>"')
     expect(rule).toContain('Do not ask whether to email')
     expect(rule).toContain('If the event was cancelled, send nothing')
+  })
+
+  it('does not look at the calendar for a meeting, and asks with numbered options the user can sign', () => {
+    const rule = SYSTEM_PROMPT.split('\n').find((l) => l.startsWith('- Meeting with a person'))!
+    expect(rule).toContain('skip calendar_list_events')
+    expect(rule).toContain('"1 = ..., 2 = ..." (at most three)')
+    expect(rule).toContain('A bare number or word that follows is the answer to your last question')
+    expect(rule).toContain('1 = AM, 2 = PM')
   })
 
   it('tells the agent how to expand a few signed keywords into a whole job', () => {

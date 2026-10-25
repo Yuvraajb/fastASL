@@ -1,7 +1,8 @@
 import { DEFAULT_DICTIONARY } from '@shared/dictionary'
 import type { Mode, SignTemplate } from '@shared/types'
 import { HOLD_MS } from '../engine/gestures/engine'
-import { slotPresent } from '../engine/recognition/features'
+import { slotPresent, staticFeatures } from '../engine/recognition/features'
+import type { NumberGate } from '../engine/recognition/numbers'
 import { Segmenter } from '../engine/recognition/segmenter'
 import { RecognitionSession, type Movement, type RecognitionEvent } from '../engine/recognition/session'
 import { STREAM_RULES } from '../engine/recognition/streamRules'
@@ -137,6 +138,9 @@ export function connectRecognition(
   /** Spell mode or Spell a new word: letters only, each as soon as it is held. */
   let lettersOnly = recognitionMode(initial) === 'spell'
   rec.setMode(recognitionMode(initial))
+  // Numbers 1-5 (hand shapes): on only when answering the agent's question.
+  const aspectOf = (): number => live.sourceWidth / live.sourceHeight || 1
+  rec.setNumbers(numbersWanted(initial.view), notALetter(rec, aspectOf))
   let teaching: Teaching | null = null
   /** Whether the previous frame went to `rec`; if not, its motion and holds are stale. */
   let fed = false
@@ -243,6 +247,7 @@ export function connectRecognition(
       if (lettersOnly) forgetMovement()
     }
     if (s.view !== prev.view) followTeachPage(s.view)
+    if (s.view !== prev.view || s.mode !== prev.mode) rec.setNumbers(s.mode === 'command' && numbersWanted(s.view), notALetter(rec, aspectOf))
   })
 
   const route = (e: RecognitionEvent): void => {
@@ -530,6 +535,26 @@ function describe(e: RecognitionEvent): string {
       return `${e.options.join(' or ')}? (${e.kind})`
     case 'rejected':
       return 'rejected'
+  }
+}
+
+/**
+ * Where a held 1-5 is a number: on the agent's reply, where it answers a numbered question
+ * ("1 = AM, 2 = PM"). Nowhere else: the hand resting open after MEETING or HELLO, or at the start
+ * of a phrase, would read as a 5 (it did, in tests, with numbers on mid-phrase).
+ */
+export function numbersWanted(view: View): boolean {
+  return view.kind === 'conversation' && view.phase === 'reply'
+}
+
+/**
+ * A hand that reads as a taught letter is no number: K (two fingers up, thumb at the middle one)
+ * is close to a 2 or a 3, and the letter is what was signed.
+ */
+export function notALetter(rec: RecognitionSession, aspect: () => number): NumberGate {
+  return (hand) => {
+    const vector = staticFeatures(hand, aspect())
+    return !vector || rec.recognizer.classifyStatic(vector).kind !== 'letter'
   }
 }
 

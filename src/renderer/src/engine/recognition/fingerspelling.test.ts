@@ -2,6 +2,8 @@ import { DEFAULT_DICTIONARY } from '@shared/dictionary'
 import type { SignTemplate } from '@shared/types'
 import { describe, expect, it } from 'vitest'
 import { activeGestures } from '../../app/controller'
+import { notALetter, numbersWanted } from '../../app/recognitionInput'
+import type { NumberGate } from './numbers'
 import { GestureEngine, HOLD_MS } from '../gestures/engine'
 import { SENSITIVITY, type FrameSample } from '../types'
 import { RecognitionSession } from './session'
@@ -28,7 +30,7 @@ function teach(label: ShapeName): SignTemplate[] {
 
 const TAUGHT = [...teach('K'), ...teach('C')]
 
-function session(): RecognitionSession {
+function session(numbers: 'off' | 'guarded' | 'unguarded' = 'off'): RecognitionSession {
   const rec = new RecognitionSession({
     controlHoldMs: Math.max(...Object.values(HOLD_MS)),
     dictionary: DEFAULT_DICTIONARY,
@@ -38,12 +40,14 @@ function session(): RecognitionSession {
   rec.setSensitivity(SENSITIVITY.medium)
   rec.setAspect(ASPECT)
   rec.setMode('command')
+  const guard: NumberGate | undefined = numbers === 'guarded' ? notALetter(rec, () => ASPECT) : undefined
+  rec.setNumbers(numbers !== 'off', guard)
   return rec
 }
 
 /** What recognition reports for the frames: tokens as "text:kind". */
-function tokens(parts: Part[]): string[] {
-  const rec = session()
+function tokens(parts: Part[], numbers: 'off' | 'guarded' | 'unguarded' = 'off'): string[] {
+  const rec = session(numbers)
   return timeline(parts)
     .flatMap((f) => rec.update(f))
     .flatMap((e) => (e.type === 'token' ? [`${e.text}:${e.kind}`] : []))
@@ -94,5 +98,35 @@ describe('fingerspelling K and C with only those two letters taught', () => {
       const read = tokens([hold(shape, 2200, 71)]).filter((t) => t === 'K:letter' || t === 'C:letter')
       expect(read, shape).toEqual([])
     }
+  })
+})
+
+describe('numbers 1-5 next to the taught letters K and C', () => {
+  it('are read only on the agent reply, never at a phrase start or mid-phrase', () => {
+    expect(numbersWanted({ kind: 'ready' })).toBe(false)
+    expect(numbersWanted({ kind: 'recognizing', token: null, isWord: false })).toBe(false)
+    expect(numbersWanted({ kind: 'recognizing', token: 'meeting', isWord: true })).toBe(false)
+    expect(numbersWanted({ kind: 'building', tokens: [], current: null, sentence: '' })).toBe(false)
+    expect(numbersWanted({ kind: 'conversation', phase: 'reply', said: '', steps: [] })).toBe(true)
+    expect(numbersWanted({ kind: 'conversation', phase: 'working', said: '', steps: [] })).toBe(false)
+    expect(numbersWanted({ kind: 'working', intent: '', steps: [] })).toBe(false)
+  })
+
+  it('a held hand with 1, 2, 3 or 5 fingers is that number', () => {
+    expect(tokens([hold('ONE', 1500, 81)], 'guarded')).toEqual(['1:word'])
+    expect(tokens([hold('V', 1500, 82)], 'guarded')).toEqual(['2:word'])
+    expect(tokens([hold('W', 1500, 83)], 'guarded')).toEqual(['3:word'])
+    expect(tokens([hold('FIVE', 1500, 84)], 'guarded')).toEqual(['5:word'])
+  })
+
+  it('K stays the letter K and C the letter C with numbers on', () => {
+    for (const seed of [91, 92, 93]) {
+      expect(tokens([hold('K', 2200, seed)], 'guarded'), `K ${seed}`).toEqual(['K:letter'])
+      expect(tokens([hold('C', 2200, seed + 20)], 'guarded'), `C ${seed}`).toEqual(['C:letter'])
+    }
+  })
+
+  it('a number between two letters does not break the spelling', () => {
+    expect(tokens([hold('K', 2200, 95), hold('V', 1500, 96), hold('C', 2200, 97)], 'guarded')).toEqual(['K:letter', '2:word', 'C:letter'])
   })
 })

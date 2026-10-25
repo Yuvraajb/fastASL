@@ -5,7 +5,6 @@ import { getKey } from '../env'
 import type { MainServices } from '../ipc'
 import { addRecentTask, dataDir, getGestures, saveGestures } from '../store'
 import { TOOLS, runTool } from '../tools'
-import { warmCalendar } from '../tools/calendar'
 import { AgentService } from './agentService'
 import { resolveDroidPath } from './droidPath'
 import { openDroidSession } from './session'
@@ -32,8 +31,6 @@ export function createAgentServices(): AgentServices {
     cwd
   })
   agent.init()
-  // The calendar listing is slow (tens of seconds on a full calendar): do it now, in the background.
-  warmCalendar()
   return {
     agentRun: (req, emit) => agent.run(req, emit),
     agentStop: () => agent.stop(),
