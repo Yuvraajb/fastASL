@@ -54,6 +54,8 @@ export interface Answer {
   title?: string
   subtitle?: string
   text?: string
+  /** What an external MCP lookup returned, verbatim. */
+  read?: { tool: string; text: string }
   /** What the result opens (thumbs up): the screenshot in Preview, Calendar, a search. */
   view?: ViewAction
   /** A screenshot's thumbnail (PNG data URL). */

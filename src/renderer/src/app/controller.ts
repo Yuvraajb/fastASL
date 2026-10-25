@@ -163,12 +163,13 @@ const LOOKUP_TOOLS: ReadonlySet<string> = new Set([
  */
 export function answerFor(result: AgentResult, complete: boolean): Answer {
   const lookupsOnly = result.evidence.every((e) => LOOKUP_TOOLS.has(e.tool))
-  if (lookupsOnly && result.reply) return { ok: true, text: result.reply }
+  if (lookupsOnly && result.reply) return { ok: true, text: result.reply, ...(result.read ? { read: result.read } : {}) }
   return {
     ok: complete,
     title: result.title,
     subtitle: result.subtitle,
     ...(result.reply ? { text: result.reply } : {}),
+    ...(result.read ? { read: result.read } : {}),
     ...(result.view ? { view: result.view } : {})
   }
 }

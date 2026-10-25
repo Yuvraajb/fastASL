@@ -627,3 +627,27 @@
 .hint.chatcard__hint {
   min-width: 0;
 }
+
+/* What an MCP lookup returned, verbatim, so the card shows the message and not a paraphrase. */
+.res__read {
+  margin: 6px 0 0;
+  padding: 6px 0 0 10px;
+  border-left: 2px solid var(--hairline);
+  font-size: var(--fs-small);
+  line-height: 17px;
+  color: var(--text-1);
+  max-height: 180px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.res__read-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}

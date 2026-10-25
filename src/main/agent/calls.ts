@@ -82,6 +82,8 @@ export interface Ending {
   error?: string
   /** External MCP calls the user approved (they run inside droid, so they never reach `calls`). */
   external?: readonly { tool: string }[]
+  /** The last successful external lookup's own output, shown verbatim on the card. */
+  read?: { tool: string; text: string }
   /** The model's final text, from a turn that finished normally (see AgentResult.reply). */
   reply?: string
 }
@@ -124,6 +126,7 @@ function shortfall(calls: readonly RecordedCall[], { declined, stopped, error }:
  */
 export function summarize(calls: readonly RecordedCall[], ending: Ending): AgentResult {
   const evidence = calls.map((c) => c.record)
+  const read = ending.read ? { read: ending.read } : {}
   const ok = calls.filter((c) => c.outcome.ok)
   const write = ok.filter((c) => c.def.risk === 'write').at(-1)
   const reply = ending.declined || ending.stopped || ending.error !== undefined ? undefined : cleanReply(ending.reply)
@@ -143,7 +146,7 @@ export function summarize(calls: readonly RecordedCall[], ending: Ending): Agent
         ...withReply
       }
     }
-    return { title: 'Nothing was done', subtitle: shortfall(calls, ending, false), evidence, ...withReply }
+    return { title: 'Nothing was done', subtitle: shortfall(calls, ending, false), evidence, ...withReply, ...read }
   }
   const { title, subtitle, text, view } = best.outcome
   return {
@@ -151,6 +154,7 @@ export function summarize(calls: readonly RecordedCall[], ending: Ending): Agent
     subtitle: ending.complete ? (subtitle ?? (title ? firstLine(text) : '')) : shortfall(calls, ending, !!write),
     evidence,
     ...(view && { view }),
-    ...withReply
+    ...withReply,
+    ...read
   }
 }

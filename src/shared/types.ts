@@ -188,6 +188,8 @@ export interface AgentResult {
    * it is a secondary line under the evidence-based title.
    */
   reply?: string
+  /** What an external MCP lookup returned, verbatim (so the card can show what was read). */
+  read?: { tool: string; text: string }
 }
 
 export type AgentEvent =

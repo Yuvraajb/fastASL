@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ToolConfirmationType } from '@factory/droid-sdk/node'
 import type { AgentEvent } from '@shared/types'
 import type { ToolDef } from '../tools/types'
-import { MISSING_KEY_ERROR } from './agentService'
+import { MISSING_KEY_ERROR, textOfContent } from './agentService'
 import { INSTALL_DROID } from './droidPath'
 import {
   callTool,
@@ -470,5 +470,14 @@ describe('AgentService', () => {
     expect(opened[0].closed).toBe(true)
     expect(ctx.events).toEqual([])
     expect(ctx.runs).toEqual([])
+  })
+})
+
+describe('textOfContent', () => {
+  it('unwraps MCP content blocks and plain strings', () => {
+    expect(textOfContent([{ type: 'text', text: 'hello' }, { type: 'text', text: 'world' }])).toBe('hello\nworld')
+    expect(textOfContent('  plain  ')).toBe('plain')
+    expect(textOfContent(undefined)).toBe('')
+    expect(textOfContent([{ type: 'image', data: 'x' }])).toBe('')
   })
 })

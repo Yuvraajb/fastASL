@@ -249,6 +249,13 @@ function StepMark({ status }: { status: AgentStep['status'] }): React.JSX.Elemen
   )
 }
 
+/** "slack___slack_get_channel_history" -> "Read from slack". */
+function readLabel(tool: string): string {
+  const parts = tool.split(/__+|___+/).filter(Boolean)
+  const server = parts[0] === 'mcp' ? parts[1] : parts[0]
+  return server ? `Read from ${server}` : 'Read'
+}
+
 /** What the agent did: a check badge (an X when it fell short) or the screenshot, the tools' title and subtitle, its own line. */
 function ResultBubble({ id, answer }: { id: string; answer: Extract<ChatMessage, { kind: 'result' }>['answer'] }): React.JSX.Element {
   const thumb = answer.thumb
@@ -272,6 +279,12 @@ function ResultBubble({ id, answer }: { id: string; answer: Extract<ChatMessage,
         </div>
       </div>
       {answer.text ? <p className={`res__note${thumb ? '' : ' res__note--indent'}`}>{answer.text}</p> : null}
+      {answer.read ? (
+        <blockquote className="res__read">
+          <span className="res__read-label">{readLabel(answer.read.tool)}</span>
+          {answer.read.text}
+        </blockquote>
+      ) : null}
     </div>
   )
 }

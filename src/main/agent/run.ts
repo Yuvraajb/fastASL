@@ -15,6 +15,8 @@ export class Run implements RunContext {
    * already posted.
    */
   readonly external: { tool: string; args: Record<string, unknown> }[] = []
+  /** The last external lookup's output, for the card. */
+  read: { tool: string; text: string } | null = null
   /** The user answered "no" on a Confirm card. */
   declined = false
   private isStopped = false
@@ -83,6 +85,11 @@ export class Run implements RunContext {
   /** Remember an approved external MCP call, so the result card can report it. */
   recordExternal(tool: string, args: Record<string, unknown>): void {
     this.external.push({ tool, args })
+  }
+
+  /** Remember what an external lookup returned, so the card can show it verbatim. */
+  recordRead(tool: string, text: string): void {
+    this.read = { tool, text }
   }
 
   /** One approval per confirmed call; the tool handler consumes it, so nothing runs unconfirmed. */

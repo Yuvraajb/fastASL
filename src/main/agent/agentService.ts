@@ -22,6 +22,22 @@ const STOP_GRACE_MS = 3000
 
 export const MISSING_KEY_ERROR = 'Add FACTORY_API_KEY to .env'
 
+/** A tool result's text: either a plain string or MCP content blocks. */
+export function textOfContent(content: unknown): string {
+  if (typeof content === 'string') return content.trim()
+  if (Array.isArray(content)) {
+    return content
+      .map((block) =>
+        block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string'
+          ? (block as { text: string }).text
+          : ''
+      )
+      .join('\n')
+      .trim()
+  }
+  return ''
+}
+
 export interface AgentDeps {
   tools: readonly ToolDef[]
   runTool: ToolRunner
@@ -212,6 +228,15 @@ export class AgentService {
           received = true
           if (message.type === DroidMessageType.Result) turn.result = message
           else if (message.type === DroidMessageType.Error) turn.errors.push(message.message)
+          else if ((message as { type?: string }).type === 'tool_result') {
+            // What an external lookup actually returned, so the card can show it instead of
+            // trusting the model to repeat it.
+            const result = message as unknown as { toolName?: string; content?: unknown; isError?: boolean }
+            if (!result.isError && result.toolName && mcpToolAllowed(result.toolName, this.deps.mcp?.names ?? [])) {
+              const text = textOfContent(result.content)
+              if (text) run.recordRead(result.toolName, text.slice(0, 600))
+            }
+          }
         }
         return turn
       } catch (error) {
@@ -287,7 +312,8 @@ export class AgentService {
       declined: run.declined,
       error: turn?.error,
       reply: turn?.reply,
-      external: run.external
+      external: run.external,
+      ...(run.read ? { read: run.read } : {})
     })
     const succeeded = run.calls.filter((c) => c.outcome.ok).map((c) => c.record)
     this.lastCalls = complete ? succeeded : []
