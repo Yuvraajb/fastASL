@@ -6,8 +6,7 @@ import {
   STREAM_NOT_MJPEG,
   STREAM_UNREACHABLE,
   cameraErrorMessage,
-  streamErrorMessage
-} from './cameraSource'
+  streamErrorMessage, pickBuiltinCamera } from './cameraSource'
 
 describe('cameraErrorMessage', () => {
   it.each([
@@ -50,5 +49,26 @@ describe('streamErrorMessage', () => {
     expect(streamErrorMessage(400, 'text/plain', 'Only http:// and https:// streams are supported\n')).toBe(
       'Only http:// and https:// streams are supported'
     )
+  })
+})
+
+describe('pickBuiltinCamera', () => {
+  const cam = (label: string, deviceId = label): Pick<MediaDeviceInfo, 'kind' | 'label' | 'deviceId'> => ({ kind: 'videoinput', label, deviceId })
+
+  it('takes the Mac\'s own camera, not OBS\'s Virtual Camera, even when OBS is listed first', () => {
+    expect(pickBuiltinCamera([cam('OBS Virtual Camera'), cam('FaceTime HD Camera')])).toBe('FaceTime HD Camera')
+    expect(pickBuiltinCamera([cam('OBS Virtual Camera', 'obs'), cam('MacBook Pro Camera', 'mac')])).toBe('mac')
+  })
+
+  it('prefers the built-in lens over another real camera, and takes any real one without it', () => {
+    expect(pickBuiltinCamera([cam('Logitech C920'), cam('FaceTime HD Camera')])).toBe('FaceTime HD Camera')
+    expect(pickBuiltinCamera([cam('Logitech C920'), cam('OBS Virtual Camera')])).toBe('Logitech C920')
+  })
+
+  it('has no answer with only virtual cameras, no labels yet or no cameras', () => {
+    expect(pickBuiltinCamera([cam('OBS Virtual Camera')])).toBeUndefined()
+    expect(pickBuiltinCamera([cam('')])).toBeUndefined()
+    expect(pickBuiltinCamera([{ kind: 'audioinput', label: 'MacBook Pro Microphone', deviceId: 'm' }])).toBeUndefined()
+    expect(pickBuiltinCamera([])).toBeUndefined()
   })
 })
